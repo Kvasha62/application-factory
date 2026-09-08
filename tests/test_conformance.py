@@ -3,10 +3,9 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from identity_service.api import app
 from identity_service.errors import AccessDenied
 from identity_service.models import Decision, DenyReason
-from tests.conftest import engine
+from tests.conftest import engine, monolith
 
 
 def test_tenant_context_source_is_verified_identity_not_caller_claim():
@@ -38,6 +37,7 @@ def test_caller_tenant_id_is_cross_check_only():
 
 
 def test_public_api_does_not_expose_owned_store():
+    app = monolith().identity_app
     client = TestClient(app)
     paths = {getattr(route, "path", "") for route in app.routes}
     assert not any("internal" in path for path in paths)

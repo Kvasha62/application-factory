@@ -33,6 +33,10 @@ Identity, Tenant Context и data-owner authorization.
 - получает от композиционного корня только value-only клиент над контрактом:
   engine, хранилище, журнал аудита и операции мутаций Tenant Authority identity
   не видит и не может вызвать;
+- публикует из `identity_service.api` только собственный API: `create_app(engine)`
+  и маршруты identity. Сборка Level 0 (deployment Tenant Authority, клиент и оба
+  HTTP-приложения) выполняется композиционным корнем либо тест-фикстурой —
+  модуль API identity ничего не собирает и чужое приложение не отдаёт;
 - не хранит копии состояний Tenant и не определяет второй tenant-context
   механизм; локальный набор значений `TenantStatus` удалён.
 

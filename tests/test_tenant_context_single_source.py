@@ -2,7 +2,9 @@
 
 Здесь проверяется не «нет второй строки в файле», а фактическое поведение:
 состояние Tenant читается только у Tenant Authority, второй механизм
-tenant-context не появляется, и прямой доступ к чужому хранилищу отсутствует.
+tenant-context не появляется, прямой доступ к чужому хранилищу отсутствует, и
+ни один компонент не публикует внутренности другого. Оба HTTP-приложения
+поднимаются через композиционную фикстуру `tests.conftest.monolith()`.
 """
 
 from __future__ import annotations
@@ -13,18 +15,15 @@ from dataclasses import fields
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from identity_service import models as identity_models
-from identity_service.api import app as identity_app
-from identity_service.api import tenant_authority_contract_app
 from identity_service.engine import IdentityEngine
 from identity_service.config import IdentityConfig
 from identity_service.errors import AccessDenied
 from identity_service.models import Decision, DenyReason, TenantAssociation, TenantContext
 from identity_service.ports import TenantAuthorityPort
 from identity_service.store import IdentityStore
-from tests.conftest import composed, tenant_authority
+from tests.conftest import composed, monolith, tenant_authority
 from tenant_authority.errors import ContractViolation
 from tenant_authority.contracts import (
     TENANT_STATE_SOURCE,
@@ -157,8 +156,9 @@ def test_state_source_is_reported_and_cannot_be_forced_by_a_caller():
 
 
 def test_only_tenant_authority_can_change_tenant_state():
-    """Identity's public surface exposes no lifecycle mutation whatsoever."""
-    identity_client = TestClient(identity_app)
+    """Identity's published API is its own: no lifecycle mutation, no proxy either."""
+    instance = monolith()
+    identity_client = instance.identity_client()
     for path in (
         "/api/v1/tenants",
         "/api/v1/tenants/ten_a",
@@ -169,14 +169,23 @@ def test_only_tenant_authority_can_change_tenant_state():
         assert identity_client.get(path).status_code == 404, path
         assert identity_client.post(path, json={"state": "active"}).status_code == 404, path
 
-    authority_client = TestClient(tenant_authority_contract_app())
+    # The authority application is reachable only through its own deployment, and
+    # never as a part of identity's HTTP surface.
+    assert instance.identity_app is not instance.authority_app
+    authority_client = instance.authority_client()
     assert authority_client.get("/api/v1/tenants/ten_a/lifecycle").status_code == 401
 
 
 def test_lifecycle_written_through_the_authority_api_is_enforced_by_the_identity_api():
-    """End-to-end over both published HTTP contracts: one source of truth."""
-    authority_client = TestClient(tenant_authority_contract_app())
-    identity_client = TestClient(identity_app)
+    """End-to-end over both published HTTP contracts: one source of truth.
+
+    Both applications come from one composition (the harness root), so the effect
+    of a transition written through the authority contract is observed by the
+    identity contract without any shared storage or synchronization mechanism.
+    """
+    instance = monolith()
+    authority_client = instance.authority_client()
+    identity_client = instance.identity_client()
     headers = {"Authorization": "Bearer svc-token-admin"}
     user = {"Authorization": "Bearer token-human-a", "X-Tenant-Id": "ten_a"}
 
@@ -185,28 +194,29 @@ def test_lifecycle_written_through_the_authority_api_is_enforced_by_the_identity
         "/api/v1/tenants/ten_a/transitions", json={"to_state": "suspended"}, headers=headers
     )
     assert suspended.status_code == 200
-    try:
-        blocked = identity_client.get("/api/v1/records/rec_a1", headers=user)
-        assert blocked.status_code == 403
-        assert blocked.json()["detail"]["reason"] == "tenant_suspended"
 
-        written = identity_client.put(
-            "/api/v1/records/rec_a1", json={"body": "second"}, headers={**user, "Idempotency-Key": "ik-so"}
-        )
-        assert written.status_code == 403
+    blocked = identity_client.get("/api/v1/records/rec_a1", headers=user)
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"]["reason"] == "tenant_suspended"
 
-        reactivate = authority_client.post(
-            "/api/v1/tenants/ten_a/transitions", json={"to_state": "active"}, headers=headers
-        )
-        assert reactivate.status_code == 200
-        assert identity_client.get("/api/v1/records/rec_a1", headers=user).status_code == 200
-    finally:
-        # Restore the shared demo runtime for other tests.
-        current = authority_client.get("/api/v1/tenants/ten_a", headers=headers).json()["state"]
-        if current != "active":
-            authority_client.post(
-                "/api/v1/tenants/ten_a/transitions", json={"to_state": "active"}, headers=headers
-            )
+    written = identity_client.put(
+        "/api/v1/records/rec_a1",
+        json={"body": "second"},
+        headers={**user, "Idempotency-Key": "ik-so"},
+    )
+    assert written.status_code == 403
+
+    reactivate = authority_client.post(
+        "/api/v1/tenants/ten_a/transitions", json={"to_state": "active"}, headers=headers
+    )
+    assert reactivate.status_code == 200
+    assert identity_client.get("/api/v1/records/rec_a1", headers=user).status_code == 200
+
+    # Suspension is visible in the authority's journal as a transition and in
+    # identity's journal as a denial — two owned journals, one decision source.
+    actions = [event.action for event in instance.authority.store.audit]
+    assert "tenant.transition" in actions
+    assert any(event.reason == "tenant_suspended" for event in instance.identity.store.audit)
 
 
 def test_identity_contract_declares_the_dependency_and_no_tenant_state_ownership():
@@ -283,6 +293,47 @@ TENANT_AUTHORITY_PUBLISHED_MODULES = (
 )
 
 
+def imported_authorities(module: Path) -> set[str]:
+    """Every Tenant Authority module an identity module imports (real syntax scan)."""
+    found = set()
+    for line in module.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("from tenant_authority") and " import" in line:
+            found.add(line.split(" import")[0][len("from ") :].strip())
+        elif line.startswith("import tenant_authority"):
+            found.add(line[len("import ") :].split()[0].strip().rstrip(","))
+    return {
+        name if name.startswith("tenant_authority") else f"tenant_authority.{name}"
+        for name in found
+    }
+
+
+def test_identity_api_module_does_not_assemble_another_component():
+    """BLOCKER-04: the HTTP module of identity composes nothing and exports nothing.
+
+    Assembly of the monolith (deployment + client + both applications) belongs to
+    a composition root or a test fixture; `identity_service.api` only publishes
+    Identity's own API. Checked as real imports, not as a text search.
+    """
+    api_module = Path("src/identity_service/api.py")
+    assert imported_authorities(api_module) == set()
+
+    import identity_service.api as identity_api
+
+    published = {name for name in vars(identity_api) if not name.startswith("_")}
+    assert "create_app" in published
+    for forbidden in (
+        "tenant_authority_contract_app",
+        "tenant_authority_app",
+        "authority_app",
+        "tenant_authority_deployment",
+        "tenant_authority_runtime",
+        "build_deployment",
+        "deployment",
+    ):
+        assert forbidden not in published, forbidden
+
+
 def test_identity_never_imports_tenant_authority_internals():
     """Automated guard for ARCHITECTURE.md §1.1 / LAW-04 / invariant T-009.
 
@@ -293,23 +344,10 @@ def test_identity_never_imports_tenant_authority_internals():
     """
     offenders = []
     for module in sorted(Path("src/identity_service").glob("*.py")):
-        imported = set()
-        for line in module.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line.startswith("from tenant_authority") and " import" in line:
-                imported.add(line.split(" import")[0][len("from ") :].strip())
-            elif line.startswith("import tenant_authority"):
-                imported.add(line[len("import ") :].split()[0].strip().rstrip(","))
-        for name in sorted(imported):
-            root = name if name.startswith("tenant_authority") else f"tenant_authority.{name}"
-            # Only the composition root of the Level 0 monolith may assemble the
-            # component; every other module of identity must not even see it.
-            composing = module.name == "api.py" and root == "tenant_authority.deployment"
-            if root in TENANT_AUTHORITY_INTERNALS and not composing:
+        for root in sorted(imported_authorities(module)):
+            if root in TENANT_AUTHORITY_INTERNALS:
                 offenders.append(f"{module.name} -> {root} (internal)")
-            elif not composing and root not in (
-                TENANT_AUTHORITY_PUBLISHED_MODULES + ("tenant_authority",)
-            ):
+            elif root not in TENANT_AUTHORITY_PUBLISHED_MODULES + ("tenant_authority",):
                 offenders.append(f"{module.name} -> {root} (undeclared)")
     assert offenders == []
 
@@ -343,15 +381,21 @@ def test_identity_declares_the_consumer_surface_it_actually_uses():
     consumed = data["api"]["consumes"][0]
     assert consumed["component_id"] == "tenant_authority"
     assert consumed["mechanism"].startswith("contract client over the published API")
+    assert consumed["assembled_by"].startswith("composition root or test fixture")
+    # The declaration is true: identity's HTTP module imports no part of the
+    # component beyond the published contract surface, so it cannot assemble it.
+    api_imports = imported_authorities(Path("src/identity_service/api.py"))
+    assert api_imports == set(), api_imports
 
     module_name, _, class_name = consumed["consumer_surface"].rpartition(".")
     client_class = getattr(importlib.import_module(module_name), class_name)
 
-    identity_api = importlib.import_module("identity_service.api")
-    assert type(identity_api.tenant_authority) is client_class
-    assert type(identity_api.engine.tenant_authority) is client_class
+    instance = monolith()
+    assert type(instance.tenant_authority_client) is client_class
+    assert type(instance.identity.tenant_authority) is client_class
+    assert not hasattr(instance.identity_app.state, "tenant_authority")
     assert {
-        name for name in dir(identity_api.engine.tenant_authority) if not name.startswith("_")
+        name for name in dir(instance.identity.tenant_authority) if not name.startswith("_")
     } == set(consumed["operations"])
 
     from tenant_authority.store import LOOKUP_PERMISSIONS

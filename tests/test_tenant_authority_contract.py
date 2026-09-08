@@ -221,6 +221,13 @@ def test_declared_consumer_surface_is_the_real_published_surface():
     assert importlib.util.find_spec("tenant_authority.runtime") is None
     assert not hasattr(module, "TenantAuthorityReader")
 
+    # What the contract keeps with the composition root must really stay there.
+    root_only = " ".join(surface["composition_root_only"])
+    assert "TenantAuthorityDeployment" in root_only
+    assert "ASGI" in root_only
+    for declared in surface["internal_modules"]:
+        assert not hasattr(client_class, declared.rsplit(".", 1)[1]), declared
+
 
 def test_published_state_machine_equals_the_runtime_state_machine():
     client = TestClient(create_app(tenant_authority()))

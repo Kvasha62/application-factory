@@ -20,6 +20,7 @@ import importlib
 import importlib.util
 import inspect
 import pytest
+from fastapi import FastAPI
 
 from identity_service.ports import TenantAuthorityPort
 from tenant_authority import contracts, errors, reader, transport
@@ -29,7 +30,7 @@ from tenant_authority.models import AuditEvent, Decision, TenantRecord
 from tenant_authority.reader import TenantAuthorityClient
 from tenant_authority.store import TenantAuthorityStore
 
-from tests.conftest import DEMO_CONFIG, PLATFORM_ID
+from tests.conftest import DEMO_CONFIG, PLATFORM_ID, monolith
 
 CLIENT = TenantAuthorityClient
 
@@ -425,34 +426,127 @@ def test_the_only_published_consumer_type_is_the_client():
         )
 
 
-def test_composition_root_publishes_a_client_and_nothing_else():
-    identity_api = importlib.import_module("identity_service.api")
-    published = {name for name in vars(identity_api) if not name.startswith("_")}
+def test_identity_api_module_publishes_only_its_own_api():
+    """BLOCKER-04: identity's HTTP module is not a window into Tenant Authority.
 
-    assert type(identity_api.tenant_authority) is TenantAuthorityClient
-    assert identity_api.engine.tenant_authority is identity_api.tenant_authority
-    # No published name of the composition module resolves to another component's
-    # internals — the deployment it assembles stays under a private name.
-    for name in published:
-        value = getattr(identity_api, name)
+    It exports no ASGI application of any component, no deployment, no engine, no
+    store and no client instance — the module owns routes and a factory that binds
+    them to an engine supplied by a composition root.
+    """
+    identity_api = importlib.import_module("identity_service.api")
+    published = {
+        name: value for name, value in vars(identity_api).items() if not name.startswith("_")
+    }
+
+    assert "create_app" in published
+    parameters = inspect.signature(identity_api.create_app).parameters
+    assert list(parameters) == ["engine"]
+
+    for name, value in published.items():
+        assert not isinstance(value, FastAPI), f"{name} is an ASGI application"
         assert not isinstance(
-            value, (TenantAuthorityEngine, TenantAuthorityStore, TenantAuthorityDeployment)
+            value,
+            (
+                TenantAuthorityEngine,
+                TenantAuthorityStore,
+                TenantAuthorityDeployment,
+                TenantAuthorityClient,
+            ),
         ), name
-    assert "tenant_authority_runtime" not in published
-    assert "tenant_authority_deployment" not in published
-    assert "tenant_authority_reader" not in published
-    # The only authority handles the module publishes: the client and the
-    # component's contract application — neither carries registry internals.
-    for name, value in {
-        "tenant_authority": identity_api.tenant_authority,
-        "tenant_authority_contract_app": identity_api.tenant_authority_contract_app(),
-    }.items():
-        assert not hasattr(value, "service_tokens"), name
-        assert not hasattr(value, "idempotency"), name
-        assert not hasattr(value, "tenants"), name
-        assert not hasattr(value, "audit"), name
-        assert not hasattr(value, "transition_tenant"), name
-    assert type(identity_api.tenant_authority_contract_app()).__name__ == "FastAPI"
+        assert getattr(value, "__module__", "") != "tenant_authority.deployment", name
+        module = getattr(getattr(value, "__class__", None), "__module__", "") or ""
+        assert not module.startswith("tenant_authority"), (name, module)
+
+    for forbidden in (
+        "tenant_authority_contract_app",
+        "tenant_authority_app",
+        "authority_app",
+        "tenant_authority_deployment",
+        "tenant_authority_client",
+        "tenant_authority_runtime",
+        "build_deployment",
+    ):
+        assert not hasattr(identity_api, forbidden), forbidden
+
+    # The factory needs an engine from the caller: the module cannot be used to
+    # obtain an application of this — or of any other — component on its own.
+    with pytest.raises(TypeError):
+        identity_api.create_app()  # type: ignore[call-arg]
+    # No published name is a re-export from Tenant Authority, and none carries that
+    # component's mutation or registry machinery, whatever module it comes from.
+    authority_only = {"create_tenant", "transition_tenant", "verify_service_identity"}
+    for name, value in published.items():
+        origin = str(getattr(value, "__module__", "") or "")
+        assert not origin.startswith("tenant_authority"), (name, origin)
+        attributes = set() if isinstance(value, str) else {a for a in dir(value)}
+        assert not attributes & authority_only, (name, attributes & authority_only)
+
+
+def test_composed_identity_application_carries_no_tenant_authority_object():
+    """The identity application's own state knows nothing about the authority app."""
+    instance = monolith()
+    identity_app = instance.identity_app
+
+    # Two published APIs, two applications: identity neither owns nor re-exports
+    # the authority's one.
+    assert identity_app is not instance.authority_app
+    assert not hasattr(identity_app.state, "tenant_authority")
+    assert not hasattr(identity_app.state, "tenant_authority_deployment")
+
+    forbidden_types = (
+        TenantAuthorityEngine,
+        TenantAuthorityStore,
+        TenantAuthorityDeployment,
+        TenantAuthorityClient,
+    )
+    internal_app_names = {id(instance.authority_app), id(instance.authority)}
+
+    frontier: list[tuple[tuple[str, ...], object]] = [
+        ((), value) for value in vars(identity_app).values()
+    ]
+    walked = 0
+    while frontier:
+        path, value = frontier.pop(0)
+        walked += 1
+        assert not isinstance(value, forbidden_types), f"{type(value).__name__} at {path}"
+        assert id(value) not in internal_app_names, f"authority handle at {path}"
+        if len(path) >= 2:
+            continue
+        for name, child in list(vars(value).items()) if hasattr(value, "__dict__") else []:
+            if name.startswith("_"):
+                continue
+            assert not hasattr(child, "service_tokens"), path + (name,)
+            assert not hasattr(child, "create_tenant"), path + (name,)
+            assert not hasattr(child, "transition_tenant"), path + (name,)
+            frontier.append((path + (name,), child))
+    assert walked > 0
+
+    # Routes stay inside identity: no Tenant Authority operation is served here.
+    identity_paths = {r.path for r in identity_app.routes if hasattr(r, "path")}
+    authority_paths = {r.path for r in instance.authority_app.routes if hasattr(r, "path")}
+    identity_v1 = {path for path in identity_paths if path.startswith("/api/v1")}
+    authority_v1 = {path for path in authority_paths if path.startswith("/api/v1")}
+    assert identity_v1 & authority_v1 == set()
+    assert identity_v1 == {"/api/v1/me", "/api/v1/records/{record_id}"}
+    assert authority_v1
+    assert all("tenants" in path or path == "/api/v1/lifecycle" for path in authority_v1)
+
+
+def test_identity_openapi_declares_no_tenant_authority_surface():
+    """What the published API contract of identity offers — and no more."""
+    instance = monolith()
+    client = instance.identity_client()
+
+    document = client.get("/openapi.json").json()
+    paths = set(document["paths"])
+    assert paths == {"/health", "/ready", "/api/v1/me", "/api/v1/records/{record_id}"}
+    schemas = set(document.get("components", {}).get("schemas", {}))
+    for foreign in ("TenantOut", "TransitionOut", "LifecycleOut", "CreateIn", "TransitionIn"):
+        assert foreign not in schemas, foreign
+    # Nothing can be proxied through identity: the authority's paths are absent.
+    response = client.get("/api/v1/tenants/ten_a")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Not Found"
 
 
 def test_identity_port_is_satisfied_by_the_client_and_nothing_more():

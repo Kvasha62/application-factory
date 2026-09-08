@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi.testclient import TestClient
-from tests.conftest import composed, tenant_authority
+from tests.conftest import composed, monolith, tenant_authority
 from tenant_authority import COMPONENT_ID, COMPONENT_VERSION
 from tenant_authority.contracts import TenantState
 
@@ -110,29 +109,27 @@ def test_one_request_is_traceable_in_both_component_journals():
     """Identity and Tenant Authority record the same request/correlation ids.
 
     One tenant-scoped HTTP request crosses two components; both journals must be
-    joinable without inventing a second correlation mechanism.
+    joinable without inventing a second correlation mechanism. The two published
+    applications are taken from one composition (the harness root), not from
+    another component's module.
     """
-    from identity_service.api import app as identity_app
-    from identity_service.api import engine as identity_engine
-    # A test may inspect the composition root's internals; a consumer cannot.
-    from identity_service.api import _tenant_authority_deployment as authority_deployment
     from identity_service.models import TenantAssociation
 
-    client = TestClient(identity_app)
+    instance = monolith()
+    client = instance.identity_client()
+    identity_engine = instance.identity
     forged = TenantAssociation("idn_human_a", "ten_ghost", frozenset({"records.read"}))
     identity_engine.store.associations[("idn_human_a", "ten_ghost")] = forged
-    try:
-        response = client.get(
-            "/api/v1/records/rec_a1",
-            headers={
-                "Authorization": "Bearer token-human-a",
-                "X-Tenant-Id": "ten_ghost",
-                "X-Request-Id": "req-cross-1",
-                "X-Correlation-Id": "cor-cross-1",
-            },
-        )
-    finally:
-        identity_engine.store.associations.pop(("idn_human_a", "ten_ghost"), None)
+
+    response = client.get(
+        "/api/v1/records/rec_a1",
+        headers={
+            "Authorization": "Bearer token-human-a",
+            "X-Tenant-Id": "ten_ghost",
+            "X-Request-Id": "req-cross-1",
+            "X-Correlation-Id": "cor-cross-1",
+        },
+    )
 
     assert response.status_code == 403
     identity_event = identity_engine.store.audit[-1]
@@ -142,12 +139,14 @@ def test_one_request_is_traceable_in_both_component_journals():
         "cor-cross-1",
     )
 
-    authority_event = authority_deployment.store.audit[-1]
+    authority_event = instance.authority.store.audit[-1]
     assert authority_event.reason == "tenant_not_found"
     assert (authority_event.request_id, authority_event.correlation_id) == (
         "req-cross-1",
         "cor-cross-1",
     )
+    # The consumer of the contract is identifiable in the authority's journal.
+    assert authority_event.actor_id == "svc_identity"
 
 
 def test_identity_context_exposes_platform_and_tenant_for_allowed_operations():

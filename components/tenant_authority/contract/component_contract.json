@@ -47,6 +47,10 @@
         "the consuming service identity comes from the credential bound to the client and cannot be chosen by the caller",
         "an answer outside the published contract raises tenant_authority.errors.ContractViolation, so a consumer fails closed instead of assuming that the Tenant is servable"
       ],
+      "composition_root_only": [
+        "tenant_authority.deployment (TenantAuthorityDeployment: engine, store, configuration)",
+        "the contract application itself (the ASGI application) — a consumer component must not own or re-export it"
+      ],
       "internal_modules": [
         "tenant_authority.engine",
         "tenant_authority.store",
