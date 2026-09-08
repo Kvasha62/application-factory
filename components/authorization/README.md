@@ -1,0 +1,215 @@
+# Authorization Boundary / Permission Authority (IS-003)
+
+**Класс:** B — Platform Service
+**Уровень:** Level 0 — Modular Monolith
+**Версия компонента:** 0.1.0
+**Владелец данных:** `authorization` (логическая схема `authorization`)
+**Задача:** Issue #12
+**Архитектурная основа:** `docs/ARCHITECTURE.md` v1.2.0 §5.4, §6.1, §6.2, §26, §27,
+LAW-04, LAW-16, LAW-16a; ADR-0010 AMD-10
+
+IS-003 доказывает отдельную контрактную границу авторизации:
+**authentication ≠ authorization**. Компонент отвечает ровно на один вопрос —
+может ли проверенный субъект выполнить операцию над tenant-scoped ресурсом — и
+выдаёт минимальное решение `ALLOW` / `DENY` со стабильным кодом причины.
+
+Это не IAM, не OAuth/OIDC provider, не policy engine и не API gateway.
+
+## Цепочка, которая доказывается
+
+```text
+Verified Identity
+      ↓
+Identity / Tenant Context        (IS-001 — источник effective_tenant_id)
+      ↓
+Tenant Authority                 (IS-002 — авторитет состояния Tenant)
+      ↓
+Authorization Boundary           (этот компонент)
+   ├─ субъект проверен?                     иначе DENY
+   ├─ effective tenant известен?            иначе DENY
+   ├─ tenant ресурса == tenant субъекта?    иначе DENY
+   ├─ состояние Tenant допускает работу?    иначе DENY
+   └─ есть явное разрешение?                иначе DENY
+      ↓
+ALLOW → enforcement выполняет компонент — владелец данных
+```
+
+Порядок проверок — часть опубликованного поведения (`api.decision_model.decision_chain`).
+Ни один шаг не может выдать доступ: `ALLOW` появляется только в конце цепочки,
+поэтому наличие grant никогда не компенсирует непройденную предпосылку.
+
+## Минимальная модель
+
+Запрос решения содержит:
+
+| Часть | Откуда берётся |
+|---|---|
+| verified subject | credential субъекта, проверяемый через опубликованный контракт IS-001 |
+| effective tenant | выводится IS-001 из проверенной идентичности |
+| resource | `resource_type`, `resource_id` и `tenant_id` владельца ресурса — сообщает владелец данных |
+| operation | действие, которое владелец данных собирается выполнить |
+
+Решение содержит `ALLOW` либо `DENY` и ровно одну причину из закрытого
+опубликованного набора (`permitted`, `missing_identity`, `invalid_identity`,
+`unknown_identity`, `missing_tenant_context`, `tenant_mismatch`, `tenant_unknown`,
+`platform_ownership_mismatch`, `resource_tenant_unknown`, `resource_tenant_mismatch`,
+`tenant_not_active`, `tenant_suspended`, `tenant_deletion_requested`,
+`tenant_deleted`, `permission_not_granted`, `authority_unavailable`).
+
+Значение по умолчанию — `DENY`: отсутствие явного разрешения не является
+разрешением.
+
+## Инварианты
+
+| № | Инвариант |
+|---|---|
+| A-001 | Без verified identity авторизация не выполняется успешно |
+| A-002 | `effective_tenant_id` берётся из IS-001; второго tenant-context механизма здесь нет |
+| A-003 | Caller-supplied `tenant_id` — только cross-check, не источник tenant identity |
+| A-004 | Субъект одного Tenant не получает ресурс другого Tenant |
+| A-005 | Аутентификация сама по себе не даёт доступа |
+| A-006 | Отсутствие явного разрешения ⇒ `DENY` |
+| A-007 | `provisioning` / `suspended` / `deletion_requested` / `deleted` не получают обычный tenant-scoped доступ |
+| A-008 | Финальное enforcement — на границе компонента-владельца данных |
+| A-009 | Каждое решение и каждый отклонённый запрос попадают в аудит с `request_id` и `correlation_id` |
+| A-010 | Внутренности компонента не являются потребительским контрактом |
+
+## Два уровня отказа
+
+Отказ ответить и отрицательный ответ — разные факты, и контракт их не смешивает:
+
+| Ситуация | Ответ |
+|---|---|
+| у спрашивающего компонента нет проверяемой service identity | `401`, `missing_service_identity` / `invalid_service_identity` / `unknown_service` |
+| спрашивающий компонент не вправе запрашивать решение или принадлежит другой Platform Instance | `403`, `insufficient_authorization` / `platform_mismatch` |
+| вопрос не может быть отвечен (например, пустая операция) | `422`, `malformed_request` — решение не выдумывается |
+| вопрос отвечен | `200` с `decision: ALLOW` либо `decision: DENY` |
+
+`DENY` — это данные, которые потребитель обязан применить, а не сбой транспорта.
+
+## Публичный контракт
+
+- HTTP: `/api/v1/decisions` — см. `contract/openapi.yaml` и
+  `contract/component_contract.json`;
+- уровень 0 (in-process): `authorization_service.reader.AuthorizationClient` —
+  ровно одна операция `decide`.
+
+Граница контрактно-опосредованная: клиент выполняет опубликованный HTTP-контракт
+внутри процесса через `authorization_service.transport` (`open_channel` регистрирует
+приложение компонента и отдаёт непрозрачный дескриптор канала, `call_contract`
+выполняет по нему запрос). Само ASGI-приложение потребителю не передаётся, а
+состояние клиента — два значения (дескриптор канала и собственный service
+credential потребителя), callables среди них нет. Поэтому через опубликованную
+поверхность недоступны хранилище grants, журнал аудита, engine, deployment и
+операции изменения разрешений — ни под открытым именем, ни под закрытым, ни через
+`__closure__`. Дескриптор отзывается, когда потребитель выпускает клиента;
+неизвестный или отозванный дескриптор означает отказ, а не разрешение.
+
+Опубликованная поверхность **не содержит** операций `grant`, `revoke`, чтения
+grants, перечисления субъектов и чтения аудита: решение нельзя превратить в
+разрешение.
+
+Ответ вне контракта (не-JSON, отсутствие ответа, неизвестное значение `decision`)
+поднимает `authorization_service.errors.ContractViolation` — потребитель падает
+закрытым, а не считает доступ разрешённым.
+
+## Enforcement остаётся у владельца данных
+
+IS-003 ничего не применяет: он возвращает значение. Владелец данных сам
+отказывает в обслуживании — именно это и есть граница компонента-владельца
+(§6.2 ARCHITECTURE.md). В тестах роль владельца данных играет
+`tests.conftest.RecordsBoundary`: он спрашивает решение через опубликованный
+клиент и сам возбуждает отказ. Компонент не может прочитать или отдать ресурс,
+поэтому «забыть применить решение» — это дефект потребителя, а не дыра в
+авторитете.
+
+## Зависимости
+
+| Компонент | Механизм | Операции |
+|---|---|---|
+| IS-001 `identity` (`>=0.3.0,<0.4.0`) | клиент над опубликованным API | `resolve_context` |
+| IS-002 `tenant_authority` (`>=0.1.0,<0.2.0`) | клиент над опубликованным API | `lifecycle_decision` |
+
+Собственной проверки идентичности и собственного вывода tenant в компоненте нет:
+если убрать IS-001 из композиции, решение не принимается вовсе — это и есть
+доказательство отсутствия второго tenant-context механизма (A-002). Состояние
+Tenant перечитывается на каждом решении и не кэшируется: Tenant, приостановленный
+между двумя решениями, получает `DENY` на следующем (A-007).
+
+Компонент никого не собирает: клиенты IS-001 и IS-002 передаются извне
+композиционным корнем. Поэтому у IS-003, в отличие от standalone-компонентов, нет
+модульного демонстрационного приложения — демонстрация границы авторизации
+требует собранной Platform Instance, а её сборка является задачей композиционного
+корня.
+
+## Данные компонента
+
+| Набор | Область | Комментарий |
+|---|---|---|
+| `permission_grants` | `tenant-scoped` | явное разрешение субъекта внутри одного Tenant |
+| `service_access` | `platform-scoped` | сервисные идентичности компонентов, которым разрешено спрашивать |
+| `audit_events` | `platform-scoped` | неизменяемый журнал решений и отказов |
+
+Ролевой иерархии, наследования и wildcard нет: исключать нечего, потому что
+разрешение только выдаётся явно. Реестра Tenant, состояний Tenant и идентичностей
+компонент не хранит — grant лишь ссылается на `tenant_id` и `subject_id`, которые
+определяются в IS-002 и IS-001. Публичного API управления grants нет: выдача
+разрешений — внутренняя операция композиционного корня, а user/credential/
+permission administration в объём IS-003 не входит.
+
+## Аудит и наблюдаемость
+
+Каждое решение записывается с `action`, `decision`, `reason`, `actor_id`
+(сервисная идентичность спросившего компонента), `subject_id`, `tenant_id`,
+`operation`, `resource_type`, `resource_id`, `resource_tenant_id`, `platform_id`,
+`request_id`, `correlation_id`, `timestamp`. Отказ ответить (неаутентифицированный
+или неавторизованный спрашивающий) фиксируется тем же журналом с
+`details.refused`.
+
+`request_id` и `correlation_id` передаются дальше в IS-001 и IS-002, поэтому одно
+решение прослеживается по трём журналам Platform Instance. Observability context
+соответствует §26: `timestamp`, `environment`, `platform_id`, `component_id`,
+`component_version`, `tenant_id`, `subject_id`, `service_id`, `request_id`,
+`trace_id`, `correlation_id`. `saga_id` отсутствует сознательно — компонент не
+выполняет межкомпонентных саг.
+
+## Идемпотентность
+
+`POST /api/v1/decisions` не изменяет состояние компонента (кроме append-only
+журнала аудита), поэтому `Idempotency-Key` не применяется: §6.5 ARCHITECTURE.md
+описывает идемпотентность для операций изменения состояния. Повтор запроса даёт
+решение, а не второй эффект.
+
+## События, CDC, UI
+
+Не объявлены и не реализованы: `events` и `data_export_cdc` помечены как
+`declared_only` с пустыми списками, `ui.kind` — `none`. Журнал аудита — это
+внутренние данные компонента, а не публичный контракт событий.
+
+## Non-goals
+
+В объём IS-003 не входят: полноценный IAM, OAuth/OIDC provider, управление
+пользователями и credential, MFA, enterprise RBAC/ABAC, policy DSL и внешний
+policy engine, OPA, API gateway и service mesh, инфраструктура событий,
+фабричная механика (Catalog, Composer, Golden Bundles, release trains),
+декомпозиция на микросервисы и бизнес-системы.
+
+## Запуск тестов
+
+```text
+python -m pip install -e ".[dev]"
+python -m pytest
+```
+
+Поведенческие доказательства IS-003:
+
+| Файл | Что доказывает |
+|---|---|
+| `tests/test_authorization_decisions.py` | матрица ALLOW/DENY из задания (A-001, A-004, A-005, A-006, A-007, A-008) |
+| `tests/test_authorization_tenant_context.py` | отсутствие второго tenant-context механизма (A-002, A-003) |
+| `tests/test_authorization_audit.py` | аудит решений и отказов, сквозные `request_id` / `correlation_id` (A-009) |
+| `tests/test_authorization_boundary.py` | контрактная граница потребителя (A-010) |
+| `tests/test_authorization_api.py` | HTTP-контракт и два семейства статусов |
+| `tests/test_authorization_security.py` | враждебные сценарии: подделка, отзыв, недоступная зависимость — всё закрывается |
+| `tests/test_authorization_contract.py` | соответствие машиночитаемого контракта реализации |
+| `tests/test_identity_context_contract.py` | аддитивное расширение контракта IS-001 (0.3.0) |

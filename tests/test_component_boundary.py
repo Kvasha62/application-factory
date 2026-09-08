@@ -953,7 +953,14 @@ def test_composed_identity_application_carries_no_tenant_authority_object():
     identity_v1 = {path for path in identity_paths if path.startswith("/api/v1")}
     authority_v1 = {path for path in authority_paths if path.startswith("/api/v1")}
     assert identity_v1 & authority_v1 == set()
-    assert identity_v1 == {"/api/v1/me", "/api/v1/records/{record_id}"}
+    # `/api/v1/context` is identity's own additive operation (0.3.0): it publishes
+    # the verified subject and the effective tenant, and nothing of any other
+    # component — no tenant registry, no lifecycle state, no authority route.
+    assert identity_v1 == {
+        "/api/v1/me",
+        "/api/v1/context",
+        "/api/v1/records/{record_id}",
+    }
     assert authority_v1
     assert all("tenants" in path or path == "/api/v1/lifecycle" for path in authority_v1)
 
@@ -965,7 +972,13 @@ def test_identity_openapi_declares_no_tenant_authority_surface():
 
     document = client.get("/openapi.json").json()
     paths = set(document["paths"])
-    assert paths == {"/health", "/ready", "/api/v1/me", "/api/v1/records/{record_id}"}
+    assert paths == {
+        "/health",
+        "/ready",
+        "/api/v1/me",
+        "/api/v1/context",
+        "/api/v1/records/{record_id}",
+    }
     schemas = set(document.get("components", {}).get("schemas", {}))
     for foreign in ("TenantOut", "TransitionOut", "LifecycleOut", "CreateIn", "TransitionIn"):
         assert foreign not in schemas, foreign

@@ -22,6 +22,61 @@ paths:
           description: verified identity
         "401":
           description: identity denied
+  /api/v1/context:
+    get:
+      summary: Verified identity and effective tenant of the presented credential
+      description: >-
+        Ответ содержит проверенного субъекта и effective tenant, выведенный из
+        проверенной идентичности (`source: verified_identity`). Операция ничего
+        не разрешает: авторизация выполняется на границе владельца данных
+        (ARCHITECTURE.md §6.2). Состояние lifecycle здесь не публикуется — оно
+        принадлежит Tenant Authority и читается там же, «вживую».
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied tenant_id used only as cross-check
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: verified subject and effective tenant context
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [identity_id, kind, subject, tenant_id, platform_id, source]
+                properties:
+                  identity_id:
+                    type: string
+                  kind:
+                    type: string
+                    enum: [HUMAN, SERVICE]
+                  subject:
+                    type: string
+                  tenant_id:
+                    type: string
+                  platform_id:
+                    type: string
+                  source:
+                    type: string
+                    const: verified_identity
+        "401":
+          description: identity denied
+        "403":
+          description: tenant context denied (mismatch, unknown or foreign tenant)
   /api/v1/records/{record_id}:
     get:
       security:

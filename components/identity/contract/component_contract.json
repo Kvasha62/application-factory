@@ -1,6 +1,6 @@
 {
   "component_id": "identity",
-  "component_version": "0.2.0",
+  "component_version": "0.3.0",
   "class": "platform_service",
   "maturity_level": "level_0_modular_monolith",
   "api": {
@@ -24,7 +24,64 @@
         ],
         "note": "Tenant state and ownership are read from the authority at the authorization boundary; the effective tenant id is still derived only from verified identity. The client is value-only and is bound to this component's own service identity: identity receives no engine, store, audit journal or mutation operation, and cannot choose the actor recorded in the authority's journal. Identity's published HTTP surface (`identity_service.api`) serves only its own API: the authority's contract application is not owned or re-exported by it. A Tenant of another Platform Instance is answered as unknown, so identity reports TENANT_UNKNOWN while the authority keeps the precise ownership denial. The client is value-only down to its own state — an opaque contract channel handle, a credential and a Platform Instance binding — so identity holds neither the authority's ASGI application nor a transport object that could reach it."
       }
-    ]
+    ],
+    "operations": [
+      {
+        "method": "GET",
+        "path": "/api/v1/me",
+        "purpose": "verified identity of the presented credential"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/context",
+        "purpose": "verified subject and effective tenant of the request; grants nothing"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/records/{record_id}",
+        "purpose": "tenant-scoped record of this component"
+      },
+      {
+        "method": "PUT",
+        "path": "/api/v1/records/{record_id}",
+        "purpose": "write a tenant-scoped record",
+        "idempotency": "Idempotency-Key"
+      }
+    ],
+    "consumer_surface": {
+      "module": "identity_service.reader",
+      "published_as": "IdentityContextClient",
+      "published_by": "identity_service.reader.build_client (called by the composition root with this component's own contract application)",
+      "transport": "identity_service.transport.open_channel + identity_service.transport.call_contract — the published HTTP contract executed in process over an opaque channel handle (ARCHITECTURE.md §1.1 interaction mode API, Level 0)",
+      "consumer_state": [
+        "opaque contract channel handle (str)"
+      ],
+      "operations": [
+        "resolve_context"
+      ],
+      "returns": [
+        "identity_service.contracts.VerifiedContext"
+      ],
+      "errors": [
+        "identity_service.errors.AccessDenied — reconstructed from status code and machine-readable reason",
+        "identity_service.errors.ContractViolation — raised when the component answers outside its contract; a consumer must fail closed"
+      ],
+      "guarantees": [
+        "values only: no store handle, audit journal, idempotency table, engine reference or record operation is reachable through the published surface",
+        "the published client holds no callable and no credential of its own: the subject credential is presented per call, exactly as over HTTP",
+        "the ASGI application is never handed out: it stays behind the provider-side channel table, and a channel is revoked when the consumer drops the client",
+        "the answer is a context, never a grant: it carries no permission list and no tenant lifecycle state"
+      ],
+      "internal_modules": [
+        "identity_service.engine",
+        "identity_service.store",
+        "identity_service.models",
+        "identity_service.config",
+        "identity_service.api",
+        "identity_service.transport"
+      ],
+      "note": "The context read publishes the effective tenant derived from the verified identity, so a consuming component (IS-003) does not need — and cannot build — a second tenant-context mechanism."
+    }
   },
   "events": {
     "envelope": "CloudEvents",
@@ -102,7 +159,8 @@
     "boundary": "data_owner",
     "model": "explicit_permission_on_tenant_association",
     "authentication_does_not_imply_authorization": true,
-    "lifecycle_state_authority": "tenant_authority"
+    "lifecycle_state_authority": "tenant_authority",
+    "authorization_authority": "authorization (IS-003) decides ALLOW/DENY for platform consumers; identity keeps enforcing its own records at its own boundary (ARCHITECTURE.md §6.2)"
   },
   "compatibility_policy": {
     "api": "additive-minor-breaking-major",
@@ -119,6 +177,12 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.3.0",
+      "date": "2026-09-08",
+      "change": "Additive: published context read GET /api/v1/context and the value-only consumer surface identity_service.reader.IdentityContextClient, so that IS-003 (Authorization Boundary) obtains the verified subject and the effective tenant from this component instead of inventing a second identity or tenant-context mechanism. No existing operation changed; nothing new is granted by the addition.",
+      "issue": "#12"
+    },
     {
       "version": "0.2.0",
       "date": "2026-09-08",

@@ -22,6 +22,7 @@ from identity_service.models import DenyReason
 #: Names imported for use are not part of it, and nothing of another component is.
 __all__ = [
     "AUTHENTICATION_DENIALS",
+    "ContextOut",
     "ErrorOut",
     "IdentityOut",
     "RecordOut",
@@ -53,6 +54,23 @@ class IdentityOut(BaseModel):
     identity_id: str
     kind: str
     subject: str
+
+
+class ContextOut(BaseModel):
+    """Verified subject plus the effective Tenant of one request.
+
+    ``source`` is part of the answer: it states that the effective tenant was
+    derived from the verified identity, not from a caller claim. Tenant
+    lifecycle state is not published here — it belongs to Tenant Authority and
+    is read there, live, at the authorization boundary.
+    """
+
+    identity_id: str
+    kind: str
+    subject: str
+    tenant_id: str
+    platform_id: str
+    source: str
 
 
 class ErrorOut(BaseModel):
@@ -123,6 +141,45 @@ def create_app(engine: IdentityEngine) -> FastAPI:
             identity_id=identity.identity_id,
             kind=identity.kind.value,
             subject=identity.subject,
+        )
+
+    @app.get("/api/v1/context", response_model=ContextOut)
+    def context(
+        authorization: str | None = Header(default=None),
+        x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+        x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
+    ) -> ContextOut:
+        """Verified identity and effective tenant of the presented credential.
+
+        This is the operation a platform service consumes when it must not
+        invent its own identity verification or its own tenant derivation
+        (ARCHITECTURE.md §6.2, LAW-16a). It grants nothing: the answer is a
+        context, and authorization stays with the data owner.
+        """
+        try:
+            identity, tenant, _, _ = engine.verified_context(
+                _token(authorization),
+                x_tenant_id,
+                request_id=x_request_id,
+                correlation_id=x_correlation_id,
+            )
+        except AccessDenied as exc:
+            raise HTTPException(
+                status_code=_status_for(exc.reason.value),
+                detail={
+                    "decision": "DENY",
+                    "reason": exc.reason.value,
+                    "request_id": x_request_id,
+                },
+            ) from exc
+        return ContextOut(
+            identity_id=identity.identity_id,
+            kind=identity.kind.value,
+            subject=identity.subject,
+            tenant_id=tenant.tenant_id,
+            platform_id=tenant.platform_id,
+            source=tenant.source,
         )
 
     @app.get("/api/v1/records/{record_id}", response_model=RecordOut)
