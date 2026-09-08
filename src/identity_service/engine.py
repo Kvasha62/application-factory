@@ -290,6 +290,75 @@ class IdentityEngine:
         )
         return identity, obs, event
 
+    def verified_context(
+        self,
+        token: str | None,
+        claimed_tenant_id: str | None = None,
+        *,
+        action: str = "identity.context",
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> tuple[VerifiedIdentity, TenantContext, ObservabilityContext, AuditEvent]:
+        """Verified subject plus the effective Tenant of this request.
+
+        This is the operation another component consumes (through the published
+        contract) when it needs a verified subject and an effective tenant: the
+        tenant is derived here, from the verified identity, so no consumer has to
+        invent a second tenant-context mechanism. A caller-supplied
+        ``claimed_tenant_id`` stays a cross-check (LAW-16a) and is rejected on
+        mismatch.
+
+        It is deliberately **not** an authorization decision: no permission is
+        checked and no lifecycle verdict is applied here. The data owner — and,
+        for the platform, IS-003 — decides ALLOW/DENY at its own boundary
+        (ARCHITECTURE.md §6.2).
+        """
+        identity: VerifiedIdentity | None = None
+        tenant: TenantContext | None = None
+        obs = self.observability(
+            identity=None, tenant=None, request_id=request_id, correlation_id=correlation_id
+        )
+        try:
+            identity = self.verify_identity(token)
+            obs = self.observability(
+                identity=identity,
+                tenant=None,
+                request_id=obs.request_id,
+                correlation_id=obs.correlation_id,
+            )
+            tenant = self.resolve_tenant_context(
+                identity,
+                claimed_tenant_id,
+                request_id=obs.request_id,
+                correlation_id=obs.correlation_id,
+            )
+        except AccessDenied as exc:
+            self.audit(
+                action=action,
+                decision=Decision.DENY,
+                reason=exc.reason.value,
+                identity=identity,
+                tenant=tenant,
+                obs=obs,
+            )
+            raise
+        obs = self.observability(
+            identity=identity,
+            tenant=tenant,
+            request_id=obs.request_id,
+            correlation_id=obs.correlation_id,
+        )
+        event = self.audit(
+            action=action,
+            decision=Decision.ALLOW,
+            reason=None,
+            identity=identity,
+            tenant=tenant,
+            obs=obs,
+            details={"source": tenant.source},
+        )
+        return identity, tenant, obs, event
+
     def read_record(
         self,
         token: str | None,

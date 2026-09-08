@@ -1,0 +1,320 @@
+{
+  "component_id": "authorization",
+  "component_version": "0.1.0",
+  "class": "platform_service",
+  "maturity_level": "level_0_modular_monolith",
+  "task": "IS-003 (GitHub Issue #12)",
+  "authorization_boundary": {
+    "role": "Authorization Boundary / Permission Authority",
+    "invariants": [
+      "A-001 without a verified identity no authorization succeeds",
+      "A-002 the effective tenant comes from IS-001; this component derives no tenant of its own",
+      "A-003 a caller-supplied tenant_id is a cross-check only and is never a source of tenant identity",
+      "A-004 a subject of one Tenant never reaches a resource of another Tenant",
+      "A-005 authentication by itself grants no access",
+      "A-006 absence of an explicit permission is a denial",
+      "A-007 a Tenant in suspended, deletion_requested, deleted or provisioning state gets no ordinary tenant-scoped access",
+      "A-008 the final enforcement belongs to the component that owns the data; this component decides and never enforces",
+      "A-009 every decision and every refused request is audited with request_id and correlation_id",
+      "A-010 the internals of this component are not a consumer contract: a consumer receives the published client and values only"
+    ]
+  },
+  "api": {
+    "openapi": "components/authorization/contract/openapi.yaml",
+    "base_path": "/api/v1",
+    "supported_majors": [
+      "v1"
+    ],
+    "operations": [
+      {
+        "method": "POST",
+        "path": "/api/v1/decisions",
+        "purpose": "decide whether a verified subject may perform one operation on one tenant-scoped resource",
+        "idempotency": "not_applicable",
+        "idempotency_note": "The operation changes no state of this component beyond its append-only audit journal, so ARCHITECTURE.md §6.5 (Idempotency-Key for state-changing operations) does not apply; repeating the request produces a decision, never a second effect."
+      }
+    ],
+    "decision_model": {
+      "request": [
+        "verified subject: the credential presented by the subject, verified through IS-001 — never a claim about who the subject is",
+        "effective tenant context: derived by IS-001 from the verified identity",
+        "resource: type, id and the Tenant that owns it, stated by the data owner",
+        "operation: the action the data owner is about to perform"
+      ],
+      "response": [
+        "decision: ALLOW or DENY",
+        "reason: one stable code from the published set"
+      ],
+      "default": "deny",
+      "decision_chain": [
+        "verified_subject",
+        "effective_tenant_context",
+        "resource_tenant_match",
+        "tenant_lifecycle",
+        "explicit_permission"
+      ],
+      "allow_reasons": [
+        "permitted"
+      ],
+      "deny_reasons": [
+        "missing_identity",
+        "invalid_identity",
+        "unknown_identity",
+        "missing_tenant_context",
+        "tenant_mismatch",
+        "tenant_unknown",
+        "platform_ownership_mismatch",
+        "resource_tenant_unknown",
+        "resource_tenant_mismatch",
+        "tenant_not_active",
+        "tenant_suspended",
+        "tenant_deletion_requested",
+        "tenant_deleted",
+        "permission_not_granted",
+        "authority_unavailable"
+      ]
+    },
+    "consumer_surface": {
+      "module": "authorization_service.reader",
+      "published_as": "AuthorizationClient",
+      "published_by": "authorization_service.deployment.AuthorizationDeployment.publish",
+      "transport": "authorization_service.transport.open_channel + authorization_service.transport.call_contract — the published HTTP contract executed in process over an opaque channel handle (ARCHITECTURE.md §1.1 interaction mode API, Level 0)",
+      "transport_handles": {
+        "open": "authorization_service.transport.open_channel",
+        "call": "authorization_service.transport.call_contract",
+        "close": "authorization_service.transport.close_channel"
+      },
+      "consumer_state": [
+        "opaque contract channel handle (str)",
+        "service credential (str)"
+      ],
+      "operations": [
+        "decide"
+      ],
+      "returns": [
+        "authorization_service.contracts.AuthorizationDecision"
+      ],
+      "errors": [
+        "authorization_service.errors.CallerNotAuthenticated — the asking component presented no verifiable service identity (401)",
+        "authorization_service.errors.CallerNotAuthorized — the asking component may not ask for decisions, or belongs to another Platform Instance (403)",
+        "authorization_service.errors.MalformedDecisionRequest — the question itself is unanswerable (422); it is refused, not answered DENY",
+        "authorization_service.errors.ContractViolation — the component answered outside its contract; a consumer must fail closed"
+      ],
+      "guarantees": [
+        "values only: no grant store, audit journal, engine reference, policy object or grant mutation is reachable through the published surface",
+        "the published client holds no callable: its state is a channel handle and a credential, so walking __closure__ and cell_contents of the client and of its class reaches neither the component's ASGI application nor its deployment, engine or store",
+        "the ASGI application is never handed out: it stays behind the provider-side channel table, and a channel is revoked when the consumer drops the client",
+        "importing the published module binds no reference to authorization_service.transport — its namespace holds no module object, no channel table and no transport type",
+        "an unknown or revoked channel handle raises ContractViolation, so there is no permissive fallback and a handle cannot be guessed",
+        "every decision is produced by the same routing, service-identity authentication, permission check and audit code that serves an HTTP request",
+        "the asking service identity comes from the credential bound to the client and cannot be chosen by the caller",
+        "a DENY is returned as a value: the consumer performs the enforcement itself, and nothing the client returns can read, write or serve a resource",
+        "a decision cannot be turned into a grant: the surface has no grant, revoke, list or read operation over permissions"
+      ],
+      "composition_root_only": [
+        "authorization_service.deployment (AuthorizationDeployment: engine, store, configuration)",
+        "the contract application itself (the ASGI application) — a consumer component must not own or re-export it",
+        "the contract channel table authorization_service.transport._CHANNELS — a handle-to-application mapping owned by the component"
+      ],
+      "internal_modules": [
+        "authorization_service.engine",
+        "authorization_service.store",
+        "authorization_service.models",
+        "authorization_service.policy",
+        "authorization_service.config",
+        "authorization_service.api",
+        "authorization_service.deployment",
+        "authorization_service.transport",
+        "authorization_service.ports"
+      ],
+      "note": "The deployment object is composition-internal: it assembles engine, store and contract application for the composition root and for this component's own tests and is never handed to a consumer. This component composes no other component and publishes no module-level demo application: a demo of an authorization boundary needs a composed Platform Instance, which is the job of a composition root."
+    },
+    "consumes": [
+      {
+        "component_id": "identity",
+        "contract": "components/identity/contract/component_contract.json",
+        "mechanism": "contract client over the published API of identity, executed in process at Level 0",
+        "consumer_surface": "identity_service.reader.IdentityContextClient",
+        "local_port": "authorization_service.ports.IdentityContextPort",
+        "local_adapter": "authorization_service.adapters.IdentityContextAdapter",
+        "local_answer_type": "authorization_service.consumed.SubjectContext",
+        "operations": [
+          "resolve_context"
+        ],
+        "note": "The verified subject and the effective tenant of a request come from IS-001. This component has no identity verification and no tenant derivation of its own, so no second tenant-context mechanism can exist here (A-002).",
+        "dependency_isolation": "No module of authorization imports identity_service or tenant_authority: the published client is adapted at the composition boundary and only values owned by this component reach the decision logic (ARCHITECTURE.md 1.1, 6.1, LAW-04)."
+      },
+      {
+        "component_id": "tenant_authority",
+        "contract": "components/tenant_authority/contract/component_contract.json",
+        "mechanism": "contract client over the published API of tenant_authority, executed in process at Level 0",
+        "consumer_surface": "tenant_authority.reader.TenantAuthorityClient",
+        "local_port": "authorization_service.ports.TenantAuthorityPort",
+        "local_adapter": "authorization_service.adapters.TenantAuthorityAdapter",
+        "local_answer_type": "authorization_service.consumed.TenantVerdict",
+        "credential_source": "deployment secret resolved by the composition root: the service identity of this component",
+        "demo_credential": "svc-token-authorization",
+        "operations": [
+          "lifecycle_decision"
+        ],
+        "note": "The Tenant lifecycle verdict is read at decision time and never cached: a Tenant suspended between two decisions is denied on the next one (A-007).",
+        "dependency_isolation": "No module of authorization imports identity_service or tenant_authority: the published client is adapted at the composition boundary and only values owned by this component reach the decision logic (ARCHITECTURE.md 1.1, 6.1, LAW-04)."
+      }
+    ],
+    "refusal_semantics": {
+      "principle": "a refused question and a negative answer are different facts",
+      "refused": {
+        "401": "missing_service_identity, invalid_service_identity, unknown_service",
+        "403": "insufficient_authorization, platform_mismatch",
+        "422": "malformed_request"
+      },
+      "answered": "HTTP 200 with decision ALLOW or DENY; a DENY is data the consumer must enforce, not a transport failure"
+    }
+  },
+  "events": {
+    "envelope": "CloudEvents",
+    "status": "declared_only",
+    "published": [],
+    "consumed": [],
+    "note": "IS-003 publishes no inter-component events and does not simulate a broker. The audit journal is owned data, not a public event contract."
+  },
+  "data_export_cdc": {
+    "status": "declared_only",
+    "version": null,
+    "compatibility_policy": null,
+    "streams": [],
+    "note": "No CDC or bulk export stream is implemented in IS-003."
+  },
+  "ui": {
+    "kind": "none",
+    "embedding": "not_applicable",
+    "note": "Class B Platform Service; a permission administration UI is an explicit non-goal of IS-003."
+  },
+  "configuration_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "platform_id"
+    ],
+    "properties": {
+      "platform_id": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Identifier of the Platform Instance this boundary serves; a service identity of another Platform Instance may not ask it for decisions."
+      },
+      "environment": {
+        "type": "string",
+        "default": "standalone"
+      },
+      "service_token_prefix": {
+        "type": "string",
+        "const": "authz-svc-token-"
+      }
+    }
+  },
+  "data_ownership": {
+    "owner": "authorization",
+    "logical_schema": "authorization",
+    "datasets": [
+      {
+        "name": "permission_grants",
+        "scope": "tenant-scoped"
+      },
+      {
+        "name": "service_access",
+        "scope": "platform-scoped"
+      },
+      {
+        "name": "audit_events",
+        "scope": "platform-scoped"
+      }
+    ],
+    "notes": [
+      "A permission grant exists inside exactly one Tenant (LAW-16a): the same subject in another Tenant is another grant, and no grant crosses a tenant boundary.",
+      "This component owns no tenant registry, no tenant lifecycle state and no identity: those belong to tenant_authority (T-004) and identity, and are read through their published contracts.",
+      "There is no public grant management API: provisioning grants is an internal operation of the composition root, and user/credential/permission administration is an explicit non-goal of IS-003."
+    ]
+  },
+  "audit": {
+    "journal": "internal append-only journal owned by authorization",
+    "decision_fields": [
+      "action",
+      "decision",
+      "reason",
+      "actor_id",
+      "subject_id",
+      "tenant_id",
+      "operation",
+      "resource_type",
+      "resource_id",
+      "resource_tenant_id",
+      "platform_id",
+      "request_id",
+      "correlation_id",
+      "timestamp"
+    ],
+    "denials_audited": true,
+    "refusals_audited": true,
+    "refusal_audit_scope": "every refusal of the published contract, including a request rejected by the contract schema before any decision logic runs; the record carries request_id and correlation_id of the caller",
+    "note": "Audit is owned data, not a public event contract, and is not readable through the published surface."
+  },
+  "observability": {
+    "context": [
+      "timestamp",
+      "environment",
+      "platform_id",
+      "component_id",
+      "component_version",
+      "tenant_id",
+      "subject_id",
+      "service_id",
+      "request_id",
+      "trace_id",
+      "correlation_id"
+    ],
+    "saga_id": "absent — this component runs no inter-component sagas",
+    "health": "/health",
+    "readiness": "/ready"
+  },
+  "authn": {
+    "service": "verified_service_identity",
+    "human": "delegated_to_identity",
+    "note": "The asking component authenticates with its own service identity (§6.2). The subject is never authenticated here: the presented subject credential is verified by IS-001 through its published contract."
+  },
+  "authz": {
+    "boundary": "permission_authority",
+    "model": "explicit_permission_grant_on_subject_within_tenant",
+    "enforcement_point": "the component that owns the data",
+    "permissions": [
+      "authorization.decide"
+    ],
+    "authentication_does_not_imply_authorization": true,
+    "default_decision": "DENY",
+    "tenant_context_source": "identity",
+    "tenant_state_source": "tenant_authority"
+  },
+  "compatibility_policy": {
+    "api": "additive-minor-breaking-major",
+    "events": "tolerant-reader",
+    "supported_api_majors": 1,
+    "reason_codes": "adding a reason code is a minor change; removing or redefining one is a breaking change",
+    "decision_chain": "reordering or removing a check is a breaking change: the order is part of the published behaviour"
+  },
+  "dependencies": [
+    {
+      "component_id": "identity",
+      "version_range": ">=0.3.0,<0.4.0",
+      "kind": "api",
+      "contract": "components/identity/contract/component_contract.json",
+      "direction": "authorization -> identity (read-only verified context lookup)"
+    },
+    {
+      "component_id": "tenant_authority",
+      "version_range": ">=0.1.0,<0.2.0",
+      "kind": "api",
+      "contract": "components/tenant_authority/contract/component_contract.json",
+      "direction": "authorization -> tenant_authority (read-only lifecycle verdict)"
+    }
+  ]
+}

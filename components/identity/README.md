@@ -2,7 +2,7 @@
 
 **Класс:** B — Platform Service  
 **Уровень:** Level 0 — Modular Monolith  
-**Версия компонента:** 0.2.0  
+**Версия компонента:** 0.3.0  
 **Владелец данных:** `identity` (логическая схема `identity`)
 
 Минимальный platform service, доказывающий архитектурные инварианты
@@ -49,6 +49,29 @@ identity сразу, без дополнительных механизмов с
 Churn Tenant-состояния над границей: чужой Platform Instance отвечает
 `tenant_not_found` (причина `foreign_tenant` остаётся в журнале Tenant Authority),
 и identity отображает это как `TENANT_UNKNOWN`.
+
+## Контекст для границы авторизации (с 0.3.0)
+
+Authorization Boundary (IS-003, Issue #12) не имеет права выводить tenant
+самостоятельно: `effective_tenant_id` берётся только из проверенной
+идентичности. Чтобы это было выполнимо, identity публикует один аддитивный
+read — `GET /api/v1/context`:
+
+- отвечает на два вопроса сразу: кто субъект (`identity_id`, `kind`, `subject`)
+  и какой Tenant для него действует (`tenant_id`, `platform_id`,
+  `source = verified_identity`);
+- `X-Tenant-Id` остаётся исключительно cross-check: несовпадение — `403`
+  `tenant_mismatch`, а не выбор другого Tenant;
+- ничего не разрешает: состояние Tenant в ответ не входит (его владелец —
+  IS-002), permissions в ответ не входят (их владелец — IS-003);
+- аудируется как `identity.context` с `request_id` и `correlation_id`
+  вызывающей стороны — и при выдаче контекста, и при отказе;
+- потребителю выдаётся value-only клиент
+  `identity_service.reader.IdentityContextClient` с единственной операцией
+  `resolve_context`.
+
+Изменение аддитивное (MINOR, §7 ARCHITECTURE.md): существующие операции
+`/api/v1/me`, `/api/v1/records/{id}` и их поведение не менялись.
 
 ## Запуск тестов
 

@@ -4,34 +4,30 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from identity_service.contracts import DenyReason, IdentityKind, TENANT_CONTEXT_SOURCE
 from tenant_authority.contracts import TenantState
 
-
-class IdentityKind(StrEnum):
-    HUMAN = "HUMAN"
-    SERVICE = "SERVICE"
+# `IdentityKind` and `DenyReason` are defined by the published contract of this
+# component (`identity_service.contracts`) and re-exported here for the internal
+# modules that already use them: one vocabulary, one definition.
+__all__ = [
+    "AuditEvent",
+    "AuthorizationContext",
+    "Decision",
+    "DenyReason",
+    "IdempotencyRecord",
+    "IdentityKind",
+    "ObservabilityContext",
+    "ProtectedRecord",
+    "TenantAssociation",
+    "TenantContext",
+    "VerifiedIdentity",
+]
 
 
 class Decision(StrEnum):
     ALLOW = "ALLOW"
     DENY = "DENY"
-
-
-class DenyReason(StrEnum):
-    MISSING_IDENTITY = "missing_identity"
-    INVALID_IDENTITY = "invalid_identity"
-    UNKNOWN_IDENTITY = "unknown_identity"
-    MISSING_TENANT_CONTEXT = "missing_tenant_context"
-    TENANT_MISMATCH = "tenant_mismatch"
-    TENANT_SUSPENDED = "tenant_suspended"
-    TENANT_DELETED = "tenant_deleted"
-    TENANT_DELETION_REQUESTED = "tenant_deletion_requested"
-    TENANT_NOT_ACTIVE = "tenant_not_active"
-    TENANT_UNKNOWN = "tenant_unknown"
-    PLATFORM_OWNERSHIP_MISMATCH = "platform_ownership_mismatch"
-    INSUFFICIENT_AUTHORIZATION = "insufficient_authorization"
-    UNKNOWN_RESOURCE = "unknown_resource"
-    IDEMPOTENCY_CONFLICT = "idempotency_conflict"
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +58,7 @@ class TenantContext:
     tenant_id: str
     status: TenantState
     platform_id: str
-    source: str = "verified_identity"
+    source: str = TENANT_CONTEXT_SOURCE
     state_source: str = "tenant_authority"
 
 

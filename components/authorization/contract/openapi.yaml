@@ -1,0 +1,166 @@
+openapi: 3.1.0
+info:
+  title: IS-003 Authorization Boundary / Permission Authority
+  version: 0.1.0
+  description: >-
+    Граница авторизации одной Platform Instance. Компонент отвечает ровно на
+    один вопрос: может ли проверенный субъект выполнить операцию над
+    tenant-scoped ресурсом. Ответ — минимальное решение ALLOW / DENY со
+    стабильным кодом причины. Enforcement выполняет компонент — владелец данных.
+paths:
+  /health:
+    get:
+      responses:
+        "200":
+          description: liveness
+  /ready:
+    get:
+      responses:
+        "200":
+          description: readiness
+  /api/v1/decisions:
+    post:
+      summary: Decide one access question for a verified subject
+      description: >-
+        `Authorization` несёт credential компонента, который спрашивает;
+        `X-Subject-Authorization` — credential, предъявленный субъектом, который
+        проверяется через опубликованный контракт IS-001. Операция не изменяет
+        состояние компонента (кроме append-only журнала аудита), поэтому
+        `Idempotency-Key` не применяется.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: X-Subject-Authorization
+          required: false
+          schema:
+            type: string
+          description: >-
+            credential субъекта; проверяется в IS-001. Отсутствие проверяемого
+            субъекта — это DENY (`missing_identity` / `invalid_identity`), а не
+            успешная авторизация
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecisionRequest"
+      responses:
+        "200":
+          description: >-
+            решение принято; `decision` содержит ALLOW или DENY. DENY — это
+            данные, которые потребитель обязан применить, а не ошибка транспорта
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Decision"
+        "401":
+          description: >-
+            сервисная идентичность вызывающего компонента отсутствует или не
+            проверяема; отказ фиксируется в журнале аудита с request_id и
+            correlation_id
+        "403":
+          description: >-
+            вызывающий компонент не имеет права запрашивать решение либо
+            принадлежит другой Platform Instance; отказ фиксируется в журнале
+            аудита с request_id и correlation_id
+        "422":
+          description: >-
+            вопрос не может быть отвечен: тело запроса не соответствует
+            опубликованной схеме (отсутствует обязательное поле, объявлено
+            незадекларированное поле, неверный тип) либо операция пуста. Решение
+            не выдумывается; отказ фиксируется в журнале аудита с request_id и
+            correlation_id, даже если запрос отклонён схемой до обработчика
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    ResourceRef:
+      type: object
+      additionalProperties: false
+      required: [resource_type, resource_id]
+      properties:
+        resource_type:
+          type: string
+        resource_id:
+          type: string
+        tenant_id:
+          type: string
+          nullable: true
+          description: >-
+            Tenant, которому принадлежит ресурс; сообщается владельцем данных и
+            не является утверждением об идентичности вызывающего
+    DecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [operation, resource]
+      properties:
+        operation:
+          type: string
+        resource:
+          $ref: "#/components/schemas/ResourceRef"
+    Decision:
+      type: object
+      required: [decision, reason, operation, resource, decided_by]
+      properties:
+        decision:
+          type: string
+          enum: [ALLOW, DENY]
+        reason:
+          $ref: "#/components/schemas/Reason"
+        operation:
+          type: string
+        resource:
+          $ref: "#/components/schemas/ResourceRef"
+        subject_id:
+          type: string
+          nullable: true
+        tenant_id:
+          type: string
+          nullable: true
+        request_id:
+          type: string
+          nullable: true
+        correlation_id:
+          type: string
+          nullable: true
+        decided_by:
+          type: string
+          const: authorization
+    Reason:
+      type: string
+      enum:
+        - permitted
+        - missing_identity
+        - invalid_identity
+        - unknown_identity
+        - missing_tenant_context
+        - tenant_mismatch
+        - tenant_unknown
+        - platform_ownership_mismatch
+        - resource_tenant_unknown
+        - resource_tenant_mismatch
+        - tenant_not_active
+        - tenant_suspended
+        - tenant_deletion_requested
+        - tenant_deleted
+        - permission_not_granted
+        - authority_unavailable

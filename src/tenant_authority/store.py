@@ -85,6 +85,11 @@ class TenantAuthorityStore:
             "svc_identity": ServiceAccess(
                 "svc_identity", platform_id=platform_id, permissions=LOOKUP_PERMISSIONS
             ),
+            # Each consuming component has its own service identity: the actor in
+            # this journal is the component that actually asked (IS-003 included).
+            "svc_authorization": ServiceAccess(
+                "svc_authorization", platform_id=platform_id, permissions=LOOKUP_PERMISSIONS
+            ),
             "svc_foreign_admin": ServiceAccess(
                 "svc_foreign_admin", platform_id=foreign_platform, permissions=REGISTRY_PERMISSIONS
             ),
@@ -92,6 +97,7 @@ class TenantAuthorityStore:
         self.service_tokens = {
             "svc-token-admin": "svc_tenant_admin",
             "svc-token-identity": "svc_identity",
+            "svc-token-authorization": "svc_authorization",
             "svc-token-foreign-admin": "svc_foreign_admin",
             # Resolves to a subject that no longer exists (revoked service identity).
             "svc-token-unknown": "svc_missing",
