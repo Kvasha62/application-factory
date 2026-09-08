@@ -1,0 +1,96 @@
+{
+  "component_id": "identity",
+  "component_version": "0.1.0",
+  "class": "platform_service",
+  "maturity_level": "level_0_modular_monolith",
+  "api": {
+    "openapi": "components/identity/contract/openapi.yaml",
+    "base_path": "/api/v1",
+    "supported_majors": ["v1"]
+  },
+  "events": {
+    "envelope": "CloudEvents",
+    "published": [
+      {
+        "type": "identity.access.denied",
+        "version": "v1",
+        "tenant_context": true
+      },
+      {
+        "type": "identity.access.granted",
+        "version": "v1",
+        "tenant_context": true
+      }
+    ],
+    "consumed": []
+  },
+  "data_export_cdc": {
+    "version": "v1",
+    "compatibility_policy": "additive-minor",
+    "streams": [
+      {
+        "name": "identity.audit",
+        "scope": "platform-scoped",
+        "description": "Security-sensitive audit trail; no foreign OLTP access."
+      }
+    ]
+  },
+  "ui": {
+    "kind": "none",
+    "embedding": "not_applicable",
+    "note": "Class B Platform Service; no product UI in IS-001."
+  },
+  "configuration_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "token_prefix": {
+        "type": "string",
+        "const": "token-"
+      }
+    }
+  },
+  "data_ownership": {
+    "owner": "identity",
+    "logical_schema": "identity",
+    "datasets": [
+      {
+        "name": "identities",
+        "scope": "platform-scoped"
+      },
+      {
+        "name": "tenants",
+        "scope": "platform-scoped"
+      },
+      {
+        "name": "tenant_associations",
+        "scope": "tenant-scoped"
+      },
+      {
+        "name": "protected_records",
+        "scope": "tenant-scoped"
+      },
+      {
+        "name": "audit_events",
+        "scope": "platform-scoped"
+      }
+    ]
+  },
+  "authn": {
+    "human": "oidc_compatible_bearer_token",
+    "service": "verified_service_identity",
+    "note": "IS-001 proves verification boundary; it is not a full IAM product."
+  },
+  "authz": {
+    "boundary": "data_owner",
+    "model": "explicit_permission_on_tenant_association",
+    "authentication_does_not_imply_authorization": true
+  },
+  "compatibility_policy": {
+    "api": "additive-minor-breaking-major",
+    "events": "tolerant-reader",
+    "supported_api_majors": 1
+  },
+  "dependencies": []
+}
