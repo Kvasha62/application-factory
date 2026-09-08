@@ -1,0 +1,509 @@
+{
+  "component_id": "learning",
+  "component_version": "0.1.0",
+  "class": "business_system",
+  "maturity_level": "level_0_modular_monolith",
+  "task": "Learning — первый реализационный срез (разделы 8–14 контракта API)",
+  "resource_boundary": {
+    "role": "Business System / Data Owner",
+    "invariants": [
+      "L-001 клиент не выбирает эффективный тенант: тенант выводится из проверенной идентичности (IS-001)",
+      "L-002 клиент не выдаёт себя за другую идентичность: student_identity_id и created_by выводятся сервером",
+      "L-003 клиент не назначает владение и не задаёт состояние жизненного цикла",
+      "L-004 доступ к ресурсу чужого тенанта запрещён",
+      "L-005 авторизация оценивается до бизнес-эффекта",
+      "L-006 владение данными контролируется на границе Learning",
+      "L-007 обязательные команды не проходят мимо идемпотентности (IS-005)",
+      "L-008 точный идемпотентный повтор не создаёт второго бизнес-эффекта",
+      "L-009 недопустимый переход состояния не мутирует ресурс",
+      "L-010 отказ зависимости не даёт успешного бизнес-эффекта",
+      "L-011 в этом срезе нет универсального CRUD API",
+      "L-012 в этом срезе нет API оценки/проверки работ",
+      "L-013 API событий/CDC не заявляется реализованным",
+      "L-014 ни одна операция не создаёт второй механизм идентичности, тенант-контекста, авторизации или идемпотентности"
+    ],
+    "enforcement_chain": [
+      "identity_context",
+      "effective_tenant",
+      "ownership_boundary",
+      "authorization_decision",
+      "owned_data_operation"
+    ],
+    "resource_model": [
+      "courses",
+      "modules",
+      "lessons",
+      "assignments",
+      "enrollments",
+      "submissions"
+    ]
+  },
+  "api": {
+    "openapi": "components/learning/contract/openapi.yaml",
+    "base_path": "/api/v1/learning",
+    "supported_majors": [
+      "v1"
+    ],
+    "operations": [
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/courses",
+        "operation_id": "create_course",
+        "purpose": "создать курс в эффективном тенанте; status=DRAFT, created_by=проверенная идентичность",
+        "authorization_operation": "learning.course.write",
+        "idempotency": "required",
+        "idempotency_note": "Idempotency-Key обязателен; команда доставляется через IS-005"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/learning/courses/{course_id}",
+        "operation_id": "get_course",
+        "purpose": "прочитать курс; Teacher — любое состояние, Student — только PUBLISHED",
+        "authorization_operation": "learning.course.read",
+        "idempotency": "natural",
+        "idempotency_note": "Чтение не меняет бизнес-состояние"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/courses/{course_id}/publish",
+        "operation_id": "publish_course",
+        "purpose": "опубликовать курс; единственный допустимый переход DRAFT → PUBLISHED, публикация публикует содержимое курса той же командой",
+        "authorization_operation": "learning.course.write",
+        "idempotency": "required",
+        "idempotency_note": "Idempotency-Key обязателен; точный повтор возвращает опубликованное представление, не создавая второго эффекта"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/courses/{course_id}/modules",
+        "operation_id": "create_module",
+        "purpose": "создать модуль курса; запрещено после публикации курса",
+        "authorization_operation": "learning.course.write",
+        "idempotency": "required"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/modules/{module_id}/lessons",
+        "operation_id": "create_lesson",
+        "purpose": "создать урок модуля; запрещено после публикации курса",
+        "authorization_operation": "learning.course.write",
+        "idempotency": "required"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/lessons/{lesson_id}/assignments",
+        "operation_id": "create_assignment",
+        "purpose": "создать задание урока; запрещено после публикации курса",
+        "authorization_operation": "learning.course.write",
+        "idempotency": "required"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/learning/assignments/{assignment_id}",
+        "operation_id": "get_assignment",
+        "purpose": "прочитать задание; Teacher — любое состояние, Student — только PUBLISHED",
+        "authorization_operation": "learning.assignment.read",
+        "idempotency": "natural"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/courses/{course_id}/enrollments",
+        "operation_id": "enroll_in_course",
+        "purpose": "записать проверенную идентичность на опубликованный курс; status=ACTIVE; повторная запись второго эффекта не создаёт",
+        "authorization_operation": "learning.enrollment.write",
+        "idempotency": "required"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/learning/courses/{course_id}/enrollments/me",
+        "operation_id": "get_own_enrollment",
+        "purpose": "прочитать собственную запись; идентичность выводится из проверенной идентичности",
+        "authorization_operation": "learning.enrollment.read",
+        "idempotency": "natural"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/assignments/{assignment_id}/submissions",
+        "operation_id": "create_submission",
+        "purpose": "отправить решение проверенной идентичности на опубликованное задание при активной записи; status=SUBMITTED",
+        "authorization_operation": "learning.submission.write",
+        "idempotency": "required"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/learning/submissions/{submission_id}",
+        "operation_id": "get_submission",
+        "purpose": "прочитать решение: своего студента — Student, разрешённые — Teacher",
+        "authorization_operation": "learning.submission.read",
+        "idempotency": "natural"
+      }
+    ],
+    "no_generic_crud": {
+      "put": false,
+      "patch": false,
+      "delete": false,
+      "note": "Изменяющие состояние операции выражены только явными бизнес-командами; PUT, PATCH и DELETE для ресурсов этого среза не существуют ни в реализации, ни в контракте."
+    },
+    "client_control_forbidden": [
+      "resource identifiers",
+      "tenant ownership",
+      "identity ownership",
+      "lifecycle state",
+      "creation timestamps",
+      "update timestamps",
+      "server-controlled ownership fields"
+    ],
+    "refusal_semantics": {
+      "principle": "отказ — это данные с стабильным машиночитаемым кодом из закрытого набора, записанные в аудит с request_id и correlation_id; ничто в отказе не может быть принято за представление ресурса",
+      "envelope": {
+        "error": {
+          "code": "один из опубликованных кодов",
+          "message": "статическое безопасное сообщение",
+          "details": {}
+        },
+        "request_id": "opaque-id или null",
+        "correlation_id": "opaque-id или null"
+      },
+      "refused": {
+        "400": "IDEMPOTENCY_KEY_REQUIRED",
+        "401": "AUTHENTICATION_REQUIRED",
+        "403": "AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_OWNER_MISMATCH",
+        "404": "RESOURCE_NOT_FOUND",
+        "409": "INVALID_STATE_TRANSITION, COURSE_NOT_PUBLISHED, ASSIGNMENT_NOT_PUBLISHED, ENROLLMENT_REQUIRED, DUPLICATE_ENROLLMENT, IDEMPOTENCY_CONFLICT",
+        "422": "VALIDATION_ERROR",
+        "503": "DEPENDENCY_UNAVAILABLE"
+      },
+      "served": "HTTP 200 с представлением ресурса, произведённым только операцией над данными в конце цепочки контроля"
+    },
+    "lifecycle": {
+      "course": {
+        "states": ["DRAFT", "PUBLISHED", "ARCHIVED"],
+        "commands": {
+          "publish": ["DRAFT", "PUBLISHED"]
+        },
+        "note": "ARCHIVED зарезервирован; команды перевода в него в этом срезе нет. Публикация курса публикует его содержимое (модули, уроки, задания) той же командой."
+      },
+      "content": {
+        "states": ["DRAFT", "PUBLISHED"],
+        "note": "Модуль, урок и задание создаются в DRAFT и публикуются только как следствие публикации курса."
+      },
+      "enrollment": {
+        "states": ["ACTIVE"],
+        "note": "Отмена записи в этом срезе отсутствует."
+      },
+      "submission": {
+        "states": ["SUBMITTED"],
+        "note": "Оценка (grading) частью этого среза не является."
+      }
+    },
+    "consumer_surface": {
+      "module": "learning_service.reader",
+      "published_as": "LearningClient",
+      "published_by": "learning_service.deployment.LearningDeployment.publish",
+      "transport": "learning_service.transport.open_channel + learning_service.transport.call_contract — опубликованный HTTP-контракт, исполняемый в процессе (ARCHITECTURE.md §1.1, режим API, Level 0)",
+      "transport_handles": {
+        "open": "learning_service.transport.open_channel",
+        "call": "learning_service.transport.call_contract",
+        "close": "learning_service.transport.close_channel"
+      },
+      "consumer_state": [
+        "opaque contract channel handle (str)"
+      ],
+      "operations": [
+        "create_course",
+        "get_course",
+        "publish_course",
+        "create_module",
+        "create_lesson",
+        "create_assignment",
+        "get_assignment",
+        "enroll",
+        "get_my_enrollment",
+        "create_submission",
+        "get_submission"
+      ],
+      "returns": [
+        "learning_service.contracts.CourseView",
+        "learning_service.contracts.ModuleView",
+        "learning_service.contracts.LessonView",
+        "learning_service.contracts.AssignmentView",
+        "learning_service.contracts.EnrollmentView",
+        "learning_service.contracts.SubmissionView"
+      ],
+      "errors": [
+        "learning_service.errors.AccessRefused — операция не состоялась; code — один из опубликованных кодов (400/401/403/404/409/422)",
+        "learning_service.errors.ContractViolation — контрактный транспорт не сработал или ответил вне опубликованной формы; потребитель обязан закрыться (fail closed)"
+      ],
+      "guarantees": [
+        "только значения: ни хранилища, ни журнала аудита, ни ссылки на движок или деплой через опубликованную поверхность нет",
+        "каждая операция проходит тот же маршрут, валидацию, цепочку контроля и аудит, что и HTTP-запрос",
+        "нет операций списка, массового чтения, экспорта или прямого доступа к хранилищу"
+      ],
+      "internal_modules": [
+        "learning_service.engine",
+        "learning_service.store",
+        "learning_service.models",
+        "learning_service.config",
+        "learning_service.api",
+        "learning_service.deployment",
+        "learning_service.transport",
+        "learning_service.ports",
+        "learning_service.adapters",
+        "learning_service.consumed"
+      ],
+      "note": "Деплой-объект внутренний: он собирает движок, хранилище и контрактное приложение для корня композиции и собственных тестов компонента и никогда не выдаётся потребителю."
+    },
+    "consumes": [
+      {
+        "component_id": "identity",
+        "contract": "components/identity/contract/component_contract.json",
+        "mechanism": "контрактный клиент поверх опубликованного API identity, исполняемый в процессе на Level 0",
+        "consumer_surface": "identity_service.reader.IdentityContextClient",
+        "local_port": "learning_service.ports.IdentityContextPort",
+        "local_adapter": "learning_service.adapters.IdentityContextAdapter",
+        "operations": [
+          "resolve_context"
+        ],
+        "note": "Проверенная идентичность и эффективный тенант читаются на каждую операцию и не кэшируются. Клиентский tenant_id в Learning отсутствует как механизм: выбирать тенант нельзя в принципе (LAW-16a).",
+        "dependency_isolation": "Ни один модуль learning не импортирует identity_service, authorization_service или tenant_authority: опубликованные клиенты адаптируются на границе композиции, и до логики контроля доходят только значения, принадлежащие этому компоненту (ARCHITECTURE.md 1.1, 6.1, LAW-04)."
+      },
+      {
+        "component_id": "authorization",
+        "contract": "components/authorization/contract/component_contract.json",
+        "mechanism": "контрактный клиент поверх опубликованного API authorization, исполняемый в процессе на Level 0",
+        "consumer_surface": "authorization_service.reader.AuthorizationClient",
+        "local_port": "learning_service.ports.AuthorizationPort",
+        "local_adapter": "learning_service.adapters.AuthorizationDecisionAdapter",
+        "local_answer_type": "learning_service.consumed.DecisionAnswer",
+        "credential_source": "собственная service identity компонента, разрешаемая корнем композиции (демо: authz-svc-token-learning)",
+        "operations": [
+          "decide"
+        ],
+        "note": "Решение читается на каждую операцию и никогда не кэшируется. Роль (Teacher/Student) существует только как гранты операций внутри IS-003 — второго механизма авторизации здесь нет.",
+        "operations_vocabulary": [
+          "learning.course.write",
+          "learning.course.read",
+          "learning.assignment.read",
+          "learning.enrollment.write",
+          "learning.enrollment.read",
+          "learning.submission.write",
+          "learning.submission.read"
+        ]
+      },
+      {
+        "component_id": "idempotency_guard",
+        "contract": "components/idempotency/contract/component_contract.json",
+        "mechanism": "опубликованный исполняемый guard IS-005, как у IS-006",
+        "consumer_surface": "idempotency.guard.IdempotencyGuard",
+        "note": "Ключ связывается с идентичностью, эффективным тенантом, операцией, целью и отпечатком запроса (canonical JSON, sha256). Отказ авторизации или зависимости не создаёт записи идемпотентности: эффект исполняется внутри guard."
+      }
+    ]
+  },
+  "events": {
+    "envelope": "CloudEvents",
+    "status": "declared_only",
+    "published": [],
+    "consumed": [],
+    "note": "Learning в этом срезе не публикует межкомпонентных событий и не имитирует брокер. Инвариант 14: API событий/CDC не заявляется реализованным."
+  },
+  "data_export_cdc": {
+    "status": "declared_only",
+    "version": null,
+    "compatibility_policy": null,
+    "streams": [],
+    "note": "CDC и массовый экспорт не реализованы: массовый путь был бы риском обхода границы контроля."
+  },
+  "ui": {
+    "kind": "none",
+    "embedding": "not_applicable",
+    "note": "UI-сурфейс в этом срезе отсутствует."
+  },
+  "configuration_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["platform_id"],
+    "properties": {
+      "platform_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "environment": {
+        "type": "string",
+        "minLength": 1,
+        "default": "standalone"
+      }
+    }
+  },
+  "data_ownership": {
+    "owner": "learning",
+    "logical_schema": "learning",
+    "datasets": [
+      {
+        "name": "courses",
+        "scope": "tenant-scoped",
+        "note": "Курс принадлежит ровно одному тенанту; tenant_id — факт хранилища владельца, не запроса."
+      },
+      {
+        "name": "modules",
+        "scope": "tenant-scoped"
+      },
+      {
+        "name": "lessons",
+        "scope": "tenant-scoped"
+      },
+      {
+        "name": "assignments",
+        "scope": "tenant-scoped"
+      },
+      {
+        "name": "enrollments",
+        "scope": "tenant-scoped"
+      },
+      {
+        "name": "submissions",
+        "scope": "tenant-scoped"
+      },
+      {
+        "name": "access_audit",
+        "scope": "platform-scoped",
+        "note": "Журнал аудита операций и отказов; не читается через опубликованную поверхность."
+      },
+      {
+        "name": "idempotency_records",
+        "scope": "platform-scoped",
+        "note": "Записи IS-005, привязанные к командам этого компонента; состояние guard, не публичный контракт."
+      }
+    ],
+    "lifecycle": {
+      "retention": "не определён в этом срезе; данные принадлежат компоненту и удаляются только решением владельца данных",
+      "deletion": "нет публичного пути удаления: DELETE в контракте отсутствует"
+    },
+    "notes": [
+      "Компонент не владеет идентичностью, грантами, реестром тенантов и состоянием тенантов: они принадлежат identity, authorization и tenant_authority и читаются через опубликованные контракты.",
+      "Каждая сущность хранит tenant_id и полную родительскую цепочку (module → course, lesson → module, assignment → lesson); проверка тенанта выполняется на границе Learning, а не в чужом хранилище."
+    ]
+  },
+  "audit": {
+    "journal": "внутренний append-only журнал, принадлежащий learning",
+    "access_fields": [
+      "action",
+      "decision",
+      "reason",
+      "identity_id",
+      "tenant_id",
+      "resource_type",
+      "resource_id",
+      "platform_id",
+      "request_id",
+      "correlation_id",
+      "timestamp"
+    ],
+    "denials_audited": true,
+    "allowed_accesses_audited": true,
+    "refusal_audit_scope": "каждый отказ опубликованного контракта, включая запрос, отклонённый схемой до обработчика, и отказ из-за неответившей зависимости; запись несёт request_id и correlation_id вызывающего",
+    "idempotency_audit_scope": "события IS-005 (idempotency_replay, idempotency_conflict) записываются в журнал этого компонента через audit sink guard",
+    "note": "Аудит — собственные данные, а не публичный контракт событий, и не читается через опубликованную поверхность."
+  },
+  "observability": {
+    "context": [
+      "timestamp",
+      "environment",
+      "platform_id",
+      "component_id",
+      "component_version",
+      "tenant_id",
+      "subject_id",
+      "request_id",
+      "trace_id",
+      "correlation_id"
+    ],
+    "saga_id": "absent — этот компонент не исполняет межкомпонентных саг",
+    "health": "/health",
+    "readiness": "/ready"
+  },
+  "authn": {
+    "service": "not_applicable_on_public_surface",
+    "human": "delegated_to_identity",
+    "note": "Пароли, собственные сессии, второй провайдер идентичности и второй механизм тенант-контекста запрещены контрактом. Публичная поверхность принимает только Authorization: Bearer <verified-identity>; проверяет IS-001."
+  },
+  "authz": {
+    "enforcement_boundary": "data_owner",
+    "decision_source": "authorization",
+    "decision_source_component": "IS-003 Authorization Boundary / Permission Authority",
+    "default_decision": "DENY",
+    "enforcement_point": "learning",
+    "tenant_context_source": "identity",
+    "operations_guarded": [
+      "learning.course.write",
+      "learning.course.read",
+      "learning.assignment.read",
+      "learning.enrollment.write",
+      "learning.enrollment.read",
+      "learning.submission.write",
+      "learning.submission.read"
+    ],
+    "roles": {
+      "teacher": "гранты learning.course.write, learning.course.read, learning.assignment.read, learning.submission.read внутри IS-003",
+      "student": "гранты learning.course.read, learning.assignment.read, learning.enrollment.write, learning.enrollment.read, learning.submission.write, learning.submission.read внутри IS-003",
+      "note": "Ролей как механизма в Learning нет: Teacher и Student — мнемоника опубликованных наборов грантов IS-003."
+    },
+    "authentication_does_not_imply_authorization": true,
+    "note": "ALLOW от IS-003 не является прямым доступом к данным: владелец данных остаётся финальной границей контроля (ARCHITECTURE.md §6.2). Решение, которое не удалось получить, — отказ."
+  },
+  "idempotency": {
+    "source": "IS-005 Command Safety Boundary / Idempotency Guard",
+    "required_commands": [
+      "create_course",
+      "publish_course",
+      "create_module",
+      "create_lesson",
+      "create_assignment",
+      "enroll_in_course",
+      "create_submission"
+    ],
+    "key_binding": [
+      "identity",
+      "effective tenant",
+      "operation",
+      "target/resource",
+      "request fingerprint"
+    ],
+    "exact_replay": "возвращает тот же логический результат и не создаёт второго бизнес-эффекта",
+    "conflict": "тот же ключ с другим payload, identity, tenant, operation или target — отказ 409 IDEMPOTENCY_CONFLICT",
+    "no_bypass": "не существует пути, исполняющего обязательную команду без идемпотентности: ключ — обязательный аргумент каждой команды и обязательный заголовок контракта",
+    "denial_creates_no_record": true,
+    "denial_creates_no_record_note": "отказ авторизации или зависимости не создаёт успешной записи идемпотентности"
+  },
+  "compatibility_policy": {
+    "api": "additive-minor-breaking-major",
+    "events": "tolerant-reader",
+    "supported_api_majors": 1,
+    "error_codes": "добавление кода отказа — minor; удаление или переопределение — breaking change",
+    "enforcement_chain": "изменение порядка или удаление шага — breaking change: порядок опубликован как часть поведения",
+    "representations": "добавление поля в представление — minor; изменение опубликованных полей — breaking change",
+    "lifecycle": "новое состояние или команда жизненного цикла — minor; переопределение допустимых переходов — breaking change"
+  },
+  "dependencies": [
+    {
+      "component_id": "identity",
+      "version_range": ">=0.1.0,<0.2.0",
+      "kind": "api",
+      "contract": "components/identity/contract/component_contract.json",
+      "direction": "learning -> identity (проверенная идентичность и эффективный тенант, только чтение)"
+    },
+    {
+      "component_id": "authorization",
+      "version_range": ">=0.1.0,<0.2.0",
+      "kind": "api",
+      "contract": "components/authorization/contract/component_contract.json",
+      "direction": "learning -> authorization (решение доступа, только чтение)"
+    },
+    {
+      "component_id": "idempotency_guard",
+      "version_range": ">=0.1.0,<0.2.0",
+      "kind": "library",
+      "contract": "components/idempotency/contract/component_contract.json",
+      "direction": "learning -> idempotency_guard (ровно-однократный эффект обязательных команд)"
+    }
+  ]
+}

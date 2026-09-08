@@ -1,0 +1,826 @@
+openapi: 3.1.0
+info:
+  title: "Learning — Business System (первый реализационный срез)"
+  version: 0.1.0
+  description: "Публичный контракт Learning. Одиннадцать операций: семь явных бизнес-команд (каждая требует Idempotency-Key) и четыре чтения. Универсального CRUD нет: PUT, PATCH и DELETE для ресурсов этого среза не существуют. Состояние жизненного цикла, владение, идентификаторы и метки времени задаёт сервер. Эффективный тенант выводится из проверенной идентичности (IS-001); решение принимает IS-003; ровно-однократный эффект команды обеспечивает IS-005."
+  x-component:
+    component: learning
+    version: 0.1.0
+    api: v1
+servers:
+  - url: /api/v1/learning
+security:
+  - bearerAuth: []
+paths:
+  /api/v1/learning/courses:
+    post:
+      operationId: create_course
+      summary: "Создать курс (команда Teacher)"
+      description: "Создаёт курс в эффективном тенанте. Сервер задаёт course_id, tenant_id, status=DRAFT, created_by (проверенная идентичность) и метки времени. Клиент не может передать course_id, tenant_id, status, created_by, created_at или updated_at — незадекларированное поле отклоняется схемой."
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCourseRequest"
+      responses:
+        "200":
+          description: "Курс создан со status=DRAFT"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CourseEnvelope"
+        "400":
+          $ref: "#/components/responses/IdempotencyKeyRequired"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Denied"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "503":
+          $ref: "#/components/responses/DependencyUnavailable"
+      x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
+  /api/v1/learning/courses/{course_id}:
+    get:
+      operationId: get_course
+      summary: "Прочитать курс"
+      description: "Teacher читает курс согласно авторизации в любом состоянии; Student — только опубликованный (PUBLISHED) курс. Курс другого тенанта не раскрывается никогда."
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: "Курс возвращён после полной цепочки контроля"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CourseEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Denied"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/DependencyUnavailable"
+      x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, DEPENDENCY_UNAVAILABLE]
+  /api/v1/learning/courses/{course_id}/publish:
+    post:
+      operationId: publish_course
+      summary: "Опубликовать курс (команда Teacher)"
+      description: "Единственная команда жизненного цикла этого среза. Допустимый переход только DRAFT → PUBLISHED; повторная публикация и публикация ARCHIVED запрещены (INVALID_STATE_TRANSITION). Публикация курса публикует его содержимое (модули, уроки, задания) той же командой. Клиент не передаёт поле статуса: тело команды пустое."
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmptyCommand"
+      responses:
+        "200":
+          description: "Курс в состоянии PUBLISHED"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CourseEnvelope"
+        "400":
+          $ref: "#/components/responses/IdempotencyKeyRequired"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Denied"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: "INVALID_STATE_TRANSITION (переход неприменим) или IDEMPOTENCY_CONFLICT (ключ использован для другой команды)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "503":
+          $ref: "#/components/responses/DependencyUnavailable"
+      x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, INVALID_STATE_TRANSITION, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
+  /api/v1/learning/courses/{course_id}/modules:
+    post:
+      operationId: create_module
+      summary: "Создать модуль курса (команда Teacher)"
+      description: "Структурная мутация принимается, только пока курс в DRAFT. Родительский курс должен принадлежать эффективному тенанту. Сервер задаёт module_id, tenant_id и status=DRAFT."
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateModuleRequest"
+      responses:
+        "200":
+          description: "Модуль создан со status=DRAFT"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModuleEnvelope"
+        "400":
+          $ref: "#/components/responses/IdempotencyKeyRequired"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Denied"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: "INVALID_STATE_TRANSITION (курс уже PUBLISHED) или IDEMPOTENCY_CONFLICT"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "503":
+          $ref: "#/components/responses/DependencyUnavailable"
+      x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, INVALID_STATE_TRANSITION, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
+  /api/v1/learning/modules/{module_id}/lessons:
+    post:
+      operationId: create_lesson
+      summary: "Создать урок модуля (команда Teacher)"
+      description: "Модуль, курс и урок должны принадлежать одному тенанту — эффективному тенанту запроса. Структурная мутация принимается, только пока курс в DRAFT. Сервер задаёт lesson_id, tenant_id и status=DRAFT."
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ModuleId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLessonRequest"
+      responses:
+        "200":
+          description: "Урок создан со status=DRAFT"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LessonEnvelope"
+        "400":
+          $ref: "#/components/responses/IdempotencyKeyRequired"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Denied"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: "INVALID_STATE_TRANSITION (курс уже PUBLISHED) или IDEMPOTENCY_CONFLICT"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "503":
+          $ref: "#/components/responses/DependencyUnavailable"
+      x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, INVALID_STATE_TRANSITION, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
+  /api/v1/learning/lessons/{lesson_id}/assignments:
+    post:
+      operationId: create_assignment
+      summary: "Создать задание урока (команда Teacher)"
+      description: "Урок, модуль, курс и задание должны принадлежать одному тенанту — эффективному тенанту запроса. Структурная мутация принимается, только пока курс в DRAFT. Сервер задаёт assignment_id, tenant_id и status=DRAFT."
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/LessonId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssignmentRequest"
+      responses:
+        "200":
+          description: "Задание создано со status=DRAFT"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssignmentEnvelope"
+        "400":
+          $ref: "#/components/responses/IdempotencyKeyRequired"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Denied"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: "INVALID_STATE_TRANSITION (курс уже PUBLISHED) или IDEMPOTENCY_CONFLICT"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "503":
+          $ref: "#/components/responses/DependencyUnavailable"
+      x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, INVALID_STATE_TRANSITION, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
+  /api/v1/learning/assignments/{assignment_id}:
+    get:
+      operationId: get_assignment
+      summary: "Прочитать задание"
+      description: "Teacher читает задание согласно авторизации в любом состоянии; Student — только опубликованное (PUBLISHED) задание."
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AssignmentId"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: "Задание возвращено после полной цепочки контроля"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssignmentEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Denied"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/DependencyUnavailable"
+      x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, DEPENDENCY_UNAVAILABLE]
+  /api/v1/learning/courses/{course_id}/enrollments:
+    post:
+      operationId: enroll_in_course
+      summary: "Записаться на курс (команда Student)"
+      description: "Записывает проверенную идентичность на курс. Сервер выводит student_identity_id из проверенной идентичности и tenant_id из эффективного тенанта; статус ACTIVE. Предусловия: проверенная идентичность, курс того же тенанта, курс PUBLISHED, авторизация разрешена, записи ещё нет. Повторная запись не создаёт второго бизнес-эффекта (DUPLICATE_ENROLLMENT). Тело команды пустое."
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmptyCommand"
+      responses:
+        "200":
+          description: "Запись создана со status=ACTIVE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollmentEnvelope"
+        "400":
+          $ref: "#/components/responses/IdempotencyKeyRequired"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Denied"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: "COURSE_NOT_PUBLISHED, DUPLICATE_ENROLLMENT или IDEMPOTENCY_CONFLICT"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "503":
+          $ref: "#/components/responses/DependencyUnavailable"
+      x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, COURSE_NOT_PUBLISHED, DUPLICATE_ENROLLMENT, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
+  /api/v1/learning/courses/{course_id}/enrollments/me:
+    get:
+      operationId: get_own_enrollment
+      summary: "Прочитать свою запись на курс (Student)"
+      description: "Идентичность студента выводится из проверенной идентичности; указать другую идентичность нельзя — такой операции в контракте нет."
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: "Своя запись возвращена"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollmentEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Denied"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/DependencyUnavailable"
+      x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, DEPENDENCY_UNAVAILABLE]
+  /api/v1/learning/assignments/{assignment_id}/submissions:
+    post:
+      operationId: create_submission
+      summary: "Отправить решение (команда Student)"
+      description: "Создаёт решение проверенной идентичности. Сервер выводит student_identity_id и tenant_id, статус SUBMITTED. Предусловия: задание того же тенанта, задание PUBLISHED, активная запись (ACTIVE) на соответствующий курс, авторизация разрешена. Оценка или результат проверки частью этого контракта не является."
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AssignmentId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSubmissionRequest"
+      responses:
+        "200":
+          description: "Решение создано со status=SUBMITTED"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmissionEnvelope"
+        "400":
+          $ref: "#/components/responses/IdempotencyKeyRequired"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Denied"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: "ASSIGNMENT_NOT_PUBLISHED, ENROLLMENT_REQUIRED или IDEMPOTENCY_CONFLICT"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "503":
+          $ref: "#/components/responses/DependencyUnavailable"
+      x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, ASSIGNMENT_NOT_PUBLISHED, ENROLLMENT_REQUIRED, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
+  /api/v1/learning/submissions/{submission_id}:
+    get:
+      operationId: get_submission
+      summary: "Прочитать решение"
+      description: "Student читает своё решение; Teacher — решения, разрешённые ему авторизацией в его тенанте. Идентичность студента выводится из проверенной идентичности. Межтенантный доступ запрещён."
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SubmissionId"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: "Решение возвращено после полной цепочки контроля"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmissionEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Denied"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/DependencyUnavailable"
+      x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, DEPENDENCY_UNAVAILABLE]
+  /health:
+    get:
+      operationId: get_health
+      summary: "Живость компонента"
+      security: []
+      responses:
+        "200":
+          description: "компонент отвечает"
+  /ready:
+    get:
+      operationId: get_ready
+      summary: "Готовность компонента"
+      security: []
+      responses:
+        "200":
+          description: "компонент готов принимать операции"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: "Credential субъекта. Проверяется IS-001 (Identity / Tenant Context) и никем другим: Learning не реализует пароли, сессии, собственного провайдера идентичности и собственного механизма тенант-контекста."
+  parameters:
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+      description: "Непрозрачный ключ команды (IS-005). Ключ связывается с идентичностью, эффективным тенантом, операцией, целью и отпечатком запроса. Точный повтор возвращает тот же логический результат и не создаёт второго эффекта; повторное использование ключа с другой командой отклоняется (IDEMPOTENCY_CONFLICT)."
+    RequestId:
+      in: header
+      name: X-Request-Id
+      required: false
+      schema:
+        type: string
+      description: "Диагностический идентификатор запроса; возвращается в конверте отказа."
+    CorrelationId:
+      in: header
+      name: X-Correlation-Id
+      required: false
+      schema:
+        type: string
+      description: "Диагностический идентификатор корреляции; возвращается в конверте отказа."
+    CourseId:
+      in: path
+      name: course_id
+      required: true
+      schema:
+        type: string
+      description: "Непрозрачный идентификатор курса, выданный сервером."
+    ModuleId:
+      in: path
+      name: module_id
+      required: true
+      schema:
+        type: string
+      description: "Непрозрачный идентификатор модуля, выданный сервером."
+    LessonId:
+      in: path
+      name: lesson_id
+      required: true
+      schema:
+        type: string
+      description: "Непрозрачный идентификатор урока, выданный сервером."
+    AssignmentId:
+      in: path
+      name: assignment_id
+      required: true
+      schema:
+        type: string
+      description: "Непрозрачный идентификатор задания, выданный сервером."
+    SubmissionId:
+      in: path
+      name: submission_id
+      required: true
+      schema:
+        type: string
+      description: "Непрозрачный идентификатор решения, выданный сервером."
+  responses:
+    Unauthenticated:
+      description: "Аутентификация невозможна (AUTHENTICATION_REQUIRED) — код 401"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Denied:
+      description: "Аутентифицировано, но отказано — AUTHORIZATION_DENIED или TENANT_MISMATCH, код 403"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    NotFound:
+      description: "Ресурс недоступен вызывающему — RESOURCE_NOT_FOUND, код 404"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    IdempotencyKeyRequired:
+      description: "Отсутствует обязательный Idempotency-Key — IDEMPOTENCY_KEY_REQUIRED, код 400"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    IdempotencyConflict:
+      description: "Конфликт идемпотентности или бизнес-состояния — код 409"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    InvalidRequest:
+      description: "Запрос не удовлетворяет опубликованной схеме — VALIDATION_ERROR, код 422"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    DependencyUnavailable:
+      description: "Обязательная зависимость не ответила; операция отклонена (fail closed) — DEPENDENCY_UNAVAILABLE, код 503"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    CreateCourseRequest:
+      type: object
+      additionalProperties: false
+      required: [title, description]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 5000
+    CreateModuleRequest:
+      type: object
+      additionalProperties: false
+      required: [title, position]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        position:
+          type: integer
+          minimum: 1
+    CreateLessonRequest:
+      type: object
+      additionalProperties: false
+      required: [title, content, position]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        content:
+          type: string
+          maxLength: 20000
+        position:
+          type: integer
+          minimum: 1
+    CreateAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [title, instructions]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        instructions:
+          type: string
+          maxLength: 20000
+    CreateSubmissionRequest:
+      type: object
+      additionalProperties: false
+      required: [attempt, content]
+      properties:
+        attempt:
+          type: integer
+          minimum: 1
+        content:
+          type: string
+          minLength: 1
+          maxLength: 50000
+    EmptyCommand:
+      type: object
+      additionalProperties: false
+      description: "Тело команды без полей, управляемых клиентом: публикация статуса, идентификаторов или владения отклоняется схемой."
+      properties: {}
+    CourseStatus:
+      type: string
+      enum: [DRAFT, PUBLISHED, ARCHIVED]
+    ContentStatus:
+      type: string
+      enum: [DRAFT, PUBLISHED]
+    EnrollmentStatus:
+      type: string
+      enum: [ACTIVE]
+    SubmissionStatus:
+      type: string
+      enum: [SUBMITTED]
+    Course:
+      type: object
+      additionalProperties: false
+      required: [course_id, tenant_id, title, description, status, created_by, created_at, updated_at]
+      properties:
+        course_id:
+          type: string
+        tenant_id:
+          type: string
+          description: "Тенант курса — факт хранилища владельца, выведен из проверенной идентичности."
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          $ref: "#/components/schemas/CourseStatus"
+        created_by:
+          type: string
+          description: "Проверенная идентичность автора; задаётся сервером."
+        created_at:
+          type: string
+          description: "Метки времени RFC3339, задаёт сервер."
+        updated_at:
+          type: string
+    Module:
+      type: object
+      additionalProperties: false
+      required: [module_id, course_id, tenant_id, title, position, status, created_at, updated_at]
+      properties:
+        module_id:
+          type: string
+        course_id:
+          type: string
+        tenant_id:
+          type: string
+        title:
+          type: string
+        position:
+          type: integer
+        status:
+          $ref: "#/components/schemas/ContentStatus"
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    Lesson:
+      type: object
+      additionalProperties: false
+      required: [lesson_id, module_id, tenant_id, title, content, position, status, created_at, updated_at]
+      properties:
+        lesson_id:
+          type: string
+        module_id:
+          type: string
+        tenant_id:
+          type: string
+        title:
+          type: string
+        content:
+          type: string
+        position:
+          type: integer
+        status:
+          $ref: "#/components/schemas/ContentStatus"
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    Assignment:
+      type: object
+      additionalProperties: false
+      required: [assignment_id, lesson_id, tenant_id, title, instructions, status]
+      properties:
+        assignment_id:
+          type: string
+        lesson_id:
+          type: string
+        tenant_id:
+          type: string
+        title:
+          type: string
+        instructions:
+          type: string
+        status:
+          $ref: "#/components/schemas/ContentStatus"
+    Enrollment:
+      type: object
+      additionalProperties: false
+      required: [enrollment_id, tenant_id, course_id, student_identity_id, status, created_at]
+      properties:
+        enrollment_id:
+          type: string
+        tenant_id:
+          type: string
+        course_id:
+          type: string
+        student_identity_id:
+          type: string
+          description: "Проверенная идентичность студента; задаётся сервером."
+        status:
+          $ref: "#/components/schemas/EnrollmentStatus"
+        created_at:
+          type: string
+    Submission:
+      type: object
+      additionalProperties: false
+      required: [submission_id, tenant_id, assignment_id, student_identity_id, attempt, content, status, created_at, updated_at]
+      properties:
+        submission_id:
+          type: string
+        tenant_id:
+          type: string
+        assignment_id:
+          type: string
+        student_identity_id:
+          type: string
+          description: "Проверенная идентичность студента; задаётся сервером."
+        attempt:
+          type: integer
+          minimum: 1
+        content:
+          type: string
+        status:
+          $ref: "#/components/schemas/SubmissionStatus"
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    CourseEnvelope:
+      type: object
+      additionalProperties: false
+      required: [course]
+      properties:
+        course:
+          $ref: "#/components/schemas/Course"
+    ModuleEnvelope:
+      type: object
+      additionalProperties: false
+      required: [module]
+      properties:
+        module:
+          $ref: "#/components/schemas/Module"
+    LessonEnvelope:
+      type: object
+      additionalProperties: false
+      required: [lesson]
+      properties:
+        lesson:
+          $ref: "#/components/schemas/Lesson"
+    AssignmentEnvelope:
+      type: object
+      additionalProperties: false
+      required: [assignment]
+      properties:
+        assignment:
+          $ref: "#/components/schemas/Assignment"
+    EnrollmentEnvelope:
+      type: object
+      additionalProperties: false
+      required: [enrollment]
+      properties:
+        enrollment:
+          $ref: "#/components/schemas/Enrollment"
+    SubmissionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [submission]
+      properties:
+        submission:
+          $ref: "#/components/schemas/Submission"
+    ErrorCodeEnum:
+      type: string
+      enum: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, RESOURCE_OWNER_MISMATCH, INVALID_STATE_TRANSITION, COURSE_NOT_PUBLISHED, ASSIGNMENT_NOT_PUBLISHED, ENROLLMENT_REQUIRED, DUPLICATE_ENROLLMENT, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
+    ErrorBody:
+      type: object
+      additionalProperties: false
+      required: [code, message, details]
+      properties:
+        code:
+          $ref: "#/components/schemas/ErrorCodeEnum"
+        message:
+          type: string
+          description: "Безопасное статическое сообщение: без трассировок, секретов и внутреннего устройства."
+        details:
+          type: object
+          description: "Ограниченный контекст отказа; полезная нагрузка запроса не раскрывается."
+          additionalProperties: true
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorBody"
+        request_id:
+          type: [string, "null"]
+        correlation_id:
+          type: [string, "null"]

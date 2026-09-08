@@ -28,6 +28,7 @@ from authorization_service.deployment import (
     build_deployment as build_authorization,
 )
 from authorization_service.reader import AuthorizationClient
+from authorization_service.store import CONSUMER_PERMISSIONS
 from identity_service.api import create_app as create_identity_app
 from identity_service.config import IdentityConfig
 from identity_service.engine import IdentityEngine
@@ -35,6 +36,18 @@ from identity_service.errors import AccessDenied as IdentityAccessDenied
 from identity_service.errors import ContractViolation as IdentityContractViolation
 from identity_service.reader import IdentityContextClient, build_client as build_identity_client
 from identity_service.store import IdentityStore
+from learning_service.adapters import (
+    authorization_port as learning_authorization_port,
+    identity_port as learning_identity_port,
+)
+from learning_service.contracts import (
+    STUDENT_OPERATIONS as LEARNING_STUDENT_OPERATIONS,
+    TEACHER_OPERATIONS as LEARNING_TEACHER_OPERATIONS,
+)
+from learning_service.deployment import LearningDeployment
+from learning_service.deployment import build_deployment as build_learning
+from learning_service.reader import LearningClient
+from learning_service.store import LearningStore
 from records_service.adapters import authorization_port as records_authorization_port
 from records_service.deployment import RecordsDeployment, build_deployment as build_records
 from records_service.errors import AccessRefused as RecordsAccessRefused
@@ -58,6 +71,30 @@ CONSUMER_CREDENTIAL = "svc-token-identity"
 AUTHORIZATION_TA_CREDENTIAL = "svc-token-authorization"
 #: Demo service identity of a data owner allowed to ask IS-003 for decisions.
 DATA_OWNER_CREDENTIAL = "authz-svc-token-records"
+#: Service identity Learning uses when it reads IS-001 contexts and asks IS-003.
+LEARNING_CREDENTIAL = "authz-svc-token-learning"
+
+
+def provision_learning_authorization(authorization: AuthorizationDeployment) -> None:
+    """Provision, at the composition root, what IS-003 needs to serve Learning.
+
+    IS-003 publishes no grant-management API: provisioning the consumer's
+    service identity and the demo Teacher/Student grants is the composition
+    root's job, exactly as for the reservation vocabulary of IS-006. Learning
+    itself owns no grants and no roles.
+    """
+    from authorization_service.models import ServiceAccess
+
+    store = authorization.store
+    platform_id = authorization.current_platform_id
+    store.services["svc_learning"] = ServiceAccess("svc_learning", platform_id, CONSUMER_PERMISSIONS)
+    store.service_tokens[LEARNING_CREDENTIAL] = "svc_learning"
+    # Teacher of ten_a: authors and publishes content, reads submissions.
+    store.grant("ten_a", "idn_human_a", *LEARNING_TEACHER_OPERATIONS)
+    # Student of ten_a: enrolls and submits.
+    store.grant("ten_a", "idn_human_c", *LEARNING_STUDENT_OPERATIONS)
+    # Teacher and student of ten_b: proves cross-tenant refusal, not absence.
+    store.grant("ten_b", "idn_human_b", *LEARNING_TEACHER_OPERATIONS, *LEARNING_STUDENT_OPERATIONS)
 
 
 def tenant_authority(seed_demo: bool = True) -> TenantAuthorityDeployment:
@@ -97,6 +134,8 @@ class Monolith:
     authority_app: Any
     authorization_app: Any
     records_app: Any
+    learning: LearningDeployment | None = None
+    learning_app: Any = None
 
     def identity_client(self) -> TestClient:
         return TestClient(self.identity_app)
@@ -109,6 +148,16 @@ class Monolith:
 
     def records_http(self) -> TestClient:
         return TestClient(self.records_app)
+
+    def learning_http(self) -> TestClient:
+        """The published HTTP contract of Learning over this composition."""
+        assert self.learning_app is not None, "Learning is not part of this composition"
+        return TestClient(self.learning_app)
+
+    def learning_client(self) -> LearningClient:
+        """The published consumer surface of Learning (Level 0 client)."""
+        assert self.learning is not None, "Learning is not part of this composition"
+        return self.learning.publish()
 
     def records_client(self) -> RecordsClient:
         """The published consumer surface of the data owner (Level 0 client)."""
@@ -180,6 +229,17 @@ def monolith() -> Monolith:
         seed_demo=True,
         with_http=True,
     )
+    records = build_records(
+        {
+            "platform_id": authority.current_platform_id,
+            "environment": authority.config.environment,
+        },
+        authorization=records_authorization_port(
+            authorization.publish(credential=DATA_OWNER_CREDENTIAL)
+        ),
+        seed_demo=True,
+        with_http=True,
+    )
     return Monolith(
         identity=identity,
         authority=authority,
@@ -193,6 +253,35 @@ def monolith() -> Monolith:
         authorization_app=authorization.contract_app(),
         records_app=records.contract_app(),
     )
+
+
+def monolith_with_learning() -> Monolith:
+    """Compose the Platform Instance plus Learning (the Business System).
+
+    Learning consumes two published contracts: the verified identity +
+    effective tenant of IS-001 and the decisions of IS-003, each adapted at
+    this boundary; IS-005 is the guard inside the component. Its grants and
+    its service identity at IS-003 are provisioned here, by the composition
+    root — never inside the component. Building it on demand keeps every
+    other composition exactly as its own tests rely on it.
+    """
+    instance = monolith()
+    provision_learning_authorization(instance.authorization)
+    learning = build_learning(
+        {
+            "platform_id": instance.authority.current_platform_id,
+            "environment": instance.authority.config.environment,
+        },
+        identity=learning_identity_port(instance.identity_context_client),
+        authorization=learning_authorization_port(
+            instance.authorization.publish(credential=LEARNING_CREDENTIAL)
+        ),
+        seed_demo=True,
+        with_http=True,
+    )
+    instance.learning = learning
+    instance.learning_app = learning.contract_app()
+    return instance
 
 
 class Refused(Exception):
@@ -840,3 +929,184 @@ def saga_harness(
         records_client=records.publish(),
         records_store=counting,
     )
+
+
+# ------------------------------------------------------------- Learning harness
+#
+# Learning (the Business System) is a data owner like IS-004, so its proof
+# needs the same two instruments: a store that counts the owned-data writes —
+# "no business effect" is a measured fact, not an assumption — and value-only
+# stubs of its two ports, so the enforcement logic is proven to depend on
+# nothing of the real providers.
+
+
+class CountingLearningStore(LearningStore):
+    """A Learning store that counts every owned-data write.
+
+    The counters mean "business effects that actually executed": a refused or
+    replayed command leaves them untouched, whatever else it did.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.courses_created = 0
+        self.publishes_applied = 0
+        self.modules_created = 0
+        self.lessons_created = 0
+        self.assignments_created = 0
+        self.enrollments_created = 0
+        self.submissions_created = 0
+
+    def reset_counters(self) -> None:
+        """Zero the counters after seeding: they measure test-driven effects only."""
+        self.courses_created = 0
+        self.publishes_applied = 0
+        self.modules_created = 0
+        self.lessons_created = 0
+        self.assignments_created = 0
+        self.enrollments_created = 0
+        self.submissions_created = 0
+
+    def save_course(self, course: Any) -> Any:
+        saved = super().save_course(course)
+        self.courses_created += 1
+        return saved
+
+    def apply_publish(self, course_id: str, timestamp: str) -> Any:
+        result = super().apply_publish(course_id, timestamp)
+        self.publishes_applied += 1
+        return result
+
+    def save_module(self, module: Any) -> Any:
+        saved = super().save_module(module)
+        self.modules_created += 1
+        return saved
+
+    def save_lesson(self, lesson: Any) -> Any:
+        saved = super().save_lesson(lesson)
+        self.lessons_created += 1
+        return saved
+
+    def save_assignment(self, assignment: Any) -> Any:
+        saved = super().save_assignment(assignment)
+        self.assignments_created += 1
+        return saved
+
+    def save_enrollment(self, enrollment: Any) -> Any:
+        saved = super().save_enrollment(enrollment)
+        self.enrollments_created += 1
+        return saved
+
+    def save_submission(self, submission: Any) -> Any:
+        saved = super().save_submission(submission)
+        self.submissions_created += 1
+        return saved
+
+
+@dataclass
+class StubLearningIdentityPort:
+    """The identity port of Learning with a fixed outcome: a value or a raise."""
+
+    outcome: Any
+
+    def resolve_context(
+        self,
+        credential: str | None,
+        *,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> Any:
+        if isinstance(self.outcome, BaseException):
+            raise self.outcome
+        return self.outcome
+
+
+@dataclass
+class StubLearningAuthorizationPort:
+    """The decision port of Learning with a fixed outcome: a value or a raise."""
+
+    outcome: Any
+    calls: list[dict[str, Any]] = field(default_factory=list)
+
+    def decide(
+        self,
+        subject_credential: str | None,
+        *,
+        operation: str,
+        resource_type: str,
+        resource_id: str,
+        resource_tenant_id: str | None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> Any:
+        self.calls.append(
+            {
+                "operation": operation,
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+                "resource_tenant_id": resource_tenant_id,
+            }
+        )
+        if isinstance(self.outcome, BaseException):
+            raise self.outcome
+        return self.outcome
+
+
+@dataclass
+class LearningHarness:
+    """One composed Platform Instance plus Learning over a counting store."""
+
+    instance: Monolith
+    store: CountingLearningStore
+    deployment: LearningDeployment
+
+    @property
+    def http(self) -> TestClient:
+        return TestClient(self.deployment.contract_app())
+
+    @property
+    def client(self) -> LearningClient:
+        return self.deployment.publish()
+
+    @property
+    def engine(self) -> Any:
+        return self.deployment.engine
+
+
+def learning_harness(
+    *,
+    store: CountingLearningStore | None = None,
+    seed: bool = False,
+) -> LearningHarness:
+    """Compose the full instance again and build Learning over a counting store.
+
+    The composition root provisions the demo Teacher/Student grants of IS-003
+    (the same ones ``monolith_with_learning()`` uses) and wires the published
+    IS-001/IS-003 clients to Learning's own adapters — exactly as it does
+    there, but over a store the test can count on.
+    """
+    instance = monolith_with_learning()
+    counting = store if store is not None else CountingLearningStore()
+    if seed:
+        counting.seed_demo()
+    deployment = build_learning(
+        {
+            "platform_id": instance.authority.current_platform_id,
+            "environment": instance.authority.config.environment,
+        },
+        identity=learning_identity_port(instance.identity_context_client),
+        authorization=learning_authorization_port(
+            instance.authorization.publish(credential=LEARNING_CREDENTIAL)
+        ),
+        store=counting,
+        seed_demo=False,
+        with_http=True,
+    )
+    return LearningHarness(instance=instance, store=counting, deployment=deployment)
+
+
+#: Demo credentials of the Learning slice (the subjects of IS-001/IS-003).
+LEARNING_TEACHER_A = "token-human-a"  # ten_a teacher
+LEARNING_STUDENT_A = "token-human-c"  # ten_a student
+LEARNING_TEACHER_B = "token-human-b"  # ten_b teacher and student
+LEARNING_SERVICE_A = "token-service"  # ten_a service: authenticated only
