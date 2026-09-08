@@ -1,9 +1,9 @@
 """Shared test fixtures.
 
 The Level 0 modular monolith composes IS-001 (Identity / Tenant Context),
-IS-002 (Tenant Authority) and IS-003 (Authorization Boundary). Each component
-owns its store; every cross-component read goes through a published contract
-client.
+IS-002 (Tenant Authority), IS-003 (Authorization Boundary) and IS-004
+(Resource Boundary — the data owner). Each component owns its store; every
+cross-component read goes through a published contract client.
 
 This module is also the composition root used by the tests: building a component
 app from another component's deployment happens in the harness, never inside a
@@ -29,6 +29,10 @@ from identity_service.config import IdentityConfig
 from identity_service.engine import IdentityEngine
 from identity_service.reader import IdentityContextClient, build_client as build_identity_client
 from identity_service.store import IdentityStore
+from records_service.adapters import authorization_port as records_authorization_port
+from records_service.deployment import RecordsDeployment, build_deployment as build_records
+from records_service.reader import RecordsClient
+from records_service.store import RecordsStore
 from tenant_authority.contracts import TenantState
 from tenant_authority.deployment import TenantAuthorityDeployment, build_deployment
 from tenant_authority.lifecycle import LIFECYCLE_CHAIN
@@ -73,12 +77,14 @@ class Monolith:
     identity: IdentityEngine
     authority: TenantAuthorityDeployment
     authorization: AuthorizationDeployment
+    records: RecordsDeployment
     tenant_authority_client: TenantAuthorityClient
     identity_context_client: IdentityContextClient
     authorization_client: AuthorizationClient
     identity_app: Any
     authority_app: Any
     authorization_app: Any
+    records_app: Any
 
     def identity_client(self) -> TestClient:
         return TestClient(self.identity_app)
@@ -88,6 +94,13 @@ class Monolith:
 
     def authorization_http(self) -> TestClient:
         return TestClient(self.authorization_app)
+
+    def records_http(self) -> TestClient:
+        return TestClient(self.records_app)
+
+    def records_client(self) -> RecordsClient:
+        """The published consumer surface of the data owner (Level 0 client)."""
+        return self.records.publish()
 
     def data_owner(self, records: dict[str, str] | None = None) -> "RecordsBoundary":
         """A demo data owner enforcing IS-003 decisions at its own boundary."""
@@ -140,16 +153,33 @@ def monolith() -> Monolith:
         seed_demo=True,
         with_http=True,
     )
+    # IS-004 is the data owner. It consumes the published decision contract of
+    # IS-003 through its own adapter: the composition root hands it a
+    # value-only client with the component's own service identity, and nothing
+    # else of IS-003 crosses the boundary.
+    records = build_records(
+        {
+            "platform_id": authority.current_platform_id,
+            "environment": authority.config.environment,
+        },
+        authorization=records_authorization_port(
+            authorization.publish(credential=DATA_OWNER_CREDENTIAL)
+        ),
+        seed_demo=True,
+        with_http=True,
+    )
     return Monolith(
         identity=identity,
         authority=authority,
         authorization=authorization,
+        records=records,
         tenant_authority_client=client,
         identity_context_client=identity_context_client,
         authorization_client=authorization.publish(credential=DATA_OWNER_CREDENTIAL),
         identity_app=identity_app,
         authority_app=authority.contract_app(),
         authorization_app=authorization.contract_app(),
+        records_app=records.contract_app(),
     )
 
 
@@ -251,6 +281,77 @@ class RecordsBoundary:
             # The data owner enforces: the authority only answered.
             raise Refused(decision)
         return f"{record_id}:{self.records[record_id]}"
+
+
+# ---------------------------------------------------------------- IS-004 harness
+class CountingRecordsStore(RecordsStore):
+    """A records store that counts the owned-data operations.
+
+    The counts are the behavioral proof of invariant 3 and 4: a denied access
+    must leave both counters at zero, whatever else it did.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.served_reads = 0
+        self.applied_transitions = 0
+
+    def serve_resource(self, resource_id: str) -> Any:
+        served = super().serve_resource(resource_id)
+        self.served_reads += 1
+        return served
+
+    def apply_transition(self, resource_id: str, transition: str) -> Any:
+        # Counted after the write: the counters mean "owned-data operations
+        # that actually executed", so a refusal inside the store counts as
+        # nothing executed.
+        updated = super().apply_transition(resource_id, transition)
+        self.applied_transitions += 1
+        return updated
+
+
+class StubAuthorizationPort:
+    """A decision port with a fixed outcome: a value to return or an exception.
+
+    The records engine must behave identically for any port answering its own
+    vocabulary — this stub is how the tests prove the enforcement logic depends
+    on nothing of the real provider.
+    """
+
+    def __init__(self, outcome: Any) -> None:
+        self.outcome = outcome
+        self.calls: list[dict[str, Any]] = []
+
+    def decide(self, subject_credential, *, operation, resource_type, resource_id,
+               resource_tenant_id, claimed_tenant_id=None, request_id=None,
+               correlation_id=None):
+        self.calls.append(
+            {
+                "operation": operation,
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+                "resource_tenant_id": resource_tenant_id,
+                "claimed_tenant_id": claimed_tenant_id,
+            }
+        )
+        if isinstance(self.outcome, BaseException):
+            raise self.outcome
+        return self.outcome
+
+
+def records_deployment(
+    port: Any,
+    *,
+    store: RecordsStore | None = None,
+    seed_demo: bool = True,
+) -> RecordsDeployment:
+    """Standalone Resource Boundary deployment over a given decision port."""
+    return build_records(
+        {"platform_id": PLATFORM_ID, "environment": "test"},
+        authorization=port,
+        store=store,
+        seed_demo=seed_demo,
+    )
 
 
 def composed() -> tuple[IdentityEngine, TenantAuthorityDeployment]:
