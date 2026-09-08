@@ -2,7 +2,7 @@
 
 **Класс:** B — Platform Service  
 **Уровень:** Level 0 — Modular Monolith  
-**Версия компонента:** 0.1.0  
+**Версия компонента:** 0.2.0  
 **Владелец данных:** `identity` (логическая схема `identity`)
 
 Минимальный platform service, доказывающий архитектурные инварианты
@@ -20,6 +20,35 @@ Identity, Tenant Context и data-owner authorization.
 Внешнее взаимодействие только через опубликованный API `/api/v1`.
 Другие компоненты не получают прямой доступ к внутреннему store.
 `tenant_id` от вызывающей стороны — только cross-check.
+
+## Источник состояния Tenant (с 0.2.0)
+
+Реестр Tenant и lifecycle принадлежат Tenant Authority (IS-002). Identity:
+
+- остаётся единственным источником `effective_tenant_id` — tenant выводится из
+  проверенной идентичности, а не из заявления вызывающей стороны;
+- читает состояние Tenant и принадлежность Platform Instance через опубликованный
+  контракт Tenant Authority (`tenant_authority.reader.TenantAuthorityClient`:
+  `lookup`, `lifecycle_decision`) и проверяет их на своей границе авторизации;
+- получает от композиционного корня только value-only клиент над контрактом:
+  engine, хранилище, журнал аудита, операции мутаций и ASGI-приложение Tenant
+  Authority identity не видит и не может вызвать — в состоянии клиента лежат три
+  значения (дескриптор канала, credential, привязка Platform Instance), а не
+  транспортный объект, так что и обход замыканий ни к чему не ведёт;
+- публикует из `identity_service.api` только собственный API: `create_app(engine)`
+  и маршруты identity (набор имён зафиксирован в `__all__` модуля). Сборка Level 0 (deployment Tenant Authority, клиент и оба
+  HTTP-приложения) выполняется композиционным корнем либо тест-фикстурой —
+  модуль API identity ничего не собирает и чужое приложение не отдаёт;
+- не хранит копии состояний Tenant и не определяет второй tenant-context
+  механизм; локальный набор значений `TenantStatus` удалён.
+
+Переход `active → suspended` в Tenant Authority блокирует обычные операции
+identity сразу, без дополнительных механизмов синхронизации: состояние не
+кэшируется, а перечитывается на границе авторизации.
+
+Churn Tenant-состояния над границей: чужой Platform Instance отвечает
+`tenant_not_found` (причина `foreign_tenant` остаётся в журнале Tenant Authority),
+и identity отображает это как `TENANT_UNKNOWN`.
 
 ## Запуск тестов
 

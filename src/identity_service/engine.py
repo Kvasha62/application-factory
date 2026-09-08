@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from identity_service import COMPONENT_ID, COMPONENT_VERSION
+from identity_service.config import IdentityConfig
 from identity_service.errors import AccessDenied
 from identity_service.models import (
     AuditEvent,
@@ -12,23 +14,47 @@ from identity_service.models import (
     Decision,
     DenyReason,
     IdentityKind,
-    ObservabilityContext,
     IdempotencyRecord,
+    ObservabilityContext,
     ProtectedRecord,
     TenantContext,
-    TenantStatus,
     VerifiedIdentity,
 )
+from identity_service.ports import TenantAuthorityPort
 from identity_service.store import IdentityStore
+from tenant_authority.contracts import TenantSnapshot
+from tenant_authority.errors import ContractViolation
+from tenant_authority.errors import DenyReason as TenantAuthorityDenial
+from tenant_authority.errors import TenantAuthorityError
 
+# Lifecycle state -> identity deny reason. The decision itself is made by
+# Tenant Authority (IS-002); identity only names the outcome at its own
+# authorization boundary, so the vocabulary stays a single source of truth.
+TENANT_LIFECYCLE_DENIALS: dict[str, DenyReason] = {
+    "provisioning_not_served": DenyReason.TENANT_NOT_ACTIVE,
+    "tenant_suspended": DenyReason.TENANT_SUSPENDED,
+    "tenant_deletion_requested": DenyReason.TENANT_DELETION_REQUESTED,
+    "tenant_deleted": DenyReason.TENANT_DELETED,
+    "unsupported_state": DenyReason.TENANT_NOT_ACTIVE,
+}
 
-PROTECTED_TENANT_STATUSES = {TenantStatus.SUSPENDED}
-DELETED_STATUSES = {TenantStatus.DELETED}
-ACTIVE_ONLY = {TenantStatus.ACTIVE}
+#: Tenant Authority answers a Tenant of another Platform Instance exactly like a
+#: missing one, so the contract-level reason for both is `tenant_not_found`; a
+#: platform cross-check failure (`platform_mismatch`) means this component is
+#: wired to the wrong Platform Instance and is reported distinctly.
+TENANT_AUTHORITY_DENIALS: dict[str, DenyReason] = {
+    TenantAuthorityDenial.TENANT_NOT_FOUND.value: DenyReason.TENANT_UNKNOWN,
+    TenantAuthorityDenial.FOREIGN_TENANT.value: DenyReason.PLATFORM_OWNERSHIP_MISMATCH,
+    TenantAuthorityDenial.PLATFORM_MISMATCH.value: DenyReason.PLATFORM_OWNERSHIP_MISMATCH,
+}
 
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _fingerprint(operation: str, record_id: str, body: str) -> str:
@@ -38,12 +64,27 @@ def _fingerprint(operation: str, record_id: str, body: str) -> str:
 
 @dataclass
 class IdentityEngine:
-    store: IdentityStore
+    """Identity verification, effective tenant derivation and authorization.
 
+    Tenant state is not owned here: it is read through the published Tenant
+    Authority port (IS-002), which is the authoritative source for lifecycle
+    state and Platform Instance ownership.
+    """
+
+    store: IdentityStore
+    tenant_authority: TenantAuthorityPort
+    config: IdentityConfig
+
+    @property
+    def current_platform_id(self) -> str:
+        """The Platform Instance this boundary belongs to (never a caller claim)."""
+        return self.config.current_platform_id
+
+    # ------------------------------------------------------------------ identity
     def verify_identity(self, token: str | None) -> VerifiedIdentity:
         if token is None or token.strip() == "":
             raise AccessDenied(DenyReason.MISSING_IDENTITY)
-        if token == "token-invalid" or not token.startswith("token-"):
+        if token == "token-invalid" or not token.startswith(self.config.token_prefix):
             raise AccessDenied(DenyReason.INVALID_IDENTITY)
         identity_id = self.store.tokens.get(token)
         if identity_id is None:
@@ -53,11 +94,25 @@ class IdentityEngine:
             raise AccessDenied(DenyReason.UNKNOWN_IDENTITY)
         return identity
 
+    def identity_kind(self, identity: VerifiedIdentity) -> IdentityKind:
+        return identity.kind
+
+    # -------------------------------------------------------- tenant context
     def resolve_tenant_context(
         self,
         identity: VerifiedIdentity,
         claimed_tenant_id: str | None,
+        *,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
     ) -> TenantContext:
+        """Derive the effective tenant from verified identity, then look it up.
+
+        The caller-supplied ``tenant_id`` is only a cross-check (LAW-16a): the
+        effective tenant can never be changed by rewriting it. State and
+        ownership come from Tenant Authority (T-004), and a Tenant of another
+        Platform Instance is never resolved here (T-003, T-007).
+        """
         associations = [
             a for a in self.store.associations.values() if a.identity_id == identity.identity_id
         ]
@@ -78,11 +133,39 @@ class IdentityEngine:
             else:
                 raise AccessDenied(DenyReason.MISSING_TENANT_CONTEXT)
 
-        tenant = self.store.tenants.get(tenant_id)
-        if tenant is None:
-            raise AccessDenied(DenyReason.MISSING_TENANT_CONTEXT)
-        return TenantContext(tenant_id=tenant.tenant_id, status=tenant.status)
+        snapshot = self._tenant_snapshot(tenant_id, request_id, correlation_id)
+        return TenantContext(
+            tenant_id=snapshot.tenant_id,
+            status=snapshot.state,
+            platform_id=snapshot.platform_id,
+        )
 
+    def _tenant_snapshot(
+        self,
+        tenant_id: str,
+        request_id: str | None,
+        correlation_id: str | None,
+    ) -> TenantSnapshot:
+        try:
+            return self.tenant_authority.lookup(
+                tenant_id,
+                expected_platform_id=self.current_platform_id,
+                request_id=request_id,
+                correlation_id=correlation_id,
+            )
+        except (TenantAuthorityError, ContractViolation) as exc:
+            # A transport fault is handled like an unknown Tenant: no answer from
+            # the authority is never read as "this Tenant may be served".
+            raise AccessDenied(self._authority_denial(exc)) from exc
+
+    @staticmethod
+    def _authority_denial(exc: BaseException) -> DenyReason:
+        reason = getattr(exc, "reason", None)
+        if reason is None:
+            return DenyReason.TENANT_UNKNOWN
+        return TENANT_AUTHORITY_DENIALS.get(reason.value, DenyReason.TENANT_UNKNOWN)
+
+    # ------------------------------------------------------------------ authz
     def authorize(
         self,
         identity: VerifiedIdentity,
@@ -91,13 +174,20 @@ class IdentityEngine:
         *,
         tenant_scoped: bool = True,
     ) -> AuthorizationContext:
+        """Authorization boundary of the data owner: lifecycle + permission check."""
         if tenant_scoped:
-            if tenant.status in DELETED_STATUSES:
-                raise AccessDenied(DenyReason.TENANT_DELETED)
-            if tenant.status in PROTECTED_TENANT_STATUSES:
-                raise AccessDenied(DenyReason.TENANT_SUSPENDED)
-            if tenant.status not in ACTIVE_ONLY:
-                raise AccessDenied(DenyReason.TENANT_NOT_ACTIVE)
+            # T-008: a Tenant in a lifecycle state that must not be served
+            # blocks ordinary tenant-scoped operations. The state machine and
+            # the operational policy belong to Tenant Authority, not to us.
+            try:
+                decision = self.tenant_authority.lifecycle_decision(
+                    tenant.tenant_id,
+                    expected_platform_id=self.current_platform_id,
+                )
+            except (TenantAuthorityError, ContractViolation) as exc:
+                raise AccessDenied(self._authority_denial(exc)) from exc
+            if not decision.permitted:
+                raise AccessDenied(TENANT_LIFECYCLE_DENIALS[decision.reason])
 
         assoc = self.store.associations.get((identity.identity_id, tenant.tenant_id))
         if assoc is None:
@@ -110,6 +200,7 @@ class IdentityEngine:
             permissions=assoc.permissions,
         )
 
+    # ------------------------------------------------------- observability
     def observability(
         self,
         *,
@@ -126,8 +217,11 @@ class IdentityEngine:
             trace_id=rid,
             component_id=COMPONENT_ID,
             component_version=COMPONENT_VERSION,
-            actor_id=None if identity is None else identity.identity_id,
+            platform_id=self.current_platform_id,
+            environment=self.config.environment,
             tenant_id=None if tenant is None else tenant.tenant_id,
+            actor_id=None if identity is None else identity.identity_id,
+            timestamp=_utc_now(),
         )
 
     def audit(
@@ -149,41 +243,33 @@ class IdentityEngine:
             actor_id=None if identity is None else identity.identity_id,
             tenant_id=None if tenant is None else tenant.tenant_id,
             request_id=obs.request_id,
+            correlation_id=obs.correlation_id,
             details=details or {},
         )
         self.store.audit.append(event)
         return event
 
-    def read_record(
-        self,
-        token: str | None,
-        record_id: str,
-        claimed_tenant_id: str | None,
-        *,
-        request_id: str | None = None,
-        idempotency_key: str | None = None,
-    ) -> tuple[ProtectedRecord, ObservabilityContext, AuditEvent]:
-        return self._access_record(
-            token,
-            record_id,
-            claimed_tenant_id,
-            permission="records.read",
-            action="records.read",
-            request_id=request_id,
-        )
-
+    # ------------------------------------------------------------ operations
     def authenticate(
         self,
         token: str | None,
         *,
         action: str = "identity.authenticate",
         request_id: str | None = None,
+        correlation_id: str | None = None,
     ) -> tuple[VerifiedIdentity, ObservabilityContext, AuditEvent]:
         identity: VerifiedIdentity | None = None
-        obs = self.observability(identity=None, tenant=None, request_id=request_id)
+        obs = self.observability(
+            identity=None, tenant=None, request_id=request_id, correlation_id=correlation_id
+        )
         try:
             identity = self.verify_identity(token)
-            obs = self.observability(identity=identity, tenant=None, request_id=obs.request_id)
+            obs = self.observability(
+                identity=identity,
+                tenant=None,
+                request_id=obs.request_id,
+                correlation_id=obs.correlation_id,
+            )
         except AccessDenied as exc:
             self.audit(
                 action=action,
@@ -204,6 +290,26 @@ class IdentityEngine:
         )
         return identity, obs, event
 
+    def read_record(
+        self,
+        token: str | None,
+        record_id: str,
+        claimed_tenant_id: str | None,
+        *,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> tuple[ProtectedRecord, ObservabilityContext, AuditEvent]:
+        return self._access_record(
+            token,
+            record_id,
+            claimed_tenant_id,
+            permission="records.read",
+            action="records.read",
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+
     def write_record(
         self,
         token: str | None,
@@ -212,10 +318,16 @@ class IdentityEngine:
         claimed_tenant_id: str | None,
         *,
         request_id: str | None = None,
+        correlation_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> tuple[ProtectedRecord, ObservabilityContext, AuditEvent]:
         identity, tenant, authz, obs = self._gate(
-            token, claimed_tenant_id, "records.write", "records.write", request_id
+            token,
+            claimed_tenant_id,
+            "records.write",
+            "records.write",
+            request_id,
+            correlation_id,
         )
         fingerprint = _fingerprint("records.write", record_id, body)
         if idempotency_key:
@@ -283,9 +395,15 @@ class IdentityEngine:
         permission: str,
         action: str,
         request_id: str | None,
+        correlation_id: str | None = None,
     ) -> tuple[ProtectedRecord, ObservabilityContext, AuditEvent]:
         identity, tenant, authz, obs = self._gate(
-            token, claimed_tenant_id, permission, action, request_id
+            token,
+            claimed_tenant_id,
+            permission,
+            action,
+            request_id,
+            correlation_id,
         )
         record = self.store.records.get(record_id)
         if record is None:
@@ -327,15 +445,33 @@ class IdentityEngine:
         permission: str,
         action: str,
         request_id: str | None,
+        correlation_id: str | None = None,
     ) -> tuple[VerifiedIdentity, TenantContext, AuthorizationContext, ObservabilityContext]:
         identity: VerifiedIdentity | None = None
         tenant: TenantContext | None = None
-        obs = self.observability(identity=None, tenant=None, request_id=request_id)
+        obs = self.observability(
+            identity=None, tenant=None, request_id=request_id, correlation_id=correlation_id
+        )
         try:
             identity = self.verify_identity(token)
-            obs = self.observability(identity=identity, tenant=None, request_id=obs.request_id)
-            tenant = self.resolve_tenant_context(identity, claimed_tenant_id)
-            obs = self.observability(identity=identity, tenant=tenant, request_id=obs.request_id)
+            obs = self.observability(
+                identity=identity,
+                tenant=None,
+                request_id=obs.request_id,
+                correlation_id=obs.correlation_id,
+            )
+            tenant = self.resolve_tenant_context(
+                identity,
+                claimed_tenant_id,
+                request_id=obs.request_id,
+                correlation_id=obs.correlation_id,
+            )
+            obs = self.observability(
+                identity=identity,
+                tenant=tenant,
+                request_id=obs.request_id,
+                correlation_id=obs.correlation_id,
+            )
             authz = self.authorize(identity, tenant, permission)
             return identity, tenant, authz, obs
         except AccessDenied as exc:
@@ -348,6 +484,3 @@ class IdentityEngine:
                 obs=obs,
             )
             raise
-
-    def identity_kind(self, identity: VerifiedIdentity) -> IdentityKind:
-        return identity.kind

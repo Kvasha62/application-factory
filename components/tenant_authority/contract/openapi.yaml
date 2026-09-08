@@ -1,0 +1,353 @@
+openapi: 3.1.0
+info:
+  title: IS-002 Tenant Authority / Tenant Lifecycle
+  version: 0.1.0
+  description: >-
+    Авторитетный реестр Tenant и lifecycle одной Platform Instance.
+    Уровень 0 (modular monolith): чтение состояния Tenant другими компонентами
+    выполняется через те же операции (lookup / lifecycle decision), а не через
+    прямой доступ к хранилищу.
+paths:
+  /health:
+    get:
+      responses:
+        "200":
+          description: liveness
+  /ready:
+    get:
+      responses:
+        "200":
+          description: readiness
+  /api/v1/lifecycle:
+    get:
+      responses:
+        "200":
+          description: published lifecycle state machine and permitted transitions
+  /api/v1/tenants:
+    get:
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: state
+          required: false
+          schema:
+            $ref: "#/components/schemas/TenantState"
+        - in: header
+          name: X-Platform-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never trusted
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tenants of the current Platform Instance
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Tenant"
+        "401":
+          description: service identity missing or unverifiable
+        "403":
+          description: not authorized, or claimed platform mismatch
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                tenant_id:
+                  type: string
+                  description: optional explicit identifier; generated when absent
+                platform_id:
+                  type: string
+                  description: caller-supplied cross-check only; never trusted
+      responses:
+        "201":
+          description: Tenant provisioned (state `provisioning`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "401":
+          description: service identity missing or unverifiable
+        "403":
+          description: not authorized, or claimed platform mismatch
+        "409":
+          description: tenant already exists, or idempotency key conflict
+  /api/v1/tenants/{tenant_id}:
+    get:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - in: header
+          name: X-Platform-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never trusted
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: authoritative Tenant record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "401":
+          description: service identity missing or unverifiable
+        "403":
+          description: not authorized
+        "404":
+          description: no such Tenant in this Platform Instance (also used for foreign Tenants)
+  /api/v1/tenants/{tenant_id}/lifecycle:
+    get:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - in: header
+          name: X-Platform-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+          description: preserved in the observability context and in the audit journal
+      responses:
+        "200":
+          description: current state and whether an ordinary tenant-scoped operation is permitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleDecision"
+        "401":
+          description: service identity missing or unverifiable
+        "403":
+          description: not authorized
+        "404":
+          description: no such Tenant in this Platform Instance
+  /api/v1/tenants/{tenant_id}/transitions:
+    get:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - in: header
+          name: X-Platform-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: accepted lifecycle transitions of this Tenant
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Transition"
+        "401":
+          description: service identity missing or unverifiable
+        "403":
+          description: not authorized
+        "404":
+          description: no such Tenant in this Platform Instance
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Platform-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [to_state]
+              properties:
+                to_state:
+                  $ref: "#/components/schemas/TenantState"
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: transition accepted and audited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transition"
+        "401":
+          description: service identity missing or unverifiable
+        "403":
+          description: not authorized, or claimed platform mismatch
+        "404":
+          description: no such Tenant in this Platform Instance
+        "409":
+          description: transition not allowed by the state machine, or idempotency key conflict
+components:
+  parameters:
+    TenantId:
+      in: path
+      name: tenant_id
+      required: true
+      schema:
+        type: string
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    TenantState:
+      type: string
+      enum:
+        - provisioning
+        - active
+        - suspended
+        - deletion_requested
+        - deleted
+    Tenant:
+      type: object
+      additionalProperties: false
+      required: [tenant_id, platform_id, state, created_at, updated_at, state_source]
+      properties:
+        tenant_id:
+          type: string
+          description: immutable, opaque, never reused
+        platform_id:
+          type: string
+          description: the single Platform Instance owning this Tenant
+        state:
+          $ref: "#/components/schemas/TenantState"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        state_source:
+          type: string
+          const: tenant_authority
+    Transition:
+      type: object
+      additionalProperties: false
+      required:
+        - transition_id
+        - tenant_id
+        - previous_state
+        - new_state
+        - actor_id
+        - request_id
+        - correlation_id
+        - timestamp
+      properties:
+        transition_id:
+          type: string
+        tenant_id:
+          type: string
+        previous_state:
+          $ref: "#/components/schemas/TenantState"
+        new_state:
+          $ref: "#/components/schemas/TenantState"
+        actor_id:
+          type: string
+          description: service identity that performed the transition
+        request_id:
+          type: string
+        correlation_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        reason:
+          type: string
+          nullable: true
+    LifecycleDecision:
+      type: object
+      additionalProperties: false
+      required: [tenant_id, platform_id, state, permitted, reason]
+      properties:
+        tenant_id:
+          type: string
+        platform_id:
+          type: string
+        state:
+          $ref: "#/components/schemas/TenantState"
+        permitted:
+          type: boolean
+        reason:
+          type: string
+          enum:
+            - permitted
+            - provisioning_not_served
+            - tenant_suspended
+            - tenant_deletion_requested
+            - tenant_deleted
+            - unsupported_state

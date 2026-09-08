@@ -1,0 +1,186 @@
+{
+  "component_id": "tenant_authority",
+  "component_version": "0.1.0",
+  "class": "platform_service",
+  "maturity_level": "level_0_modular_monolith",
+  "task": "IS-002 (GitHub Issue #10)",
+  "data_scope_authority": {
+    "role": "Tenant Authority",
+    "invariants": [
+      "T-001 one tenant_id identifies exactly one Tenant",
+      "T-002 tenant_id is immutable",
+      "T-003 a Tenant belongs to exactly one Platform Instance",
+      "T-004 this component is the authoritative source of Tenant state",
+      "T-005 transitions are limited to the published state machine",
+      "T-006 deleted cannot be resurrected",
+      "T-008 disallowed lifecycle states block ordinary tenant-scoped operations",
+      "T-009 no component gets direct access to this store: a consumer is published the contract reads listed under api.consumer_surface and receives values only",
+      "T-010 lifecycle transitions are audited",
+      "T-011 operations carry the standard observability context"
+    ]
+  },
+  "api": {
+    "openapi": "components/tenant_authority/contract/openapi.yaml",
+    "base_path": "/api/v1",
+    "supported_majors": ["v1"],
+    "operations": [
+      {"method": "GET", "path": "/api/v1/lifecycle", "purpose": "published lifecycle state machine"},
+      {"method": "POST", "path": "/api/v1/tenants", "purpose": "provision a Tenant in this Platform Instance", "idempotency": "Idempotency-Key"},
+      {"method": "GET", "path": "/api/v1/tenants", "purpose": "authorized platform-scoped listing of Tenants"},
+      {"method": "GET", "path": "/api/v1/tenants/{tenant_id}", "purpose": "authoritative Tenant record"},
+      {"method": "GET", "path": "/api/v1/tenants/{tenant_id}/lifecycle", "purpose": "current state and operation permitted-ness"},
+      {"method": "GET", "path": "/api/v1/tenants/{tenant_id}/transitions", "purpose": "lifecycle transition history"},
+      {"method": "POST", "path": "/api/v1/tenants/{tenant_id}/transitions", "purpose": "request a lifecycle transition", "idempotency": "Idempotency-Key"}
+    ],
+    "consumer_surface": {
+      "module": "tenant_authority.reader",
+      "published_as": "TenantAuthorityClient",
+      "published_by": "tenant_authority.deployment.TenantAuthorityDeployment.publish",
+      "transport": "tenant_authority.transport.open_channel + tenant_authority.transport.call_contract — the published HTTP contract executed in process over an opaque channel handle (ARCHITECTURE.md §1.1 interaction mode API, Level 0)",
+      "transport_handles": {
+        "open": "tenant_authority.transport.open_channel",
+        "call": "tenant_authority.transport.call_contract",
+        "close": "tenant_authority.transport.close_channel"
+      },
+      "consumer_state": [
+        "opaque contract channel handle (str)",
+        "service credential (str)",
+        "Platform Instance binding (str | None)"
+      ],
+      "operations": ["lookup", "lifecycle_decision"],
+      "returns": ["tenant_authority.contracts.TenantSnapshot", "tenant_authority.contracts.LifecycleDecision"],
+      "errors": ["tenant_authority.errors.TenantAuthorityError and its published subclasses, reconstructed from status code and machine-readable reason",
+        "tenant_authority.errors.ContractViolation — raised when the component answers outside its contract; a consumer must fail closed"],
+      "guarantees": [
+        "values only: no store handle, audit journal, idempotency table, engine reference or mutation operation is reachable through the published surface",
+        "the published client holds no callable: its state is a channel handle, a credential and a Platform Instance binding, so walking __closure__ and cell_contents of the client and of its class reaches neither the component's ASGI application nor its deployment, engine or store",
+        "the ASGI application is never handed out: it stays behind the provider-side channel table, and a channel is revoked when the consumer drops the client",
+        "importing the published module binds no reference to tenant_authority.transport — its namespace holds no module object, no channel table and no transport type, so the consumer surface is not a door to the internal executor",
+        "an unknown or revoked channel handle raises ContractViolation, so there is no permissive fallback and a handle cannot be guessed",
+        "every read is executed by the same routing, service-identity authentication, permission check, Platform Instance ownership validation and audit code that serves an HTTP request",
+        "the consuming service identity comes from the credential bound to the client and cannot be chosen by the caller",
+        "an answer outside the published contract raises tenant_authority.errors.ContractViolation, so a consumer fails closed instead of assuming that the Tenant is servable"
+      ],
+      "composition_root_only": [
+        "tenant_authority.deployment (TenantAuthorityDeployment: engine, store, configuration)",
+        "the contract application itself (the ASGI application) — a consumer component must not own or re-export it",
+        "the contract channel table tenant_authority.transport._CHANNELS — a handle-to-application mapping owned by the component; a consumer receives a handle and never a transport object"
+      ],
+      "internal_modules": [
+        "tenant_authority.engine",
+        "tenant_authority.store",
+        "tenant_authority.models",
+        "tenant_authority.lifecycle",
+        "tenant_authority.config",
+        "tenant_authority.api",
+        "tenant_authority.deployment",
+        "tenant_authority.transport"
+      ],
+      "note": "The deployment object is composition-internal: it assembles engine, store and contract application for the composition root and for this component's own tests and is never handed to a consumer. There is no consumer-facing runtime API and no second Tenant Context mechanism. Publishing is a two-step act owned by the provider: the contract application is registered with tenant_authority.transport.open_channel, and the consumer receives the resulting handle wrapped in the client — never the application, never the transport."
+    },
+    "denial_semantics": {
+      "foreign_tenant_response": "answered as tenant_not_found at the transport level; the precise reason remains in the audit journal",
+      "reasons": [
+        "missing_service_identity",
+        "invalid_service_identity",
+        "unknown_service",
+        "insufficient_authorization",
+        "platform_mismatch",
+        "tenant_exists",
+        "tenant_not_found",
+        "foreign_tenant",
+        "invalid_transition",
+        "idempotency_conflict"
+      ]
+    }
+  },
+  "events": {
+    "envelope": "CloudEvents",
+    "status": "declared_only",
+    "published": [],
+    "consumed": [],
+    "note": "IS-002 does not publish inter-component events and does not simulate a broker. Tenant deletion as a contract-visible lifecycle event is deferred with the event infrastructure; `deleted` is a lifecycle state of the Tenant Registry here, not a data deletion engine."
+  },
+  "data_export_cdc": {
+    "status": "declared_only",
+    "version": null,
+    "compatibility_policy": null,
+    "streams": [],
+    "note": "No CDC or bulk export stream is implemented in IS-002."
+  },
+  "ui": {
+    "kind": "none",
+    "embedding": "not_applicable",
+    "note": "Class B Platform Service; tenant UI is an explicit non-goal of IS-002."
+  },
+  "configuration_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["platform_id"],
+    "properties": {
+      "platform_id": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Identifier of the Platform Instance this authority serves; the ownership check compares tenant.platform_id with this value."
+      },
+      "environment": {
+        "type": "string",
+        "default": "standalone"
+      },
+      "service_token_prefix": {
+        "type": "string",
+        "const": "svc-token-"
+      }
+    }
+  },
+  "data_ownership": {
+    "owner": "tenant_authority",
+    "logical_schema": "tenant_authority",
+    "datasets": [
+      {"name": "tenant_registry", "scope": "platform-scoped"},
+      {"name": "lifecycle_transitions", "scope": "platform-scoped"},
+      {"name": "service_access", "scope": "platform-scoped"},
+      {"name": "audit_events", "scope": "platform-scoped"},
+      {"name": "idempotency_keys", "scope": "platform-scoped"}
+    ],
+    "notes": [
+      "Tenant Registry is platform-scoped: it is data of one Platform Instance. Cross-tenant listing is permitted only as an explicitly authorized and audited platform-scoped operation (ARCHITECTURE.md §5.4, LAW-16a).",
+      "No dataset of this component is tenant-scoped: lifecycle state belongs to the Tenant as a whole and is required to decide whether tenant-scoped data may be served at all."
+    ]
+  },
+  "audit": {
+    "journal": "internal append-only journal owned by tenant_authority",
+    "transition_fields": [
+      "tenant_id",
+      "previous_state",
+      "new_state",
+      "actor_id",
+      "timestamp",
+      "request_id",
+      "correlation_id"
+    ],
+    "denials_audited": true,
+    "note": "Audit is owned data, not a public event contract; it is reachable through GET /api/v1/tenants/{tenant_id}/transitions for lifecycle history."
+  },
+  "authn": {
+    "service": "verified_service_identity",
+    "human": "not_applicable",
+    "note": "IS-002 is operated by services and operators of one Platform Instance; it proves the authority boundary and is not an IAM product."
+  },
+  "authz": {
+    "boundary": "data_owner",
+    "model": "explicit_permission_on_service_identity",
+    "platform_ownership_check": "tenant.platform_id == current_platform_id",
+    "permissions": ["tenant.create", "tenant.read", "tenant.list", "tenant.transition", "tenant.lifecycle.lookup"],
+    "authentication_does_not_imply_authorization": true,
+    "lifecycle_lookup_is_not_authorization": true
+  },
+  "compatibility_policy": {
+    "api": "additive-minor-breaking-major",
+    "events": "tolerant-reader",
+    "supported_api_majors": 1,
+    "lifecycle_states": "adding a state or an allowed transition is a minor change; removing or redefining one is a breaking change"
+  },
+  "dependencies": []
+}
