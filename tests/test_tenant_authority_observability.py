@@ -149,6 +149,89 @@ def test_one_request_is_traceable_in_both_component_journals():
     assert authority_event.actor_id == "svc_identity"
 
 
+def test_lifecycle_read_preserves_the_caller_request_and_correlation_ids():
+    """BLOCKER-07: `GET /api/v1/tenants/{tenant_id}/lifecycle` keeps the ids it got.
+
+    The endpoint took `X-Request-Id` and silently had no `X-Correlation-Id`, so a
+    lifecycle answer could not be tied back to the call that asked for it — while
+    every other read could. Nothing is generated here that the caller did not ask
+    for: the same identifiers reach the observability context and the audit journal
+    through the one gate that every read passes.
+    """
+    instance = monolith()
+    authority = instance.authority
+
+    # 1. Over the published HTTP contract.
+    response = instance.authority_client().get(
+        "/api/v1/tenants/ten_a/lifecycle",
+        headers={
+            "Authorization": "Bearer svc-token-identity",
+            "X-Request-Id": "req-lc-http",
+            "X-Correlation-Id": "cor-lc-http",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["tenant_id"] == "ten_a"
+    audited = authority.store.audit[-1]
+    assert (audited.action, audited.decision) == ("tenant.lifecycle", "ALLOW")
+    assert (audited.request_id, audited.correlation_id) == ("req-lc-http", "cor-lc-http")
+    assert audited.tenant_id == "ten_a"
+    assert audited.actor_id == "svc_identity"
+
+    # 2. Over the Level 0 published client: the header pair it already sent now
+    #    survives instead of being dropped by the route.
+    decision = instance.tenant_authority_client.lifecycle_decision(
+        "ten_b", request_id="req-lc-client", correlation_id="cor-lc-client"
+    )
+    assert decision.permitted is True
+    via_client = authority.store.audit[-1]
+    assert (via_client.request_id, via_client.correlation_id) == (
+        "req-lc-client",
+        "cor-lc-client",
+    )
+
+    # 3. The observability context of the same read is bound to those identifiers —
+    #    audit and context carry one pair, not two mechanisms.
+    _, obs, event = authority.engine.lifecycle_status(
+        "svc-token-identity",
+        "ten_a",
+        request_id="req-lc-obs",
+        correlation_id="cor-lc-obs",
+    )
+    assert obs.request_id == "req-lc-obs"
+    assert obs.correlation_id == "cor-lc-obs"
+    assert obs.tenant_id == "ten_a"
+    assert obs.platform_id == authority.current_platform_id
+    assert obs.service_id == "svc_identity"
+    assert obs.trace_id
+    assert event.correlation_id == obs.correlation_id
+    assert event.request_id == obs.request_id
+
+    # 4. A denial on the same endpoint keeps them too: one gate authenticates,
+    #    authorizes, answers and audits — the trace survives the refusal.
+    denied = instance.authority_client().get(
+        "/api/v1/tenants/ten_ghost/lifecycle",
+        headers={
+            "Authorization": "Bearer svc-token-identity",
+            "X-Request-Id": "req-lc-deny",
+            "X-Correlation-Id": "cor-lc-deny",
+        },
+    )
+    assert denied.status_code == 404
+    assert denied.json()["detail"]["request_id"] == "req-lc-deny"
+    denial = authority.store.audit[-1]
+    assert (denial.decision, denial.reason) == ("DENY", "tenant_not_found")
+    assert (denial.request_id, denial.correlation_id) == ("req-lc-deny", "cor-lc-deny")
+
+    # 5. And nothing is invented when the caller sends no identifiers: they are
+    #    generated once, by the existing mechanism, and stay consistent.
+    before = len(authority.store.audit)
+    instance.tenant_authority_client.lifecycle_decision("ten_a")
+    generated = authority.store.audit[before]
+    assert generated.request_id
+    assert generated.correlation_id == generated.request_id
+
+
 def test_identity_context_exposes_platform_and_tenant_for_allowed_operations():
     identity_engine, _ = composed()
     _, obs, audit = identity_engine.read_record("token-human-a", "rec_a1", None)

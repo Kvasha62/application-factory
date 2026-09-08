@@ -154,6 +154,12 @@ paths:
           required: false
           schema:
             type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+          description: preserved in the observability context and in the audit journal
       responses:
         "200":
           description: current state and whether an ordinary tenant-scoped operation is permitted

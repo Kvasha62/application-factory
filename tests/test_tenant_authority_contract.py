@@ -122,6 +122,72 @@ def test_published_api_matches_the_implementation_in_both_directions():
         assert (operation["path"], operation["method"].lower()) in declared
 
 
+def declared_header_parameters(text: str, path: str, method: str) -> set[str]:
+    """Header parameters the published document declares for one operation.
+
+    The document is the contract, the schema is the implementation: comparing the
+    two names per operation catches the drift this task was about — a header the
+    route accepts but the contract does not promise, or one the contract promises
+    and the route quietly drops.
+    """
+    wanted_path = f"  {path}:"
+    wanted_method = f"    {method}:"
+    names: set[str] = set()
+    in_paths = False
+    on_path = False
+    on_method = False
+    in_parameters = False
+    expect_name = False
+    for line in text.splitlines():
+        if line.startswith("paths:"):
+            in_paths = True
+            continue
+        if not in_paths:
+            continue
+        if line and not line.startswith(" "):
+            break
+        if line.startswith("  /"):
+            on_path = line.rstrip() == wanted_path
+            on_method = in_parameters = expect_name = False
+        elif on_path and line.startswith("    ") and not line.startswith("     "):
+            on_method = line.rstrip() == wanted_method
+            in_parameters = expect_name = False
+        elif on_method and line.strip() == "parameters:":
+            in_parameters = True
+        elif in_parameters and line.startswith("        ") and not line.startswith("         "):
+            stripped = line.strip()
+            expect_name = stripped == "- in: header"
+            if stripped.startswith("- in:") and not expect_name:
+                continue
+        elif in_parameters and expect_name and line.strip().startswith("name:"):
+            names.add(line.strip().split(":", 1)[1].strip())
+            expect_name = False
+    return names
+
+
+def test_declared_headers_of_the_lifecycle_read_match_the_implementation():
+    """The contract promises exactly the headers the route accepts — no more, no less.
+
+    `GET /api/v1/tenants/{tenant_id}/lifecycle` is the operation that lost
+    `X-Correlation-Id`: the document declared only `X-Platform-Id` and
+    `X-Request-Id`, and the route ignored correlation entirely. Both sides of the
+    comparison are checked, so the contract cannot run ahead of the code either.
+    """
+    path, method = "/api/v1/tenants/{tenant_id}/lifecycle", "get"
+    declared = declared_header_parameters(OPENAPI.read_text(encoding="utf-8"), path, method)
+    schema = create_app(tenant_authority()).openapi()
+    implemented = {
+        parameter["name"]
+        for parameter in schema["paths"][path][method].get("parameters", [])
+        if parameter.get("in") == "header"
+    } - {"authorization"}  # declared as security, not as a parameter
+
+    assert "X-Correlation-Id" in declared
+    assert "X-Request-Id" in declared
+    assert declared == implemented, (declared ^ implemented)
+
+
+
 def test_declared_permissions_exist_and_are_enforced():
     data = contract()
     declared = set(data["authz"]["permissions"])

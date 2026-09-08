@@ -231,13 +231,18 @@ def create_app(deployment: TenantAuthorityDeployment) -> FastAPI:
         authorization: str | None = Header(default=None),
         x_platform_id: str | None = Header(default=None, alias="X-Platform-Id"),
         x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
     ) -> LifecycleOut:
         try:
+            # The correlation id is forwarded like every other read: the lifecycle
+            # answer is auditable, so the request it belongs to must stay findable
+            # in the observability context and in the audit journal (T-011).
             decision, _, _ = engine.lifecycle_status(
                 _token(authorization),
                 tenant_id,
                 claimed_platform_id=x_platform_id,
                 request_id=x_request_id,
+                correlation_id=x_correlation_id,
             )
         except TenantAuthorityError as exc:
             raise _deny(exc, x_request_id) from exc
