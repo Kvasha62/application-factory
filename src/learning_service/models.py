@@ -6,17 +6,20 @@ These types describe the owned data of the component (logical schema
 
 Lifecycle facts:
 
-* a Course moves along ``DRAFT → PUBLISHED`` (``ARCHIVED`` is reserved for a
-  later slice — no command reaches it yet);
+* a Course moves along ``DRAFT → PUBLISHED`` (``ARCHIVED`` is declared by the
+  normative model — no command reaches it in this slice);
 * Modules, Lessons and Assignments are created ``DRAFT`` and become
   ``PUBLISHED`` only as a consequence of the Publish Course command: no other
-  command in this slice changes their state;
-* an Enrollment is created ``ACTIVE`` — there is no cancellation command in
-  this slice;
-* a Submission is created ``SUBMITTED`` — no grading exists in this slice.
+  command in this slice changes their state; ``ARCHIVED`` is declared by the
+  normative model and is unreachable here;
+* an Enrollment is created ``ACTIVE``; ``COMPLETED`` and ``CANCELLED`` are
+  declared by the normative model with no transition command in this slice;
+* a Submission is created ``SUBMITTED`` by the Create Submission command;
+  ``DRAFT`` is declared by the normative model with no command in this slice.
 
-States are never written by a caller: every state is set by a command of this
-component after the enforcement chain allowed it.
+A state declared without a command is vocabulary, not behaviour. States are
+never written by a caller: every state is set by a command of this component
+after the enforcement chain allowed it.
 """
 
 from __future__ import annotations
@@ -26,9 +29,9 @@ from typing import Any
 
 # --------------------------------------------------------------- lifecycle
 COURSE_STATES: tuple[str, ...] = ("DRAFT", "PUBLISHED", "ARCHIVED")
-CONTENT_STATES: tuple[str, ...] = ("DRAFT", "PUBLISHED")
-ENROLLMENT_STATES: tuple[str, ...] = ("ACTIVE",)
-SUBMISSION_STATES: tuple[str, ...] = ("SUBMITTED",)
+CONTENT_STATES: tuple[str, ...] = ("DRAFT", "PUBLISHED", "ARCHIVED")
+ENROLLMENT_STATES: tuple[str, ...] = ("ACTIVE", "COMPLETED", "CANCELLED")
+SUBMISSION_STATES: tuple[str, ...] = ("DRAFT", "SUBMITTED")
 
 #: The closed transition map of the Course state machine. A command names a
 #: business operation; the map names the only state it may start from.

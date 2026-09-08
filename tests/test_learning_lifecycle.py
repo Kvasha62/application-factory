@@ -71,6 +71,78 @@ def draft_with_content(client: TestClient):
     return course_id, module_id, lesson_id, assignment_id
 
 
+def test_cascade_publish_publishes_the_whole_tree_and_replay_creates_no_second_effect():
+    """The prescribed cascade scenario, end to end over the published API.
+
+    Course, Module, Lesson and Assignment are each created DRAFT; the single
+    ``publish course`` command atomically publishes the whole existing
+    content tree; an exact replay of the same command returns the same
+    result and creates no second business effect.
+    """
+    harness = learning_harness()
+    client = harness.http
+
+    course = client.post(
+        "/api/v1/learning/courses",
+        json={"title": "Cascade", "description": ""},
+        headers={**auth(TEACHER), "Idempotency-Key": "cascade-course"},
+    )
+    assert course.status_code == 200
+    course_id = course.json()["course"]["course_id"]
+    assert course.json()["course"]["status"] == "DRAFT"
+
+    module = client.post(
+        f"/api/v1/learning/courses/{course_id}/modules",
+        json={"title": "M", "position": 1},
+        headers={**auth(TEACHER), "Idempotency-Key": "cascade-module"},
+    )
+    assert module.status_code == 200
+    module_id = module.json()["module"]["module_id"]
+    assert module.json()["module"]["status"] == "DRAFT"
+
+    lesson = client.post(
+        f"/api/v1/learning/modules/{module_id}/lessons",
+        json={"title": "L", "content": "", "position": 1},
+        headers={**auth(TEACHER), "Idempotency-Key": "cascade-lesson"},
+    )
+    assert lesson.status_code == 200
+    lesson_id = lesson.json()["lesson"]["lesson_id"]
+    assert lesson.json()["lesson"]["status"] == "DRAFT"
+
+    assignment = client.post(
+        f"/api/v1/learning/lessons/{lesson_id}/assignments",
+        json={"title": "A", "instructions": ""},
+        headers={**auth(TEACHER), "Idempotency-Key": "cascade-assignment"},
+    )
+    assert assignment.status_code == 200
+    assignment_id = assignment.json()["assignment"]["assignment_id"]
+    assert assignment.json()["assignment"]["status"] == "DRAFT"
+
+    before = harness.store.publishes_applied
+    published = client.post(
+        f"/api/v1/learning/courses/{course_id}/publish",
+        json={},
+        headers={**auth(TEACHER), "Idempotency-Key": "cascade-publish"},
+    )
+    assert published.status_code == 200
+    assert published.json()["course"]["status"] == "PUBLISHED"
+    # The cascade is one command over the whole existing content tree.
+    assert harness.store.modules[module_id].status == "PUBLISHED"
+    assert harness.store.lessons[lesson_id].status == "PUBLISHED"
+    assert harness.store.assignments[assignment_id].status == "PUBLISHED"
+    assert harness.store.publishes_applied == before + 1
+
+    # Exact replay: same result, no second business effect.
+    replay = client.post(
+        f"/api/v1/learning/courses/{course_id}/publish",
+        json={},
+        headers={**auth(TEACHER), "Idempotency-Key": "cascade-publish"},
+    )
+    assert replay.status_code == 200
+    assert replay.json() == published.json()
+    assert harness.store.publishes_applied == before + 1
+
+
 def test_publish_is_the_only_allowed_transition_and_publishes_the_tree():
     harness = learning_harness()
     client = harness.http

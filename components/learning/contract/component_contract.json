@@ -47,7 +47,7 @@
     "operations": [
       {
         "method": "POST",
-        "path": "/api/v1/learning/courses",
+        "path": "/courses",
         "operation_id": "create_course",
         "purpose": "создать курс в эффективном тенанте; status=DRAFT, created_by=проверенная идентичность",
         "authorization_operation": "learning.course.write",
@@ -56,7 +56,7 @@
       },
       {
         "method": "GET",
-        "path": "/api/v1/learning/courses/{course_id}",
+        "path": "/courses/{course_id}",
         "operation_id": "get_course",
         "purpose": "прочитать курс; Teacher — любое состояние, Student — только PUBLISHED",
         "authorization_operation": "learning.course.read",
@@ -65,7 +65,7 @@
       },
       {
         "method": "POST",
-        "path": "/api/v1/learning/courses/{course_id}/publish",
+        "path": "/courses/{course_id}/publish",
         "operation_id": "publish_course",
         "purpose": "опубликовать курс; единственный допустимый переход DRAFT → PUBLISHED, публикация публикует содержимое курса той же командой",
         "authorization_operation": "learning.course.write",
@@ -74,7 +74,7 @@
       },
       {
         "method": "POST",
-        "path": "/api/v1/learning/courses/{course_id}/modules",
+        "path": "/courses/{course_id}/modules",
         "operation_id": "create_module",
         "purpose": "создать модуль курса; запрещено после публикации курса",
         "authorization_operation": "learning.course.write",
@@ -82,7 +82,7 @@
       },
       {
         "method": "POST",
-        "path": "/api/v1/learning/modules/{module_id}/lessons",
+        "path": "/modules/{module_id}/lessons",
         "operation_id": "create_lesson",
         "purpose": "создать урок модуля; запрещено после публикации курса",
         "authorization_operation": "learning.course.write",
@@ -90,7 +90,7 @@
       },
       {
         "method": "POST",
-        "path": "/api/v1/learning/lessons/{lesson_id}/assignments",
+        "path": "/lessons/{lesson_id}/assignments",
         "operation_id": "create_assignment",
         "purpose": "создать задание урока; запрещено после публикации курса",
         "authorization_operation": "learning.course.write",
@@ -98,7 +98,7 @@
       },
       {
         "method": "GET",
-        "path": "/api/v1/learning/assignments/{assignment_id}",
+        "path": "/assignments/{assignment_id}",
         "operation_id": "get_assignment",
         "purpose": "прочитать задание; Teacher — любое состояние, Student — только PUBLISHED",
         "authorization_operation": "learning.assignment.read",
@@ -106,7 +106,7 @@
       },
       {
         "method": "POST",
-        "path": "/api/v1/learning/courses/{course_id}/enrollments",
+        "path": "/courses/{course_id}/enrollments",
         "operation_id": "enroll_in_course",
         "purpose": "записать проверенную идентичность на опубликованный курс; status=ACTIVE; повторная запись второго эффекта не создаёт",
         "authorization_operation": "learning.enrollment.write",
@@ -114,7 +114,7 @@
       },
       {
         "method": "GET",
-        "path": "/api/v1/learning/courses/{course_id}/enrollments/me",
+        "path": "/courses/{course_id}/enrollments/me",
         "operation_id": "get_own_enrollment",
         "purpose": "прочитать собственную запись; идентичность выводится из проверенной идентичности",
         "authorization_operation": "learning.enrollment.read",
@@ -122,7 +122,7 @@
       },
       {
         "method": "POST",
-        "path": "/api/v1/learning/assignments/{assignment_id}/submissions",
+        "path": "/assignments/{assignment_id}/submissions",
         "operation_id": "create_submission",
         "purpose": "отправить решение проверенной идентичности на опубликованное задание при активной записи; status=SUBMITTED",
         "authorization_operation": "learning.submission.write",
@@ -130,7 +130,7 @@
       },
       {
         "method": "GET",
-        "path": "/api/v1/learning/submissions/{submission_id}",
+        "path": "/submissions/{submission_id}",
         "operation_id": "get_submission",
         "purpose": "прочитать решение: своего студента — Student, разрешённые — Teacher",
         "authorization_operation": "learning.submission.read",
@@ -176,24 +176,65 @@
     },
     "lifecycle": {
       "course": {
-        "states": ["DRAFT", "PUBLISHED", "ARCHIVED"],
+        "states": [
+          "DRAFT",
+          "PUBLISHED",
+          "ARCHIVED"
+        ],
         "commands": {
-          "publish": ["DRAFT", "PUBLISHED"]
+          "publish": [
+            "DRAFT",
+            "PUBLISHED"
+          ]
         },
-        "note": "ARCHIVED зарезервирован; команды перевода в него в этом срезе нет. Публикация курса публикует его содержимое (модули, уроки, задания) той же командой."
+        "publish_cascade": "publish course является единственной командой публикации первого implementation slice и атомарно публикует существующее содержимое курса: modules, lessons и assignments (весь существующий content tree).",
+        "note": "ARCHIVED объявлен нормативной моделью; команды перевода в ARCHIVED в этом срезе нет. PUBLISHED → PUBLISHED запрещён."
       },
-      "content": {
-        "states": ["DRAFT", "PUBLISHED"],
-        "note": "Модуль, урок и задание создаются в DRAFT и публикуются только как следствие публикации курса."
+      "module": {
+        "states": [
+          "DRAFT",
+          "PUBLISHED",
+          "ARCHIVED"
+        ],
+        "commands": {},
+        "note": "Создаётся в DRAFT; PUBLISHED — только как следствие publish course (каскад); ARCHIVED объявлен, команды перевода в этом срезе нет."
+      },
+      "lesson": {
+        "states": [
+          "DRAFT",
+          "PUBLISHED",
+          "ARCHIVED"
+        ],
+        "commands": {},
+        "note": "Создаётся в DRAFT; PUBLISHED — только как следствие publish course (каскад); ARCHIVED объявлен, команды перевода в этом срезе нет."
+      },
+      "assignment": {
+        "states": [
+          "DRAFT",
+          "PUBLISHED",
+          "ARCHIVED"
+        ],
+        "commands": {},
+        "note": "Создаётся в DRAFT; PUBLISHED — только как следствие publish course (каскад); ARCHIVED объявлен, команды перевода в этом срезе нет."
       },
       "enrollment": {
-        "states": ["ACTIVE"],
-        "note": "Отмена записи в этом срезе отсутствует."
+        "states": [
+          "ACTIVE",
+          "COMPLETED",
+          "CANCELLED"
+        ],
+        "commands": {},
+        "note": "Создаётся в ACTIVE; команд COMPLETED и CANCELLED в этом срезе нет."
       },
       "submission": {
-        "states": ["SUBMITTED"],
-        "note": "Оценка (grading) частью этого среза не является."
-      }
+        "states": [
+          "DRAFT",
+          "SUBMITTED"
+        ],
+        "commands": {},
+        "note": "create_submission создаёт решение сразу в SUBMITTED; DRAFT объявлен моделью, команды создания DRAFT в этом срезе нет."
+      },
+      "state_without_command_note": "Наличие состояния в контракте не означает обязательное наличие команды перехода в первом implementation slice."
     },
     "consumer_surface": {
       "module": "learning_service.reader",
@@ -296,7 +337,8 @@
         "consumer_surface": "idempotency.guard.IdempotencyGuard",
         "note": "Ключ связывается с идентичностью, эффективным тенантом, операцией, целью и отпечатком запроса (canonical JSON, sha256). Отказ авторизации или зависимости не создаёт записи идемпотентности: эффект исполняется внутри guard."
       }
-    ]
+    ],
+    "path_convention": "Пути операций относительны base_path (и servers[0].url openapi-документа, /api/v1/learning): полный адрес runtime = base_path + path."
   },
   "events": {
     "envelope": "CloudEvents",
@@ -321,7 +363,9 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "additionalProperties": false,
-    "required": ["platform_id"],
+    "required": [
+      "platform_id"
+    ],
     "properties": {
       "platform_id": {
         "type": "string",

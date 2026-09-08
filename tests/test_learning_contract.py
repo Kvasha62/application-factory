@@ -50,22 +50,31 @@ REQUIRED = {
 }
 
 #: The seven state-changing commands of the slice — the exact set that must
-#: demand an Idempotency-Key, no more and no less.
+#: demand an Idempotency-Key, no more and no less. Paths are relative to
+#: ``servers[0].url`` (standard OpenAPI semantics); the runtime addresses are
+#: ``BASE_URL + path``.
+BASE_URL = "/api/v1/learning"
 COMMAND_PATHS = {
-    "/api/v1/learning/courses",
-    "/api/v1/learning/courses/{course_id}/publish",
-    "/api/v1/learning/courses/{course_id}/modules",
-    "/api/v1/learning/modules/{module_id}/lessons",
-    "/api/v1/learning/lessons/{lesson_id}/assignments",
-    "/api/v1/learning/courses/{course_id}/enrollments",
-    "/api/v1/learning/assignments/{assignment_id}/submissions",
+    "/courses",
+    "/courses/{course_id}/publish",
+    "/courses/{course_id}/modules",
+    "/modules/{module_id}/lessons",
+    "/lessons/{lesson_id}/assignments",
+    "/courses/{course_id}/enrollments",
+    "/assignments/{assignment_id}/submissions",
 }
 READ_PATHS = {
-    "/api/v1/learning/courses/{course_id}",
-    "/api/v1/learning/assignments/{assignment_id}",
-    "/api/v1/learning/courses/{course_id}/enrollments/me",
-    "/api/v1/learning/submissions/{submission_id}",
+    "/courses/{course_id}",
+    "/assignments/{assignment_id}",
+    "/courses/{course_id}/enrollments/me",
+    "/submissions/{submission_id}",
 }
+BUSINESS_PATHS = COMMAND_PATHS | READ_PATHS
+
+
+def full(path: str) -> str:
+    """The runtime address of a document-relative path."""
+    return BASE_URL + path
 
 
 # ----------------------------------------------------- the YAML subset parser
@@ -204,6 +213,29 @@ def instance() -> Any:
     return monolith_with_learning()
 
 
+# ------------------------------------------------------------------- servers
+def test_servers_declare_the_learning_base_path():
+    """BLOCKER 1: the server URL is the business base path, exactly once."""
+    document = load_openapi()
+    assert document["servers"] == [{"url": BASE_URL}]
+
+
+def test_paths_are_relative_and_never_double_the_base_path():
+    """No path repeats the prefix: the joined URL is the runtime address."""
+    document = load_openapi()
+    for path in document["paths"]:
+        assert not path.startswith("/api"), f"path must be relative: {path}"
+        assert "/api/v1/learning/api/v1/learning" not in full(path), path
+        assert full(path).count("/api/v1/learning") == 1, path
+
+
+def test_declared_full_addresses_are_the_runtime_addresses():
+    """servers[0].url + relative path == the address the application serves."""
+    document = load_openapi()
+    joined = {full(path) for path in document["paths"]}
+    assert joined == {full(path) for path in BUSINESS_PATHS}
+
+
 # ------------------------------------------------------------- the documents
 def test_component_contract_declares_the_required_minimum():
     data = contract()
@@ -230,27 +262,51 @@ def test_component_contract_versions_the_api_as_required():
 
 
 def test_published_operations_are_exactly_the_slice():
-    """Section 8: only the eleven published operations exist — no extras."""
+    """Section 8: only the eleven published operations exist — no extras.
+
+    Health and readiness are operational endpoints at the application root;
+    they are declared in ``x-observability`` and are not business paths.
+    """
     document = load_openapi()
     operations = declared_operations(document)
     api_paths = {path for path, _ in operations}
-    assert api_paths == COMMAND_PATHS | READ_PATHS | {"/health", "/ready"}
+    assert api_paths == BUSINESS_PATHS
     for path in COMMAND_PATHS:
-        assert "post" in operations[(path, "post")] or (path, "post") in operations
+        assert (path, "post") in operations
     for path in READ_PATHS:
         assert (path, "get") in operations
+    assert "x-observability" in document
+    assert document["x-observability"]["health"] == "/health"
+    assert document["x-observability"]["readiness"] == "/ready"
 
 
 def test_served_routes_match_the_published_document():
-    """The live application serves exactly what the contract declares."""
+    """The live application serves exactly what the contract declares.
+
+    Business routes are compared as ``servers[0].url + path``; the operational
+    health/readiness routes are checked separately against ``x-observability``.
+    """
     app = instance().learning_app
     served = app_operations(app)
+    operational = {("/health", "get", "get_health"), ("/ready", "get", "get_ready")}
+    assert operational <= served
+    served = served - operational
     document = load_openapi()
     declared = {
-        (path, method, operation["operationId"])
+        (full(path), method, operation["operationId"])
         for (path, method), operation in declared_operations(document).items()
     }
     assert served == declared
+
+
+def test_health_and_readiness_are_declared_and_served_at_the_application_root():
+    app = instance().learning_app
+    client = TestClient(app)
+    for route in ("/health", "/ready"):
+        assert client.get(route).status_code == 200
+        # They are outside the business base path, so the document keeps them
+        # out of `paths` — a document-relative `/health` would misresolve.
+        assert route not in load_openapi()["paths"]
 
 
 def test_no_generic_crud_operation_exists_anywhere():
@@ -289,9 +345,6 @@ def test_every_operation_declares_authentication_and_ids():
     """Sections 9.2/9.3: bearer authentication; diagnostic headers may be supplied."""
     document = load_openapi()
     for (path, method), operation in declared_operations(document).items():
-        if path in ("/health", "/ready"):
-            assert operation.get("security") == []
-            continue
         assert operation.get("security") == [{"bearerAuth": []}], f"{path} {method}"
         names = {
             parameter.get("$ref", "").rsplit("/", 1)[-1]
@@ -342,8 +395,6 @@ def test_declared_error_codes_match_declared_statuses_and_the_implementation():
             assert status in (401, 403, 404, 422, 503)
     document = load_openapi()
     for (path, method), operation in declared_operations(document).items():
-        if path in ("/health", "/ready"):
-            continue
         documented = set(operation["x-error-codes"])
         assert documented <= set(PUBLISHED_ERROR_CODES), f"{path}: unknown code declared"
         statuses = {str(status) for status in operation["responses"]}
@@ -355,18 +406,81 @@ def test_declared_error_codes_match_declared_statuses_and_the_implementation():
             assert {"IDEMPOTENCY_KEY_REQUIRED", "IDEMPOTENCY_CONFLICT"} <= documented, path
 
 
-def test_declared_lifecycle_matches_the_owned_state_machine():
-    """Section 10.3/13: closed enums, and only one transition command."""
+def test_declared_lifecycle_matches_the_normative_state_machines():
+    """BLOCKER 2: the machine-readable contract declares the agreed states.
+
+    Course, Module, Lesson, Assignment: ``DRAFT, PUBLISHED, ARCHIVED``;
+    Enrollment: ``ACTIVE, COMPLETED, CANCELLED``; Submission: ``DRAFT,
+    SUBMITTED``. A state declared without a command is vocabulary, not a
+    new endpoint: the only command of the slice is ``publish``.
+    """
     document = load_openapi()
     schemas = document["components"]["schemas"]
-    assert schemas["CourseStatus"]["enum"] == list(COURSE_STATES)
-    assert schemas["ContentStatus"]["enum"] == list(CONTENT_STATES)
-    assert schemas["EnrollmentStatus"]["enum"] == list(ENROLLMENT_STATES)
-    assert schemas["SubmissionStatus"]["enum"] == list(SUBMISSION_STATES)
+    assert schemas["CourseStatus"]["enum"] == ["DRAFT", "PUBLISHED", "ARCHIVED"]
+    assert schemas["ContentStatus"]["enum"] == ["DRAFT", "PUBLISHED", "ARCHIVED"]
+    assert schemas["EnrollmentStatus"]["enum"] == ["ACTIVE", "COMPLETED", "CANCELLED"]
+    assert schemas["SubmissionStatus"]["enum"] == ["DRAFT", "SUBMITTED"]
+    # The code-side mirrors agree with the published document.
+    assert list(COURSE_STATES) == ["DRAFT", "PUBLISHED", "ARCHIVED"]
+    assert list(CONTENT_STATES) == ["DRAFT", "PUBLISHED", "ARCHIVED"]
+    assert list(ENROLLMENT_STATES) == ["ACTIVE", "COMPLETED", "CANCELLED"]
+    assert list(SUBMISSION_STATES) == ["DRAFT", "SUBMITTED"]
+    # Only one transition command exists in the whole slice.
     assert list(COURSE_TRANSITIONS) == ["publish"]
     assert COURSE_TRANSITIONS["publish"] == ("DRAFT", "PUBLISHED")
-    declared = contract()["api"]["lifecycle"]
-    assert declared["course"]["commands"]["publish"] == ["DRAFT", "PUBLISHED"]
+
+
+def test_component_contract_declares_the_normative_lifecycle():
+    """The Component Contract names every normative state per entity — and
+    separates them from the commands, which stay exactly one."""
+    lifecycle = contract()["api"]["lifecycle"]
+    assert lifecycle["course"]["states"] == ["DRAFT", "PUBLISHED", "ARCHIVED"]
+    assert lifecycle["module"]["states"] == ["DRAFT", "PUBLISHED", "ARCHIVED"]
+    assert lifecycle["lesson"]["states"] == ["DRAFT", "PUBLISHED", "ARCHIVED"]
+    assert lifecycle["assignment"]["states"] == ["DRAFT", "PUBLISHED", "ARCHIVED"]
+    assert lifecycle["enrollment"]["states"] == ["ACTIVE", "COMPLETED", "CANCELLED"]
+    assert lifecycle["submission"]["states"] == ["DRAFT", "SUBMITTED"]
+    # Commands: publish on Course, nothing else — no new lifecycle endpoints.
+    assert lifecycle["course"]["commands"] == {"publish": ["DRAFT", "PUBLISHED"]}
+    for entity in ("module", "lesson", "assignment", "enrollment", "submission"):
+        assert lifecycle[entity]["commands"] == {}, entity
+    assert "Наличие состояния в контракте" in lifecycle["state_without_command_note"]
+
+
+def test_the_publish_cascade_is_declared_in_both_contracts():
+    """Section 4: the implemented cascade is explicit machine-readable fact."""
+    cascade = contract()["api"]["lifecycle"]["course"]["publish_cascade"]
+    assert "единственной командой публикации" in cascade
+    assert "атомарно публикует" in cascade
+    assert "modules" in cascade and "lessons" in cascade and "assignments" in cascade
+
+    document = load_openapi()
+    publish = declared_operations(document)[("/courses/{course_id}/publish", "post")]
+    assert "Единственная команда публикации" in publish["description"]
+    assert "modules, lessons и assignments" in publish["description"]
+    assert "atomically" not in publish["description"]
+    assert "x-cascade" in publish
+    # No separate publish commands exist anywhere in the document.
+    for path in document["paths"]:
+        assert not path.endswith("/modules/publish")
+        assert not path.endswith("/lessons/publish")
+        assert not path.endswith("/assignments/publish")
+        assert not path.endswith("/publish") or path == "/courses/{course_id}/publish"
+
+
+def test_component_contract_operations_match_the_openapi_contract():
+    """Every declared operation is the same (method, full address, operationId)
+    in both machine-readable contracts."""
+    document = load_openapi()
+    declared = {
+        operation["operationId"]: (method, full(path))
+        for (path, method), operation in declared_operations(document).items()
+    }
+    api = contract()["api"]
+    for operation in api["operations"]:
+        address = api["base_path"] + operation["path"]
+        method = operation["method"].lower()
+        assert (method, address) == declared[operation["operation_id"]], operation["operation_id"]
 
 
 def test_request_schemas_declare_the_field_constraints():

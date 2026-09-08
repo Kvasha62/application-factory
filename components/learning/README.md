@@ -61,18 +61,58 @@ Data Ownership (этот компонент)
 только `DRAFT → PUBLISHED`, но точный повтор команды с тем же ключом
 возвращает уже опубликованное представление, не задевая машину состояний.
 
-## Жизненный цикл
+## Жизненный цикл (нормативная модель)
 
 ```text
-Course:     DRAFT → PUBLISHED        (ARCHIVED объявлен, но недостижим в этом срезе)
-Content:    DRAFT → PUBLISHED        (следствие публикации курса, каскад)
-Enrollment: ACTIVE
-Submission: SUBMITTED
+Course:     DRAFT → PUBLISHED → ARCHIVED
+Module:     DRAFT → PUBLISHED → ARCHIVED
+Lesson:     DRAFT → PUBLISHED → ARCHIVED
+Assignment: DRAFT → PUBLISHED → ARCHIVED
+Enrollment: ACTIVE → COMPLETED
+            ACTIVE → CANCELLED
+Submission: DRAFT → SUBMITTED
 ```
 
+Наличие состояния в контракте **не означает** наличие команды перехода в
+первом implementation slice. Командой этого среза является только
+`publish` курса; состояния `ARCHIVED` (Course, Module, Lesson, Assignment),
+`COMPLETED` и `CANCELLED` (Enrollment) и `DRAFT` (Submission) объявлены
+нормативной моделью, команды их достижения в срезе отсутствуют и не
+добавляются.
+
 Структурные мутации (модули, уроки, задания) принимаются, только пока курс
-в `DRAFT`; после публикации — `INVALID_STATE_TRANSITION` (409). Публикация
-курса публикует всё его содержимое той же командой.
+в `DRAFT`; после публикации — `INVALID_STATE_TRANSITION` (409).
+
+## Публикация курса (каскад)
+
+> `publish course` является единственной командой публикации первого
+> implementation slice и атомарно публикует существующее содержимое курса:
+> modules, lessons и assignments.
+
+```text
+Course DRAFT
+      │ publish
+      ▼
+Course PUBLISHED
+      ├── Module     → PUBLISHED
+      │     └── Lesson → PUBLISHED
+      │           └── Assignment → PUBLISHED
+      └── весь существующий content tree публикуется
+```
+
+Отдельных команд `publish module`, `publish lesson` и `publish assignment`
+в контракте нет. Повторный `publish` (PUBLISHED → PUBLISHED) —
+`INVALID_STATE_TRANSITION` (409); точный повтор той же команды с тем же
+`Idempotency-Key` возвращает опубликованное представление, не создавая
+второго бизнес-эффекта.
+
+## Конвенция путей OpenAPI
+
+В `openapi.yaml` пути операций указаны относительно `servers[0].url =
+/api/v1/learning` (стандартная семантика OpenAPI); полный адрес runtime —
+`/api/v1/learning/<path>`. Операционные адреса компонента (`/health`,
+`/ready`) живут от корня приложения и объявлены в `x-observability`, а не в
+`paths`, чтобы пути документа оставались относительными базовому пути.
 
 ## Инварианты среза
 

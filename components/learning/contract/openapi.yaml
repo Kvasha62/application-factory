@@ -2,17 +2,21 @@ openapi: 3.1.0
 info:
   title: "Learning — Business System (первый реализационный срез)"
   version: 0.1.0
-  description: "Публичный контракт Learning. Одиннадцать операций: семь явных бизнес-команд (каждая требует Idempotency-Key) и четыре чтения. Универсального CRUD нет: PUT, PATCH и DELETE для ресурсов этого среза не существуют. Состояние жизненного цикла, владение, идентификаторы и метки времени задаёт сервер. Эффективный тенант выводится из проверенной идентичности (IS-001); решение принимает IS-003; ровно-однократный эффект команды обеспечивает IS-005."
+  description: "Публичный контракт Learning. Одиннадцать операций: семь явных бизнес-команд (каждая требует Idempotency-Key) и четыре чтения. Универсального CRUD нет: PUT, PATCH и DELETE для ресурсов этого среза не существуют. Состояние жизненного цикла, владение, идентификаторы и метки времени задаёт сервер. Эффективный тенант выводится из проверенной идентичности (IS-001); решение принимает IS-003; ровно-однократный эффект команды обеспечивает IS-005. Пути операций указаны относительно servers[0].url = /api/v1/learning; фактические адреса runtime совпадают с этим базовым путём."
   x-component:
     component: learning
     version: 0.1.0
     api: v1
 servers:
   - url: /api/v1/learning
+x-observability:
+  health: /health
+  readiness: /ready
+  note: "Операционные адреса компонента находятся вне business base path: /health и /ready обслуживаются от корня приложения, поэтому объявлены здесь, а не в paths, чтобы каждый путь документа оставался относительным к servers[0].url."
 security:
   - bearerAuth: []
 paths:
-  /api/v1/learning/courses:
+  /courses:
     post:
       operationId: create_course
       summary: "Создать курс (команда Teacher)"
@@ -49,7 +53,7 @@ paths:
         "503":
           $ref: "#/components/responses/DependencyUnavailable"
       x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
-  /api/v1/learning/courses/{course_id}:
+  /courses/{course_id}:
     get:
       operationId: get_course
       summary: "Прочитать курс"
@@ -76,11 +80,13 @@ paths:
         "503":
           $ref: "#/components/responses/DependencyUnavailable"
       x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, DEPENDENCY_UNAVAILABLE]
-  /api/v1/learning/courses/{course_id}/publish:
+  /courses/{course_id}/publish:
     post:
       operationId: publish_course
-      summary: "Опубликовать курс (команда Teacher)"
-      description: "Единственная команда жизненного цикла этого среза. Допустимый переход только DRAFT → PUBLISHED; повторная публикация и публикация ARCHIVED запрещены (INVALID_STATE_TRANSITION). Публикация курса публикует его содержимое (модули, уроки, задания) той же командой. Клиент не передаёт поле статуса: тело команды пустое."
+      summary: "Опубликовать курс (команда Teacher; единственная команда публикации — каскадно публикует содержимое)"
+      x-cascade:
+        publish: "Course.publish атомарно публикует существующий content tree курса: modules, lessons и assignments."
+      description: "Единственная команда публикации первого implementation slice: publish course атомарно публикует существующее содержимое курса — modules, lessons и assignments (весь существующий content tree). Отдельных команд publish module, publish lesson и publish assignment в контракте нет. Допустимый переход только DRAFT → PUBLISHED; повторная публикация (PUBLISHED → PUBLISHED) и публикация ARCHIVED запрещены (INVALID_STATE_TRANSITION). Клиент не передаёт поле статуса: тело команды пустое."
       security:
         - bearerAuth: []
       parameters:
@@ -120,7 +126,7 @@ paths:
         "503":
           $ref: "#/components/responses/DependencyUnavailable"
       x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, INVALID_STATE_TRANSITION, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
-  /api/v1/learning/courses/{course_id}/modules:
+  /courses/{course_id}/modules:
     post:
       operationId: create_module
       summary: "Создать модуль курса (команда Teacher)"
@@ -164,7 +170,7 @@ paths:
         "503":
           $ref: "#/components/responses/DependencyUnavailable"
       x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, INVALID_STATE_TRANSITION, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
-  /api/v1/learning/modules/{module_id}/lessons:
+  /modules/{module_id}/lessons:
     post:
       operationId: create_lesson
       summary: "Создать урок модуля (команда Teacher)"
@@ -208,7 +214,7 @@ paths:
         "503":
           $ref: "#/components/responses/DependencyUnavailable"
       x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, INVALID_STATE_TRANSITION, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
-  /api/v1/learning/lessons/{lesson_id}/assignments:
+  /lessons/{lesson_id}/assignments:
     post:
       operationId: create_assignment
       summary: "Создать задание урока (команда Teacher)"
@@ -252,7 +258,7 @@ paths:
         "503":
           $ref: "#/components/responses/DependencyUnavailable"
       x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, INVALID_STATE_TRANSITION, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
-  /api/v1/learning/assignments/{assignment_id}:
+  /assignments/{assignment_id}:
     get:
       operationId: get_assignment
       summary: "Прочитать задание"
@@ -279,7 +285,7 @@ paths:
         "503":
           $ref: "#/components/responses/DependencyUnavailable"
       x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, DEPENDENCY_UNAVAILABLE]
-  /api/v1/learning/courses/{course_id}/enrollments:
+  /courses/{course_id}/enrollments:
     post:
       operationId: enroll_in_course
       summary: "Записаться на курс (команда Student)"
@@ -323,7 +329,7 @@ paths:
         "503":
           $ref: "#/components/responses/DependencyUnavailable"
       x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, COURSE_NOT_PUBLISHED, DUPLICATE_ENROLLMENT, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
-  /api/v1/learning/courses/{course_id}/enrollments/me:
+  /courses/{course_id}/enrollments/me:
     get:
       operationId: get_own_enrollment
       summary: "Прочитать свою запись на курс (Student)"
@@ -350,7 +356,7 @@ paths:
         "503":
           $ref: "#/components/responses/DependencyUnavailable"
       x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, DEPENDENCY_UNAVAILABLE]
-  /api/v1/learning/assignments/{assignment_id}/submissions:
+  /assignments/{assignment_id}/submissions:
     post:
       operationId: create_submission
       summary: "Отправить решение (команда Student)"
@@ -394,7 +400,7 @@ paths:
         "503":
           $ref: "#/components/responses/DependencyUnavailable"
       x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, ASSIGNMENT_NOT_PUBLISHED, ENROLLMENT_REQUIRED, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, DEPENDENCY_UNAVAILABLE]
-  /api/v1/learning/submissions/{submission_id}:
+  /submissions/{submission_id}:
     get:
       operationId: get_submission
       summary: "Прочитать решение"
@@ -421,22 +427,6 @@ paths:
         "503":
           $ref: "#/components/responses/DependencyUnavailable"
       x-error-codes: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, TENANT_MISMATCH, RESOURCE_NOT_FOUND, DEPENDENCY_UNAVAILABLE]
-  /health:
-    get:
-      operationId: get_health
-      summary: "Живость компонента"
-      security: []
-      responses:
-        "200":
-          description: "компонент отвечает"
-  /ready:
-    get:
-      operationId: get_ready
-      summary: "Готовность компонента"
-      security: []
-      responses:
-        "200":
-          description: "компонент готов принимать операции"
 components:
   securitySchemes:
     bearerAuth:
@@ -619,13 +609,13 @@ components:
       enum: [DRAFT, PUBLISHED, ARCHIVED]
     ContentStatus:
       type: string
-      enum: [DRAFT, PUBLISHED]
+      enum: [DRAFT, PUBLISHED, ARCHIVED]
     EnrollmentStatus:
       type: string
-      enum: [ACTIVE]
+      enum: [ACTIVE, COMPLETED, CANCELLED]
     SubmissionStatus:
       type: string
-      enum: [SUBMITTED]
+      enum: [DRAFT, SUBMITTED]
     Course:
       type: object
       additionalProperties: false
