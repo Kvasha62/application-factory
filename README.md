@@ -1,31 +1,76 @@
 # Application Factory
 
-Application Factory is a platform for developing independent,
-self-contained applications that can later be integrated into
-larger customer-specific platforms.
+Application Factory — платформа для разработки независимых
+самодостаточных приложений, которые впоследствии объединяются
+в более крупные заказные платформы.
 
-## Core principle
+## Основной принцип
 
-Each application must be independently:
+Каждое приложение должно быть независимо:
 
-* developed;
-* run locally;
-* tested;
-* visually inspected;
-* accepted;
-* versioned.
+* разработано;
+* запущено локально;
+* протестировано;
+* визуально проверено;
+* принято;
+* версионировано.
 
-## Team
+## Команда
 
-* Owner — Oleg
-* Architect / Project Manager — ChatGPT
-* Executor — Arena
+* Владелец — Oleg
+* Архитектор / руководитель проекта — ChatGPT
+* Исполнитель — Arena
 
-## Development model
+## Модель разработки
 
-Applications are developed independently and integrated only
-through defined contracts and APIs.
+Приложения разрабатываются независимо и интегрируются
+только через определённые контракты и API.
 
-## Status
+## Архитектурный закон
 
-Foundation stage.
+`docs/ARCHITECTURE.md` — технический закон проекта.
+Он определяет границы компонентов, владение данными, контракты,
+версионирование, миграции, изоляцию арендаторов, а также правила,
+обязательные и для разработчиков, и для AI-агентов.
+
+Изменения архитектуры вносятся через ADR:
+
+```text
+docs/adr/          — новые ADR (ADR-0009 и далее)
+docs/adr.md        — исторические ADR (ADR-0001…0008)
+```
+
+Уровни изменений определены в `docs/ARCHITECTURE.md` §34.1:
+
+* **Уровень A — реализация.** ADR не требуется.
+* **Уровень B — локальная архитектура.** ADR компонента, если решение существенное.
+* **Уровень C — архитектура платформы.** Требуется ADR.
+* **Уровень D — изменение конституции.** Требуется ADR, анализ затронутых
+  компонентов, план миграции и явная ратификация новой версии ARCHITECTURE.md.
+
+`docs/ARCHITECTURE.md` нельзя изменять молча.
+
+## Язык документации
+
+Вся документация проекта ведётся на русском языке.
+
+Латиницей допускается писать только названия сущностей и разделов
+в том виде, в котором они зафиксированы в ARCHITECTURE.md
+(Platform Instance, Component Catalog, Golden Bundle, Composer,
+Tenant, Manifest, Release Train), идентификаторы, имена полей,
+значения перечислений и устоявшиеся технические термины
+(digest, envelope, replay, retry, retention, OpenAPI, CloudEvents,
+OIDC, CDC, RLS, SemVer).
+
+## Статус
+
+Начальная стадия (Foundation stage).
+
+Текущее состояние — автономный режим (standalone mode, ARCHITECTURE.md §4.1):
+механизмы фабрики (Component Catalog, Golden Bundles, Composer,
+Release Train) ещё не включены, и создание их до достижения гейтов
+было бы нарушением LAW-13.
+
+Аудит архитектуры версии 1.1.0: `docs/architecture-review-1.1.0.md`.
+Предлагаемые изменения конституции ожидают ратификации
+в `docs/adr/ADR-0010-architecture-gap-review.md`.
