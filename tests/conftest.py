@@ -528,7 +528,9 @@ class ReservationsBoundary:
             raise DomainRefused("not_reserved")
         self.states[reservation_id] = "available"
         self.applied_releases += 1
-        return ReservationView(reservation_id, self.tenants[reservation_id], "available")
+        return ReservationView(
+            reservation_id, self.tenants[reservation_id], "available"
+        )
 
     def _decide(
         self,
@@ -790,19 +792,19 @@ def saga_harness(
     instance = monolith()
     # Provisioning the grant vocabulary of the demo data owner is the
     # composition root's job: IS-003 publishes no grant management API.
-    instance.authorization.store.grant(
-        "ten_a", "idn_human_a", *RESERVATION_OPERATIONS
-    )
-    instance.authorization.store.grant(
-        "ten_b", "idn_human_b", *RESERVATION_OPERATIONS
-    )
+    instance.authorization.store.grant("ten_a", "idn_human_a", *RESERVATION_OPERATIONS)
+    instance.authorization.store.grant("ten_b", "idn_human_b", *RESERVATION_OPERATIONS)
 
-    owned = reservations if reservations is not None else {
-        "res_a1": "ten_a",
-        "res_a2": "ten_a",
-        "res_a3": "ten_a",
-        "res_b1": "ten_b",
-    }
+    owned = (
+        reservations
+        if reservations is not None
+        else {
+            "res_a1": "ten_a",
+            "res_a2": "ten_a",
+            "res_a3": "ten_a",
+            "res_b1": "ten_b",
+        }
+    )
     boundary = ReservationsBoundary(
         authorization=instance.authorization_client,
         tenants=dict(owned),
