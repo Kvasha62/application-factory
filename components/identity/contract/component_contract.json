@@ -1,12 +1,26 @@
 {
   "component_id": "identity",
-  "component_version": "0.1.0",
+  "component_version": "0.2.0",
   "class": "platform_service",
   "maturity_level": "level_0_modular_monolith",
   "api": {
     "openapi": "components/identity/contract/openapi.yaml",
     "base_path": "/api/v1",
-    "supported_majors": ["v1"]
+    "supported_majors": [
+      "v1"
+    ],
+    "consumes": [
+      {
+        "component_id": "tenant_authority",
+        "contract": "components/tenant_authority/contract/component_contract.json",
+        "operations": [
+          "lookup",
+          "lifecycle_decision"
+        ],
+        "mechanism": "published read contract (TenantAuthorityReader at Level 0)",
+        "note": "Tenant state and ownership are read from the authority at the authorization boundary; the effective tenant id is still derived only from verified identity."
+      }
+    ]
   },
   "events": {
     "envelope": "CloudEvents",
@@ -35,8 +49,20 @@
       "token_prefix": {
         "type": "string",
         "const": "token-"
+      },
+      "current_platform_id": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Platform Instance this identity boundary serves; ownership of a Tenant is verified against it."
+      },
+      "environment": {
+        "type": "string",
+        "default": "standalone"
       }
-    }
+    },
+    "required": [
+      "current_platform_id"
+    ]
   },
   "data_ownership": {
     "owner": "identity",
@@ -44,10 +70,6 @@
     "datasets": [
       {
         "name": "identities",
-        "scope": "platform-scoped"
-      },
-      {
-        "name": "tenants",
         "scope": "platform-scoped"
       },
       {
@@ -62,6 +84,9 @@
         "name": "audit_events",
         "scope": "platform-scoped"
       }
+    ],
+    "notes": [
+      "Identity owns identity and association data only. Tenant lifecycle state and Platform Instance ownership are owned by Tenant Authority (IS-002) and are read through its published contract, never copied here (invariant T-004)."
     ]
   },
   "authn": {
@@ -72,12 +97,29 @@
   "authz": {
     "boundary": "data_owner",
     "model": "explicit_permission_on_tenant_association",
-    "authentication_does_not_imply_authorization": true
+    "authentication_does_not_imply_authorization": true,
+    "lifecycle_state_authority": "tenant_authority"
   },
   "compatibility_policy": {
     "api": "additive-minor-breaking-major",
     "events": "tolerant-reader",
     "supported_api_majors": 1
   },
-  "dependencies": []
+  "dependencies": [
+    {
+      "component_id": "tenant_authority",
+      "version_range": ">=0.1.0,<0.2.0",
+      "kind": "api",
+      "contract": "components/tenant_authority/contract/component_contract.json",
+      "direction": "identity -> tenant_authority (read-only Tenant state lookup)"
+    }
+  ],
+  "changelog": [
+    {
+      "version": "0.2.0",
+      "date": "2026-09-08",
+      "change": "IS-002 integration: Tenant lifecycle state and Platform Instance ownership are read from Tenant Authority; the local tenant registry copy and a second Tenant state vocabulary were removed. Public API /api/v1 is unchanged (additive observability context fields only).",
+      "issue": "#10"
+    }
+  ]
 }

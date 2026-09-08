@@ -4,15 +4,42 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from identity_service import COMPONENT_ID, COMPONENT_VERSION
+from identity_service.config import IdentityConfig
 from identity_service.engine import IdentityEngine
 from identity_service.errors import AccessDenied
+from identity_service.models import DenyReason
 from identity_service.store import IdentityStore
+from tenant_authority.runtime import build_runtime
+
+# Composition root of the Level 0 modular monolith: Tenant Authority (IS-002) is
+# wired in as the authoritative Tenant registry, and identity consumes it through
+# its published contract only — never through internal modules or its store.
+tenant_authority_runtime = build_runtime({"platform_id": "plt_demo"}, seed_demo=True)
 
 store = IdentityStore()
 store.seed_demo()
-engine = IdentityEngine(store)
+identity_config = IdentityConfig.from_mapping(
+    {
+        # Composition root binds both components to the same Platform Instance.
+        "current_platform_id": tenant_authority_runtime.current_platform_id,
+        "environment": tenant_authority_runtime.config.environment,
+    }
+)
+engine = IdentityEngine(
+    store=store,
+    tenant_authority=tenant_authority_runtime.reader,
+    config=identity_config,
+)
 
 app = FastAPI(title="IS-001 Identity / Tenant Context", version=COMPONENT_VERSION)
+
+AUTHENTICATION_DENIALS = frozenset(
+    {
+        DenyReason.MISSING_IDENTITY,
+        DenyReason.INVALID_IDENTITY,
+        DenyReason.UNKNOWN_IDENTITY,
+    }
+)
 
 
 class RecordOut(BaseModel):
@@ -46,9 +73,22 @@ def _token(authorization: str | None) -> str | None:
     return authorization
 
 
+def _status_for(reason: str) -> int:
+    """401 for authentication failures, 403 for every other denial.
+
+    An unmapped reason never falls through to a permissive status.
+    """
+    return 401 if reason in {denial.value for denial in AUTHENTICATION_DENIALS} else 403
+
+
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "component_id": COMPONENT_ID, "version": COMPONENT_VERSION}
+    return {
+        "status": "ok",
+        "component_id": COMPONENT_ID,
+        "version": COMPONENT_VERSION,
+        "platform_id": engine.current_platform_id,
+    }
 
 
 @app.get("/ready")
@@ -60,11 +100,13 @@ def ready() -> dict:
 def me(
     authorization: str | None = Header(default=None),
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
 ) -> IdentityOut:
     try:
         identity, _, _ = engine.authenticate(
             _token(authorization),
             request_id=x_request_id,
+            correlation_id=x_correlation_id,
         )
     except AccessDenied as exc:
         raise HTTPException(
@@ -85,6 +127,7 @@ def get_record(
     authorization: str | None = Header(default=None),
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
 ) -> RecordOut:
     try:
         record, obs, _ = engine.read_record(
@@ -92,11 +135,11 @@ def get_record(
             record_id,
             x_tenant_id,
             request_id=x_request_id,
+            correlation_id=x_correlation_id,
         )
     except AccessDenied as exc:
-        status = 401 if exc.reason.value.endswith("identity") or "identity" in exc.reason.value else 403
         raise HTTPException(
-            status_code=status,
+            status_code=_status_for(exc.reason.value),
             detail={"decision": "DENY", "reason": exc.reason.value, "request_id": x_request_id},
         ) from exc
     request.state.obs = obs
@@ -110,6 +153,7 @@ def put_record(
     authorization: str | None = Header(default=None),
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> RecordOut:
     claimed = payload.tenant_id or x_tenant_id
@@ -120,12 +164,12 @@ def put_record(
             payload.body,
             claimed,
             request_id=x_request_id,
+            correlation_id=x_correlation_id,
             idempotency_key=idempotency_key,
         )
     except AccessDenied as exc:
-        status = 401 if "identity" in exc.reason.value else 403
         raise HTTPException(
-            status_code=status,
+            status_code=_status_for(exc.reason.value),
             detail={"decision": "DENY", "reason": exc.reason.value},
         ) from exc
     return RecordOut(record_id=record.record_id, tenant_id=record.tenant_id, body=record.body)
