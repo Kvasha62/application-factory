@@ -22,6 +22,7 @@ import asyncio
 import json
 import secrets
 import threading
+import weakref
 from typing import Any, Callable, Mapping, Sequence
 
 from tenant_authority.errors import ContractViolation
@@ -201,6 +202,18 @@ def _revoke(handle: str) -> None:
         _CHANNELS.pop(handle, None)
     except AttributeError:  # pragma: no cover - interpreter is shutting down
         pass
+
+
+def revoke_on_death(owner: Any, handle: str) -> None:
+    """Close ``handle`` when its owner object dies; keeps no reference itself.
+
+    The channel belongs to the consumer object it was published to: while that
+    object lives the contract is executable, and once it is gone the table holds
+    nothing — so the provider never keeps an application alive on its own account.
+    ``atexit`` is off: a half-torn-down interpreter has nothing to revoke.
+    """
+    finalizer = weakref.finalize(owner, _revoke, handle)
+    finalizer.atexit = False
 
 
 def channel_count() -> int:

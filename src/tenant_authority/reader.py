@@ -7,14 +7,15 @@ service credential and a Platform Instance binding — and no callable, closure 
 cell: the component's ASGI application, deployment, engine, store, audit journal,
 idempotency table and mutation operations are therefore unreachable through any
 attribute of the client — including the cells of a closure, of which it now has
-none. Every read still crosses
-authentication, authorization, ownership validation and audit, because the
-channel executes the published contract inside the component.
+none. This module keeps no reference to the internal transport either, so importing
+the published surface does not open a door to the channel table or to the
+component's application. Every read still crosses authentication, authorization,
+ownership validation and audit, because the channel executes the published
+contract inside the component.
 """
 
 from __future__ import annotations
 
-import weakref
 from typing import Any, Mapping
 from urllib.parse import quote
 
@@ -30,10 +31,12 @@ from tenant_authority.errors import (
     TenantConflict,
     TenantNotFound,
 )
-# The transport is reached through the module, never through a re-exported name:
-# the published surface of this module stays two objects wide (client + builder),
-# and the channel table itself remains an attribute of an internal module.
-from tenant_authority import transport as _transport
+# BLOCKER-06: nothing of `tenant_authority.transport` is bound in this module —
+# not even privately. The transport owns the channel table and, through it, the
+# component's ASGI application, and it is declared internal by the contract
+# (`api.consumer_surface.internal_modules`); a module-level import would make the
+# published surface a door into that table. The executor is therefore resolved
+# when a read happens and is never stored here (see `_call_contract`).
 
 #: The published error classes are rebuilt from the status code and the
 #: machine-readable reason, so a consumer catches the same exception types the
@@ -173,7 +176,7 @@ class TenantAuthorityClient:
         if correlation_id:
             headers.append(("x-correlation-id", correlation_id))
 
-        status, payload = _transport.call_contract(self._channel, "GET", path, headers, None)
+        status, payload = _call_contract()(self._channel, "GET", path, headers, None)
         if 200 <= status < 300:
             return payload
         raise self._error(status, payload)
@@ -190,6 +193,20 @@ class TenantAuthorityClient:
         error_type = _ERROR_BY_REASON.get(reason, TenantAuthorityError)
         message = str(detail.get("reason") or reason.value)
         return error_type(reason, message, details=dict(detail))
+
+
+def _call_contract() -> Any:
+    """Resolve the internal contract executor at call time, keeping no reference.
+
+    A local import is not a shortcut around the boundary, it is the boundary: after
+    ``import tenant_authority.reader`` this module's namespace holds no module
+    object, no channel table, no transport class and no application — a consumer
+    that wants the transport has to import that internal module itself, which the
+    component contract forbids for a consuming component.
+    """
+    from tenant_authority.transport import call_contract
+
+    return call_contract
 
 
 def _as_reason(value: Any) -> DenyReason | None:
@@ -214,10 +231,11 @@ def build_client(
     application. A client dropped by its consumer revokes that handle, so the table
     is not a place where applications accumulate.
     """
-    channel = _transport.open_channel(app)
+    from tenant_authority.transport import open_channel, revoke_on_death
+
+    channel = open_channel(app)
     client = TenantAuthorityClient(channel, credential, expected_platform_id)
-    finalizer = weakref.finalize(client, _transport._revoke, channel)
-    # Nothing to run at interpreter exit: the process is going away anyway, and a
-    # half-torn-down module is not a place to reach for a dictionary.
-    finalizer.atexit = False
+    # The registration is revoked together with the client it was published to, so
+    # the provider-side table never accumulates applications.
+    revoke_on_death(client, channel)
     return client

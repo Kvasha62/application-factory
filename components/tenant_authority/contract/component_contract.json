@@ -55,6 +55,7 @@
         "values only: no store handle, audit journal, idempotency table, engine reference or mutation operation is reachable through the published surface",
         "the published client holds no callable: its state is a channel handle, a credential and a Platform Instance binding, so walking __closure__ and cell_contents of the client and of its class reaches neither the component's ASGI application nor its deployment, engine or store",
         "the ASGI application is never handed out: it stays behind the provider-side channel table, and a channel is revoked when the consumer drops the client",
+        "importing the published module binds no reference to tenant_authority.transport — its namespace holds no module object, no channel table and no transport type, so the consumer surface is not a door to the internal executor",
         "an unknown or revoked channel handle raises ContractViolation, so there is no permissive fallback and a handle cannot be guessed",
         "every read is executed by the same routing, service-identity authentication, permission check, Platform Instance ownership validation and audit code that serves an HTTP request",
         "the consuming service identity comes from the credential bound to the client and cannot be chosen by the caller",

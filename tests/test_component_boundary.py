@@ -19,6 +19,8 @@ import gc
 import importlib
 import importlib.util
 import inspect
+import types
+from pathlib import Path
 from collections.abc import Mapping
 
 import pytest
@@ -589,6 +591,124 @@ def test_no_consumer_facing_runtime_object_exists():
     assert callable(TenantAuthorityDeployment.publish)
     assert not hasattr(TenantAuthorityDeployment, "reader")
     assert not hasattr(TenantAuthorityDeployment, "publish_reader")
+
+
+# ------------------------------------------------- the published module namespace
+def _fresh_reader_module() -> types.ModuleType:
+    """`tenant_authority.reader` imported again into a namespace of its own."""
+    spec = importlib.util.spec_from_file_location(
+        "tenant_authority.reader.probe", Path(reader.__file__)
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_reader_namespace_holds_no_transport_module_table_or_application():
+    """BLOCKER-06: importing the consumer surface must not import the internals.
+
+    The published module used to bind the internal transport module (`_transport`),
+    which made `reader._transport._CHANNELS[...].._app` a working path to another
+    component's ASGI application. The namespace is checked as a graph, not as a
+    list of names: no module object, no table, no transport type, no application —
+    and the control below shows that a namespace which did point at the transport
+    would fail this test.
+    """
+    namespace = dict(vars(reader))
+    public = {name for name in namespace if not name.startswith("_")}
+    # What the module declares is exactly what a consumer may use — the declared
+    # surface is a client and a builder, nothing else.
+    assert set(reader.__all__) <= public, set(reader.__all__) - public
+    assert {"TenantAuthorityClient", "build_client"} <= set(reader.__all__)
+    # Nothing executor-shaped is declared for use: the published names are the
+    # client, its builder, and the contract's values and errors.
+    for name in reader.__all__:
+        lowered = name.lower()
+        assert "transport" not in lowered and "channel" not in lowered, name
+        assert not lowered.startswith("asgi"), name
+    for name, value in namespace.items():
+        assert not isinstance(value, types.ModuleType), f"{name} is a module"
+        assert not isinstance(
+            value, (FastAPI, TenantAuthorityDeployment, TenantAuthorityEngine, TenantAuthorityStore)
+        ), name
+        origin = str(getattr(value, "__module__", "") or "")
+        assert not origin.startswith("tenant_authority.transport"), (name, origin)
+        if isinstance(value, (list, tuple, set, frozenset, dict)):
+            members = list(value.values()) if isinstance(value, dict) else list(value)
+            for member in members + list(value):
+                assert not isinstance(member, types.ModuleType), name
+                assert not isinstance(member, transport.ASGIContractTransport), name
+                assert not isinstance(member, FastAPI), name
+
+    for door in ("_transport", "transport", "_CHANNELS", "ASGIContractTransport"):
+        assert not hasattr(reader, door), door
+    # A consumer cannot ask the published module for a channel either: opening,
+    # calling, closing and enumerating channels live on the internal module only.
+    for plumbing in ("open_channel", "call_contract", "close_channel", "channel_count"):
+        assert not hasattr(reader, plumbing), plumbing
+
+    # Control: the door really does live in the internal module, so the checks above
+    # are a statement about `reader`, not about an empty-by-construction namespace.
+    for door in ("_CHANNELS", "ASGIContractTransport", "asgi_transport", "call_contract"):
+        assert hasattr(transport, door), door
+    assert isinstance(vars(transport)["_CHANNELS"], dict)
+
+
+def test_a_fresh_import_of_the_reader_surface_leaves_no_path_to_the_application():
+    """The same proof on a pristine import, plus the channel table stays private.
+
+    The freshly imported module is exercised end to end: a client it publishes must
+    really read through the contract, so a namespace cleaned by removing
+    functionality could not pass.
+    """
+    probe = _fresh_reader_module()
+    deployment = build_deployment(DEMO_CONFIG, seed_demo=True, with_http=True)
+    app = deployment.contract_app()
+
+    assert not any(
+        isinstance(value, types.ModuleType) for value in vars(probe).values()
+    ), sorted(n for n, v in vars(probe).items() if isinstance(v, types.ModuleType))
+    for door in (
+        "_transport",
+        "transport",
+        "_CHANNELS",
+        "ASGIContractTransport",
+        "asgi_transport",
+    ):
+        assert not hasattr(probe, door), door
+
+    client = probe.build_client(
+        app, credential="svc-token-identity", expected_platform_id=PLATFORM_ID
+    )
+    assert client.lookup("ten_a").tenant_id == "ten_a"
+    assert client.lifecycle_decision("ten_a").permitted is True
+    assert {n for n in dir(client) if not n.startswith("_")} == {"lookup", "lifecycle_decision"}
+    assert all(
+        isinstance(getattr(client, name), (str, type(None)))
+        for name in client.__slots__
+        if not name.startswith("__")
+    )
+
+    # And the application is not reachable through anything the published module
+    # exposes — its classes, its functions, their closures or their containers.
+    reached: set[int] = set()
+    for value in vars(probe).values():
+        if isinstance(value, types.ModuleType):  # pragma: no cover - asserted above
+            continue
+        reached |= walk_state(value)
+    for label, target in (
+        ("contract application", app),
+        ("deployment", deployment),
+        ("engine", deployment.engine),
+        ("store", deployment.store),
+    ):
+        assert id(target) not in reached, f"{label} reachable from a fresh reader import"
+    # Control: the channel table leads to the application, so a namespace that binds
+    # it — which is what `reader` did before this fix — is caught by the walk above
+    # rather than by a lucky choice of names to look at.
+    table = types.SimpleNamespace(_CHANNELS=vars(transport)["_CHANNELS"])
+    assert id(app) in walk_state(table)
 
 
 def test_the_only_published_consumer_type_is_the_client():
