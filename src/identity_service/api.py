@@ -22,7 +22,6 @@ class RecordOut(BaseModel):
 
 
 class WriteIn(BaseModel):
-    record_id: str
     body: str
     tenant_id: str | None = Field(default=None)
 
@@ -58,11 +57,20 @@ def ready() -> dict:
 
 
 @app.get("/api/v1/me", response_model=IdentityOut)
-def me(authorization: str | None = Header(default=None)) -> IdentityOut:
+def me(
+    authorization: str | None = Header(default=None),
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+) -> IdentityOut:
     try:
-        identity = engine.verify_identity(_token(authorization))
+        identity, _, _ = engine.authenticate(
+            _token(authorization),
+            request_id=x_request_id,
+        )
     except AccessDenied as exc:
-        raise HTTPException(status_code=401, detail=exc.reason.value) from exc
+        raise HTTPException(
+            status_code=401,
+            detail={"decision": "DENY", "reason": exc.reason.value, "request_id": x_request_id},
+        ) from exc
     return IdentityOut(
         identity_id=identity.identity_id,
         kind=identity.kind.value,

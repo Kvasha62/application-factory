@@ -165,6 +165,38 @@ class IdentityEngine:
             request_id=request_id,
         )
 
+    def authenticate(
+        self,
+        token: str | None,
+        *,
+        action: str = "identity.authenticate",
+        request_id: str | None = None,
+    ) -> tuple[VerifiedIdentity, ObservabilityContext, AuditEvent]:
+        identity: VerifiedIdentity | None = None
+        obs = self.observability(identity=None, tenant=None, request_id=request_id)
+        try:
+            identity = self.verify_identity(token)
+            obs = self.observability(identity=identity, tenant=None, request_id=obs.request_id)
+        except AccessDenied as exc:
+            self.audit(
+                action=action,
+                decision=Decision.DENY,
+                reason=exc.reason.value,
+                identity=identity,
+                tenant=None,
+                obs=obs,
+            )
+            raise
+        event = self.audit(
+            action=action,
+            decision=Decision.ALLOW,
+            reason=None,
+            identity=identity,
+            tenant=None,
+            obs=obs,
+        )
+        return identity, obs, event
+
     def write_record(
         self,
         token: str | None,
@@ -175,12 +207,22 @@ class IdentityEngine:
         request_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> tuple[ProtectedRecord, ObservabilityContext, AuditEvent]:
+        identity, tenant, authz, obs = self._gate(
+            token, claimed_tenant_id, "records.write", "records.write", request_id
+        )
         if idempotency_key and idempotency_key in self.store.idempotency:
             existing_id = self.store.idempotency[idempotency_key]
             existing = self.store.records[existing_id]
-            identity = self.verify_identity(token)
-            tenant = self.resolve_tenant_context(identity, claimed_tenant_id)
-            obs = self.observability(identity=identity, tenant=tenant, request_id=request_id)
+            if existing.tenant_id != tenant.tenant_id:
+                self.audit(
+                    action="records.write",
+                    decision=Decision.DENY,
+                    reason=DenyReason.UNKNOWN_RESOURCE.value,
+                    identity=identity,
+                    tenant=tenant,
+                    obs=obs,
+                )
+                raise AccessDenied(DenyReason.UNKNOWN_RESOURCE)
             event = self.audit(
                 action="records.write",
                 decision=Decision.ALLOW,
@@ -188,13 +230,10 @@ class IdentityEngine:
                 identity=identity,
                 tenant=tenant,
                 obs=obs,
-                details={"record_id": existing.record_id},
+                details={"record_id": existing.record_id, "kind": authz.identity.kind.value},
             )
             return existing, obs, event
 
-        identity, tenant, authz, obs = self._gate(
-            token, claimed_tenant_id, "records.write", "records.write", request_id
-        )
         record = ProtectedRecord(record_id, tenant.tenant_id, body)
         self.store.records[record_id] = record
         if idempotency_key:

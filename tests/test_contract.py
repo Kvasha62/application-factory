@@ -27,6 +27,10 @@ def test_component_contract_minimum_fields():
     assert scopes["protected_records"] == "tenant-scoped"
     assert data["authz"]["authentication_does_not_imply_authorization"] is True
     assert data["authz"]["boundary"] == "data_owner"
+    assert data["events"]["published"] == []
+    assert data["events"]["status"] == "declared_only"
+    assert data["data_export_cdc"]["streams"] == []
+    assert data["data_export_cdc"]["status"] == "declared_only"
 
 
 def test_openapi_exists():

@@ -17,6 +17,19 @@ def test_me_human():
     assert r.json()["kind"] == "HUMAN"
 
 
+def test_me_missing_identity_is_audited():
+    from identity_service.api import engine as api_engine
+
+    before = len(api_engine.store.audit)
+    r = client.get("/api/v1/me")
+    assert r.status_code == 401
+    assert r.json()["detail"]["reason"] == "missing_identity"
+    assert any(
+        ev.action == "identity.authenticate" and ev.reason == "missing_identity"
+        for ev in api_engine.store.audit[before:]
+    )
+
+
 def test_http_mismatch():
     r = client.get(
         "/api/v1/records/rec_a1",

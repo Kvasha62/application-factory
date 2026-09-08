@@ -66,6 +66,16 @@ def test_insufficient_authorization_deny():
     assert e.store.audit[-1].reason == DenyReason.INSUFFICIENT_AUTHORIZATION.value
 
 
+def test_idempotent_replay_requires_write_authorization():
+    e = engine()
+    e.write_record("token-human-a", "rec_new", "once", "ten_a", idempotency_key="ik-deny")
+    with pytest.raises(AccessDenied) as exc:
+        e.write_record("token-service", "rec_new", "twice", "ten_a", idempotency_key="ik-deny")
+    assert exc.value.reason is DenyReason.INSUFFICIENT_AUTHORIZATION
+    assert e.store.records["rec_new"].body == "once"
+    assert e.store.audit[-1].decision is Decision.DENY
+
+
 def test_authn_without_authz_does_not_grant_access():
     e = engine()
     ident = e.verify_identity("token-service")

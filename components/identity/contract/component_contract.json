@@ -10,30 +10,17 @@
   },
   "events": {
     "envelope": "CloudEvents",
-    "published": [
-      {
-        "type": "identity.access.denied",
-        "version": "v1",
-        "tenant_context": true
-      },
-      {
-        "type": "identity.access.granted",
-        "version": "v1",
-        "tenant_context": true
-      }
-    ],
-    "consumed": []
+    "status": "declared_only",
+    "published": [],
+    "consumed": [],
+    "note": "IS-001 does not publish inter-component events. Audit is an internal immutable log owned by identity, not a public event contract."
   },
   "data_export_cdc": {
-    "version": "v1",
-    "compatibility_policy": "additive-minor",
-    "streams": [
-      {
-        "name": "identity.audit",
-        "scope": "platform-scoped",
-        "description": "Security-sensitive audit trail; no foreign OLTP access."
-      }
-    ]
+    "status": "declared_only",
+    "version": null,
+    "compatibility_policy": null,
+    "streams": [],
+    "note": "No CDC/export stream is implemented in IS-001. Audit remains internal owned data."
   },
   "ui": {
     "kind": "none",

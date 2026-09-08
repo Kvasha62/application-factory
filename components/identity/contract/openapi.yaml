@@ -65,10 +65,8 @@ paths:
           application/json:
             schema:
               type: object
-              required: [record_id, body]
+              required: [body]
               properties:
-                record_id:
-                  type: string
                 body:
                   type: string
                 tenant_id:
