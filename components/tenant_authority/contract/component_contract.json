@@ -36,20 +36,34 @@
       "module": "tenant_authority.reader",
       "published_as": "TenantAuthorityClient",
       "published_by": "tenant_authority.deployment.TenantAuthorityDeployment.publish",
-      "transport": "tenant_authority.transport.asgi_transport — the published HTTP contract executed in process (ARCHITECTURE.md §1.1 interaction mode API, Level 0)",
+      "transport": "tenant_authority.transport.open_channel + tenant_authority.transport.call_contract — the published HTTP contract executed in process over an opaque channel handle (ARCHITECTURE.md §1.1 interaction mode API, Level 0)",
+      "transport_handles": {
+        "open": "tenant_authority.transport.open_channel",
+        "call": "tenant_authority.transport.call_contract",
+        "close": "tenant_authority.transport.close_channel"
+      },
+      "consumer_state": [
+        "opaque contract channel handle (str)",
+        "service credential (str)",
+        "Platform Instance binding (str | None)"
+      ],
       "operations": ["lookup", "lifecycle_decision"],
       "returns": ["tenant_authority.contracts.TenantSnapshot", "tenant_authority.contracts.LifecycleDecision"],
       "errors": ["tenant_authority.errors.TenantAuthorityError and its published subclasses, reconstructed from status code and machine-readable reason",
         "tenant_authority.errors.ContractViolation — raised when the component answers outside its contract; a consumer must fail closed"],
       "guarantees": [
         "values only: no store handle, audit journal, idempotency table, engine reference or mutation operation is reachable through the published surface",
+        "the published client holds no callable: its state is a channel handle, a credential and a Platform Instance binding, so walking __closure__ and cell_contents of the client and of its class reaches neither the component's ASGI application nor its deployment, engine or store",
+        "the ASGI application is never handed out: it stays behind the provider-side channel table, and a channel is revoked when the consumer drops the client",
+        "an unknown or revoked channel handle raises ContractViolation, so there is no permissive fallback and a handle cannot be guessed",
         "every read is executed by the same routing, service-identity authentication, permission check, Platform Instance ownership validation and audit code that serves an HTTP request",
         "the consuming service identity comes from the credential bound to the client and cannot be chosen by the caller",
         "an answer outside the published contract raises tenant_authority.errors.ContractViolation, so a consumer fails closed instead of assuming that the Tenant is servable"
       ],
       "composition_root_only": [
         "tenant_authority.deployment (TenantAuthorityDeployment: engine, store, configuration)",
-        "the contract application itself (the ASGI application) — a consumer component must not own or re-export it"
+        "the contract application itself (the ASGI application) — a consumer component must not own or re-export it",
+        "the contract channel table tenant_authority.transport._CHANNELS — a handle-to-application mapping owned by the component; a consumer receives a handle and never a transport object"
       ],
       "internal_modules": [
         "tenant_authority.engine",
@@ -61,7 +75,7 @@
         "tenant_authority.deployment",
         "tenant_authority.transport"
       ],
-      "note": "The deployment object is composition-internal: it assembles engine, store and contract application for the composition root and for this component's own tests and is never handed to a consumer. There is no consumer-facing runtime API and no second Tenant Context mechanism."
+      "note": "The deployment object is composition-internal: it assembles engine, store and contract application for the composition root and for this component's own tests and is never handed to a consumer. There is no consumer-facing runtime API and no second Tenant Context mechanism. Publishing is a two-step act owned by the provider: the contract application is registered with tenant_authority.transport.open_channel, and the consumer receives the resulting handle wrapped in the client — never the application, never the transport."
     },
     "denial_semantics": {
       "foreign_tenant_response": "answered as tenant_not_found at the transport level; the precise reason remains in the audit journal",

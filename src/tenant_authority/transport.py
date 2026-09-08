@@ -7,16 +7,20 @@ request is executed against the component's ASGI application and the response is
 returned as plain data.
 
 Values cross the boundary — never live objects. The transport returns
-``(status, payload)`` only, so a consumer cannot reach the engine, the registry
-store, the audit journal, the idempotency table or any mutation operation
-through it. Requests run through the same routing, validation, service-identity
-authentication, authorization and audit code as network requests would.
+``(status, payload)`` only, and the consumer holds nothing but an opaque channel
+handle: the application itself stays on the provider side, in this module's
+private table. So a consumer cannot reach the engine, the registry store, the
+audit journal, the idempotency table, any mutation operation or the component's
+ASGI application through it. Requests run through the same routing, validation,
+service-identity authentication, authorization and audit code as network
+requests would.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 import threading
 from typing import Any, Callable, Mapping, Sequence
 
@@ -145,12 +149,75 @@ class ASGIContractTransport:
         return status, payload
 
 
-def asgi_transport(app: Any) -> ContractTransport:
-    """Published factory of the Level 0 contract transport for this component.
+#: Provider-side channel table: handle -> live transport. A consumer is handed the
+#: handle (a string) and never the transport, so no attribute path from the
+#: published client leads to the application, the deployment, the engine or the
+#: store. ``tenant_authority.transport`` is an internal module of this component
+#: (see ``api.consumer_surface.internal_modules`` in the component contract), and
+#: a consumer component that imported it would break its own import guard.
+_CHANNELS: dict[str, ASGIContractTransport] = {}
 
-    The result is a plain callable: it carries no attributes of its own, so a
-    consumer holding it gains no attribute path to the application behind it —
-    only ``(method, path, headers, body) -> (status, payload)``.
+
+def open_channel(app: Any) -> str:
+    """Register one contract application and return its opaque handle.
+
+    The handle is a value: unguessable, not chosen or enumerable by a consumer,
+    and useless on its own — every request made through it is authenticated,
+    permission-checked, ownership-checked and audited by the application behind it
+    exactly as a network request would be.
+    """
+    if not callable(app):
+        raise TypeError("a contract channel needs the component's ASGI application")
+    handle = f"tac-{secrets.token_urlsafe(16)}"
+    _CHANNELS[handle] = ASGIContractTransport(app)
+    return handle
+
+
+def call_contract(
+    handle: str,
+    method: str,
+    path: str,
+    headers: Sequence[tuple[str, str]] = (),
+    body: "Mapping[str, Any] | None" = None,
+) -> tuple[int, Mapping[str, Any]]:
+    """Execute one contract request over a handle; data in, data out.
+
+    An unknown or revoked handle is a closed channel, not a permissive default.
+    """
+    channel = _CHANNELS.get(handle) if isinstance(handle, str) else None
+    if channel is None:
+        raise ContractViolation("the tenant authority contract channel is closed")
+    return channel(method, path, headers, body)
+
+
+def close_channel(handle: str) -> None:
+    """Revoke one channel; later requests through it fail closed."""
+    _CHANNELS.pop(handle, None)
+
+
+def _revoke(handle: str) -> None:
+    """Revoke on behalf of a finalizer: a no-op once teardown has cleared globals."""
+    try:
+        _CHANNELS.pop(handle, None)
+    except AttributeError:  # pragma: no cover - interpreter is shutting down
+        pass
+
+
+def channel_count() -> int:
+    """Number of open channels — introspection for lifecycle tests, not a lookup.
+
+    Handles are not returned: a count cannot be turned into a path to an
+    application, and a consumer has nothing legitimate to enumerate here.
+    """
+    return len(_CHANNELS)
+
+
+def asgi_transport(app: Any) -> ContractTransport:
+    """Direct transport of this component: internal helper for tests and tooling.
+
+    It returns a callable bound to ``app``, which is exactly why it is not the
+    published path — a consumer receives a channel handle from :func:`open_channel`
+    instead, so nothing it holds references the application.
     """
     transport = ASGIContractTransport(app)
 

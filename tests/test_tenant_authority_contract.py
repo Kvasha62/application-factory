@@ -191,16 +191,26 @@ def test_declared_consumer_surface_is_the_real_published_surface():
         type(client.lifecycle_decision("ten_a")).__name__,
     }
 
-    # The declared transport executes the published contract and returns data only.
-    transport_name = surface["transport"].split(" ")[0]
-    transport_module = importlib.import_module(transport_name.rpartition(".")[0])
-    transport_call = getattr(transport_module, transport_name.rpartition(".")[2])
-    status, payload = transport_call(deployment.contract_app())(
-        "GET",
-        "/api/v1/tenants/ten_a",
-        [("authorization", "Bearer svc-token-identity")],
-        None,
-    )
+    # The declared transport is the real one: opening a channel, calling the
+    # published contract through it and revoking it are the declared operations,
+    # and a call returns data only.
+    handles = surface["transport_handles"]
+    transport_module = importlib.import_module(handles["open"].rpartition(".")[0])
+    open_channel = getattr(transport_module, handles["open"].rpartition(".")[2])
+    call_contract = getattr(transport_module, handles["call"].rpartition(".")[2])
+    close_channel = getattr(transport_module, handles["close"].rpartition(".")[2])
+    channel = open_channel(deployment.contract_app())
+    assert isinstance(channel, str) and channel
+    try:
+        status, payload = call_contract(
+            channel,
+            "GET",
+            "/api/v1/tenants/ten_a",
+            [("authorization", "Bearer svc-token-identity")],
+            None,
+        )
+    finally:
+        close_channel(channel)
     assert status == 200
     assert payload["tenant_id"] == "ten_a"
     assert payload["state_source"] == "tenant_authority"
@@ -212,6 +222,22 @@ def test_declared_consumer_surface_is_the_real_published_surface():
         "updated_at",
         "state_source",
     }
+    # A revoked channel is refused, not answered: the declared fail-closed
+    # guarantee holds for the transport the published client is built on.
+    with pytest.raises(transport_module.ContractViolation, match="closed"):
+        call_contract(channel, "GET", "/api/v1/tenants/ten_a", [], None)
+
+    # The declared consumer state is what a published client really carries: one
+    # value per declared entry, all of them strings or None — no transport object,
+    # hence no closure that could lead back to the application.
+    declared_state = surface["consumer_state"]
+    own_slots = [name for name in client_class.__slots__ if not name.startswith("__")]
+    assert len(declared_state) == len(own_slots)
+    published = deployment.publish(credential="svc-token-identity")
+    assert all(
+        isinstance(getattr(published, name), (str, type(None))) for name in own_slots
+    )
+    assert all("(str" in entry for entry in declared_state), declared_state
 
     # The published module re-exports none of the declared internal modules, and
     # every declared internal module exists (nothing is declared that was removed).

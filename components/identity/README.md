@@ -31,8 +31,10 @@ Identity, Tenant Context и data-owner authorization.
   контракт Tenant Authority (`tenant_authority.reader.TenantAuthorityClient`:
   `lookup`, `lifecycle_decision`) и проверяет их на своей границе авторизации;
 - получает от композиционного корня только value-only клиент над контрактом:
-  engine, хранилище, журнал аудита и операции мутаций Tenant Authority identity
-  не видит и не может вызвать;
+  engine, хранилище, журнал аудита, операции мутаций и ASGI-приложение Tenant
+  Authority identity не видит и не может вызвать — в состоянии клиента лежат три
+  значения (дескриптор канала, credential, привязка Platform Instance), а не
+  транспортный объект, так что и обход замыканий ни к чему не ведёт;
 - публикует из `identity_service.api` только собственный API: `create_app(engine)`
   и маршруты identity (набор имён зафиксирован в `__all__` модуля). Сборка Level 0 (deployment Tenant Authority, клиент и оба
   HTTP-приложения) выполняется композиционным корнем либо тест-фикстурой —

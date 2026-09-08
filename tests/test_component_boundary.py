@@ -19,6 +19,8 @@ import gc
 import importlib
 import importlib.util
 import inspect
+from collections.abc import Mapping
+
 import pytest
 from fastapi import FastAPI
 
@@ -33,6 +35,9 @@ from tenant_authority.store import TenantAuthorityStore
 from tests.conftest import DEMO_CONFIG, PLATFORM_ID, monolith
 
 CLIENT = TenantAuthorityClient
+
+#: Dunder attributes that belong to an object's reachable state, not to metadata.
+STATE_DUNDERS = {"__closure__", "__func__", "__self__", "__defaults__", "__dict__"}
 
 #: Names that belong to the component's internals and must not resolve on anything
 #: a consumer holds — neither under their own name nor under a private alias.
@@ -83,7 +88,61 @@ def published_authority() -> tuple[TenantAuthorityDeployment, TenantAuthorityCli
 
 
 def client_state(client: TenantAuthorityClient) -> list[object]:
-    return [getattr(client, name) for name in client.__slots__]
+    """Every value the published object carries: its own slots, dunders excluded."""
+    return [getattr(client, name) for name in client.__slots__ if not name.startswith("__")]
+
+
+#: Types whose instances a consumer must never reach through the published client.
+INTERNAL_TYPES = (
+    FastAPI,
+    TenantAuthorityDeployment,
+    TenantAuthorityEngine,
+    TenantAuthorityStore,
+    transport.ASGIContractTransport,
+)
+
+
+def walk_state(root: object, *, depth: int = 5) -> set[int]:
+    """ids of everything reachable from ``root`` through attributes and closures.
+
+    Slots, dict/typing members, bound objects, containers, ``__closure__`` cells
+    (``cell_contents``), ``__func__`` and ``__self__`` are all followed. Module
+    namespaces are deliberately not traversed: any code can import any module, and
+    that door is shut by the consuming component's import guard plus the contract's
+    ``internal_modules``, not by this object graph.
+    """
+    seen: set[int] = set()
+    frontier: list[tuple[int, object]] = [(0, root)]
+    while frontier:
+        level, value = frontier.pop(0)
+        if level > depth or id(value) in seen:
+            continue
+        seen.add(id(value))
+        if isinstance(value, (str, bytes, int, float, complex, type(None))):
+            continue
+        members: list[object] = []
+        for name in dir(value):
+            if name.startswith("__") and name not in STATE_DUNDERS:
+                continue
+            try:
+                members.append(getattr(value, name))
+            except Exception:  # a broken attribute is no door
+                continue
+        for cell in getattr(value, "__closure__", None) or ():
+            try:
+                members.append(cell.cell_contents)
+            except ValueError:  # an empty cell carries nothing
+                continue
+        if isinstance(value, Mapping) or isinstance(value, (list, tuple, set, frozenset)):
+            if isinstance(value, Mapping):
+                members.extend(list(value.keys()) + list(value.values()))
+            else:
+                members.extend(value)
+        for member in members:
+            if isinstance(member, type) and member is not type(None):
+                continue
+            frontier.append((level + 1, member))
+    return seen
 
 
 def registry_state(deployment: TenantAuthorityDeployment) -> dict:
@@ -98,6 +157,19 @@ def registry_state(deployment: TenantAuthorityDeployment) -> dict:
         "services": dict(store.services),
         "service_tokens": dict(store.service_tokens),
     }
+
+
+def published_values(root: object) -> list[object]:
+    """Every attribute value on the published object and on its class."""
+    values: list[object] = []
+    for name in dir(root):
+        if name.startswith("__") and name != "__closure__":
+            continue
+        try:
+            values.append(getattr(root, name))
+        except Exception:  # pragma: no cover - a broken attribute is no door
+            continue
+    return values
 
 
 # --------------------------------------------------------------- the published surface
@@ -146,7 +218,17 @@ def test_client_object_has_no_writable_state_at_all():
     _, client = published_authority()
 
     assert not hasattr(client, "__dict__")
-    assert set(client.__slots__) == {"_transport", "_credential", "_expected_platform_id"}
+    # BLOCKER-05: `_transport` (an application-capturing closure) is gone; a handle
+    # is all the client carries. `__weakref__` lets the provider revoke the channel
+    # when the consumer drops the client, and points at the client alone.
+    assert set(client.__slots__) == {
+        "_channel",
+        "_credential",
+        "_expected_platform_id",
+        "__weakref__",
+    }
+    reference = getattr(client, "__weakref__", None)
+    assert reference is None or reference() is client
     with pytest.raises(AttributeError):
         client.store = object()  # type: ignore[attr-defined]
     with pytest.raises(AttributeError):
@@ -167,60 +249,146 @@ def test_no_attribute_of_the_client_names_an_internal():
             CLIENT(**{smuggled: object()})  # type: ignore[call-arg]
 
 
-def test_client_state_holds_values_and_one_opaque_callable():
-    _, client = published_authority()
+def test_client_state_holds_values_only_and_nothing_captures_the_application():
+    """BLOCKER-05: the published client carries values, never a bound transport.
+
+    The client used to hold the closure produced by ``asgi_transport(app)``; the
+    component's application sat one ``__closure__[0].cell_contents._app`` away, so
+    the boundary was a naming convention again. Its state is three strings now, and
+    a string has no attributes to walk.
+    """
+    deployment, client = published_authority()
+    app = deployment.contract_app()
     values = client_state(client)
 
+    assert len(values) == 3
     for value in values:
-        assert isinstance(value, (str, type(None))) or inspect.isroutine(value), type(value)
-        assert not isinstance(value, (TenantAuthorityEngine, TenantAuthorityStore))
-        assert not isinstance(value, TenantAuthorityDeployment)
-    assert not any(hasattr(value, "__self__") for value in values)
-    # The transport is the published factory's product and carries no attributes
-    # of its own beyond the call itself.
-    callables = [value for value in values if callable(value)]
-    assert len(callables) == 1
-    assert {n for n in dir(callables[0]) if not n.startswith("__")} == set()
+        assert isinstance(value, str), type(value)
+        assert not callable(value), value
+        assert not hasattr(value, "__closure__")
+        assert not hasattr(value, "__self__")
+        assert not hasattr(value, "__func__")
+        assert not hasattr(value, "cell_contents")
+        assert value is not app
+    assert all(not isinstance(value, INTERNAL_TYPES) for value in values)
+
+
+def test_no_closure_or_cell_path_leads_to_the_application_or_deployment():
+    """The leak path itself: ``__closure__`` and ``cell_contents`` are boundary too.
+
+    Everything the consumer can hold — the client instance, its slots, its class and
+    every attribute of that class — is expanded through closures, cells, bound
+    objects and containers. Neither the component's ASGI application nor its
+    deployment, engine or store is reachable by identity, and no value the client
+    returns drags one along either.
+    """
+    deployment, client = published_authority()
+    app = deployment.contract_app()
+    forbidden_ids = {
+        "contract application": id(app),
+        "deployment": id(deployment),
+        "engine": id(deployment.engine),
+        "store": id(deployment.store),
+    }
+    # The walk detects what it claims to detect: rooted at the transport object the
+    # client used to hold, the application is reachable — this is the path that had
+    # to be removed, and removing it is what makes the assertions above mean
+    # something rather than being an artefact of a blind traversal.
+    assert forbidden_ids["contract application"] in walk_state(transport.asgi_transport(app))
+    for root_name, root in (("client", client), ("published class", CLIENT)):
+        reached = walk_state(root)
+        for label, target in forbidden_ids.items():
+            assert target not in reached, f"{label} reachable from the {root_name}"
+    for root in (client, CLIENT):
+        for value in published_values(root):
+            assert not isinstance(value, INTERNAL_TYPES), type(value).__name__
+    # Read results are values of the published contract, not provider objects.
+    for snapshot in (client.lookup("ten_a"), client.lifecycle_decision("ten_a")):
+        assert not isinstance(snapshot, INTERNAL_TYPES)
+        for field in dataclasses.fields(snapshot):
+            value = getattr(snapshot, field.name)
+            assert not isinstance(value, INTERNAL_TYPES), field.name
+            assert id(value) not in set(forbidden_ids.values()), field.name
+    # And nothing on the client is a function object any more, so there is no
+    # closure to inspect in the first place.
+    assert not any(callable(value) for value in client_state(client))
+    assert not any(getattr(value, "__closure__", None) for value in published_values(CLIENT))
 
 
 def test_internals_are_unreachable_through_every_attribute_path():
-    """Walk every non-dunder attribute path reachable from the consumer object."""
+    """Walk every attribute path the consumer object exposes — closure cells included.
+
+    Before BLOCKER-05 this walk stopped at the client's single callable and treated
+    routines as opaque, which is exactly where the component's application hid: one
+    `__closure__[0].cell_contents._app` further. Private slots, `__closure__` cells,
+    bound objects and container members are traversed now, so a leak cannot take
+    refuge behind a leading underscore or behind a function object.
+    """
     deployment, client = published_authority()
-    internal_types = (TenantAuthorityEngine, TenantAuthorityStore, TenantAuthorityDeployment)
-    owned_types = (TenantRecord, AuditEvent)
+    internals = (
+        FastAPI,
+        TenantAuthorityDeployment,
+        TenantAuthorityEngine,
+        TenantAuthorityStore,
+        transport.ASGIContractTransport,
+    )
+    owned = (TenantRecord, AuditEvent)
+    targets = {
+        "contract application": deployment.contract_app(),
+        "deployment": deployment,
+        "engine": deployment.engine,
+        "store": deployment.store,
+    }
 
     frontier: list[tuple[tuple[str, ...], object]] = [
         ((), value) for value in client_state(client)
+    ]
+    frontier += [
+        ((f"<{name}>",), getattr(CLIENT, name))
+        for name in dir(CLIENT)
+        if not name.startswith("__")
     ]
     visited = 0
     while frontier:
         path, value = frontier.pop(0)
         visited += 1
-        assert not isinstance(value, internal_types), f"{type(value).__name__} at {path}"
-        assert not isinstance(value, owned_types), f"{type(value).__name__} at {path}"
-        if len(path) >= 3 or isinstance(value, (str, int, float, bytes, type(None), type)):
+        assert not isinstance(value, internals), f"{type(value).__name__} at {path}"
+        assert not isinstance(value, owned), f"{type(value).__name__} at {path}"
+        for label, target in targets.items():
+            assert value is not target, f"{label} reachable at {path}"
+        if len(path) >= 5 or isinstance(
+            value, (str, bytes, int, float, complex, type(None), type)
+        ):
             continue
+        children: list[tuple[tuple[str, ...], object]] = []
         for name in dir(value):
-            if name.startswith("_"):
+            if name.startswith("_") and name not in STATE_DUNDERS:
                 continue
             try:
-                child = getattr(value, name)
+                children.append((path + (name,), getattr(value, name)))
             except Exception:  # pragma: no cover - a broken attribute is no door
                 continue
-            assert name not in {
-                "tenants",
-                "audit",
-                "idempotency",
-                "service_tokens",
-                "transitions",
-            }, (path, name)
-            if isinstance(child, (TenantAuthorityEngine, TenantAuthorityStore)):
-                pytest.fail(f"internal reachable at {path + (name,)}")
-            if not inspect.isroutine(child) and not isinstance(
-                child, (str, int, float, bytes, list, dict, tuple, set, type(None))
-            ):
-                frontier.append((path + (name,), child))
-    assert visited > 0
+        for index, cell in enumerate(getattr(value, "__closure__", None) or ()):
+            try:
+                children.append((path + (f"__closure__[{index}]",), cell.cell_contents))
+            except ValueError:  # an empty cell carries nothing
+                continue
+        if isinstance(value, Mapping):
+            children += [(path + (f"[{key!r}]",), item) for key, item in value.items()]
+            children += [(path + (f"key[{key!r}]",), key) for key in value]
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            children += [
+                (path + (f"[{index}]",), item) for index, item in enumerate(value)
+            ]
+        for child_path, child in children:
+            if child is type(None):
+                continue
+            if isinstance(child, type):
+                continue
+            if isinstance(child, internals):
+                pytest.fail(f"{type(child).__name__} reachable at {child_path}")
+            frontier.append((child_path, child))
+    assert visited > 20
 
 
 def test_contract_reads_work_from_inside_a_running_event_loop():
@@ -284,6 +452,30 @@ def test_values_cross_the_boundary_not_live_records():
     with pytest.raises(dataclasses.FrozenInstanceError):
         decision.permitted = True  # type: ignore[misc]
     assert decision.permitted is False and decision.reason == "tenant_suspended"
+
+
+def test_a_dropped_client_revokes_its_channel_on_the_provider_side():
+    """The provider-side channel table does not accumulate applications.
+
+    Publishing keeps the application alive exactly as long as the consumer holds a
+    client: the handle in the client's state is the only thing that crosses the
+    boundary, and when the client is gone the channel is closed, so no leaked
+    reference to another component's ASGI application survives the hand-off.
+    """
+    before = transport.channel_count()
+    deployment, client = published_authority()
+    assert transport.channel_count() == before + 1
+
+    handle = client_state(client)[0]
+    assert isinstance(handle, str) and handle
+    del client
+    gc.collect()
+
+    assert transport.channel_count() == before
+    with pytest.raises(transport.ContractViolation, match="closed"):
+        transport.call_contract(handle, "GET", "/api/v1/tenants/ten_a", (), None)
+    # The deployment is untouched by the revocation: it owns the application.
+    assert deployment.store.tenants["ten_a"].state is contracts.TenantState.ACTIVE
 
 
 def test_client_keeps_working_after_the_composition_root_is_gone():
@@ -411,9 +603,44 @@ def test_the_only_published_consumer_type_is_the_client():
         assert internal not in exported, internal
     assert not hasattr(reader, "build_client_from_engine")
     assert not hasattr(reader, "TenantAuthorityReader")
-    # A client cannot be constructed without a credential...
+    # The channel machinery is not re-exported by the published module either: a
+    # consumer that holds the client holds values, and nothing that opens channels.
+    for plumbing in (
+        "open_channel",
+        "call_contract",
+        "close_channel",
+        "asgi_transport",
+        "ASGIContractTransport",
+        "ContractTransport",
+        "transport",
+    ):
+        assert not hasattr(reader, plumbing), plumbing
+    # The published module holds no live object of the component at all: no
+    # application, deployment, engine or store — not even inside a container.
+    for name, value in vars(reader).items():
+        assert not isinstance(
+            value, (FastAPI, TenantAuthorityDeployment, TenantAuthorityEngine, TenantAuthorityStore)
+        ), name
+        if isinstance(value, (list, tuple, set, frozenset, dict)):
+            container = list(value.values()) if isinstance(value, dict) else list(value)
+            for member in list(value) + container:
+                assert not isinstance(
+                    member,
+                    (
+                        FastAPI,
+                        TenantAuthorityDeployment,
+                        TenantAuthorityEngine,
+                        TenantAuthorityStore,
+                    ),
+                ), (name, member)
+    # A client cannot be constructed without a credential, and a handle must be a
+    # handle: an object that merely looks like the old transport is rejected.
     with pytest.raises(ValueError):
         CLIENT(transport.asgi_transport(object()), "")
+    with pytest.raises(ValueError):
+        CLIENT(42, "svc-token-identity")
+    with pytest.raises(ValueError):
+        CLIENT("", "svc-token-identity")
     # `build_client` speaks to the published contract application. Handing it a
     # component internal instead of the app yields no access at all: the boundary
     # fails closed rather than adapting to whatever object it was given.
@@ -506,13 +733,22 @@ def test_composed_identity_application_carries_no_tenant_authority_object():
     assert not hasattr(identity_app.state, "tenant_authority")
     assert not hasattr(identity_app.state, "tenant_authority_deployment")
 
+    # The client is the one Tenant Authority object identity is allowed to hold;
+    # anything else belonging to that component — its application, deployment,
+    # engine, store or transport object — is not.
     forbidden_types = (
         TenantAuthorityEngine,
         TenantAuthorityStore,
         TenantAuthorityDeployment,
-        TenantAuthorityClient,
+        transport.ASGIContractTransport,
     )
-    internal_app_names = {id(instance.authority_app), id(instance.authority)}
+    authority_objects = {
+        "contract application": instance.authority_app,
+        "deployment": instance.authority,
+        "engine": instance.authority.engine,
+        "store": instance.authority.store,
+    }
+    internal_app_names = {id(value) for value in authority_objects.values()}
 
     frontier: list[tuple[tuple[str, ...], object]] = [
         ((), value) for value in vars(identity_app).values()
@@ -523,16 +759,73 @@ def test_composed_identity_application_carries_no_tenant_authority_object():
         walked += 1
         assert not isinstance(value, forbidden_types), f"{type(value).__name__} at {path}"
         assert id(value) not in internal_app_names, f"authority handle at {path}"
+        # No ASGI application of another component is reachable, and the published
+        # client stays exactly the published client: two reads, value-only state.
+        assert not (isinstance(value, FastAPI) and value is not identity_app), (
+            f"foreign ASGI application at {path}"
+        )
+        if isinstance(value, TenantAuthorityClient):
+            assert {n for n in dir(value) if not n.startswith("_")} == {
+                "lookup",
+                "lifecycle_decision",
+            }, path
+            assert all(
+                isinstance(getattr(value, name), (str, type(None)))
+                for name in value.__slots__
+                if not name.startswith("__")
+            ), path
         if len(path) >= 2:
             continue
-        for name, child in list(vars(value).items()) if hasattr(value, "__dict__") else []:
-            if name.startswith("_"):
+        # Private state is walked too: a `_`-prefixed attribute is where a leaked
+        # handle hides, and a closure cell is where it is stored.
+        own = vars(value) if hasattr(value, "__dict__") else {}
+        members: list[tuple[str, object]] = list(own.items())
+        for name in getattr(type(value), "__slots__", ()) or ():
+            try:
+                members.append((name, getattr(value, name)))
+            except AttributeError:  # an unset slot carries nothing
                 continue
+        for name, child in members:
             assert not hasattr(child, "service_tokens"), path + (name,)
             assert not hasattr(child, "create_tenant"), path + (name,)
             assert not hasattr(child, "transition_tenant"), path + (name,)
+            if name.startswith("__") and name not in STATE_DUNDERS:
+                continue
+            if isinstance(child, type) or isinstance(
+                child, (str, bytes, int, float, complex, type(None))
+            ):
+                continue
             frontier.append((path + (name,), child))
+        for index, cell in enumerate(getattr(value, "__closure__", None) or ()):
+            try:
+                contents = cell.cell_contents
+            except ValueError:
+                continue
+            if isinstance(contents, forbidden_types) or id(contents) in internal_app_names:
+                pytest.fail(f"authority reachable at {path + (f'__closure__[{index}]',)}")
+            frontier.append((path + (f"__closure__[{index}]",), contents))
     assert walked > 0
+
+    # Where a leak would really live: every published route closes over the engine,
+    # so the closures of the handlers are unpacked and searched cell by cell. The
+    # walk does reach the composed state — the published client is inside it, and
+    # that is the one allowed handle — and it finds nothing else of the authority.
+    endpoints = [
+        route.endpoint for route in identity_app.routes if hasattr(route, "endpoint")
+    ]
+    client_reached = 0
+    for endpoint in endpoints:
+        reached = walk_state(endpoint)
+        if id(instance.tenant_authority_client) in reached:
+            client_reached += 1
+        for label, target in authority_objects.items():
+            assert id(target) not in reached, f"{label} reachable from {endpoint.__name__}"
+    assert client_reached >= 1, "the walk must reach the composed state to prove anything"
+
+    # And from the handle identity holds, the same is true one level further in.
+    reached = walk_state(instance.identity.tenant_authority)
+    for label, target in authority_objects.items():
+        assert id(target) not in reached, label
 
     # Routes stay inside identity: no Tenant Authority operation is served here.
     identity_paths = {r.path for r in identity_app.routes if hasattr(r, "path")}
@@ -601,11 +894,30 @@ def test_a_broken_contract_answer_fails_closed_instead_of_granting_access():
     with pytest.raises(transport.ContractViolation, match="non-JSON"):
         transport.asgi_transport(not_json)("GET", "/api/v1/tenants/ten_a", [], None)
 
-    client = CLIENT(transport.asgi_transport(silent), "svc-token-identity")
-    with pytest.raises(transport.ContractViolation):
-        client.lookup("ten_a")
-    with pytest.raises(transport.ContractViolation):
-        client.lifecycle_decision("ten_a")
+    # The same faults, reached through the published client instead of a transport
+    # object: a closed channel and a non-answer both deny access, never allow it.
+    broken = transport.open_channel(not_json)
+    silent_channel = transport.open_channel(silent)
+    try:
+        with pytest.raises(transport.ContractViolation, match="non-JSON"):
+            CLIENT(broken, "svc-token-identity").lookup("ten_a")
+        client = CLIENT(silent_channel, "svc-token-identity")
+        with pytest.raises(transport.ContractViolation):
+            client.lookup("ten_a")
+        with pytest.raises(transport.ContractViolation):
+            client.lifecycle_decision("ten_a")
+    finally:
+        transport.close_channel(broken)
+        transport.close_channel(silent_channel)
+
+    # A revoked handle is not a fallback path either.
+    with pytest.raises(transport.ContractViolation, match="closed"):
+        transport.call_contract(silent_channel, "GET", "/api/v1/tenants/ten_a", (), None)
+    with pytest.raises(transport.ContractViolation, match="closed"):
+        CLIENT(silent_channel, "svc-token-identity").lookup("ten_a")
+    # And a handle that was never issued grants nothing.
+    with pytest.raises(transport.ContractViolation, match="closed"):
+        transport.call_contract("tac-not-a-channel", "GET", "/api/v1/tenants/ten_a", (), None)
 
 
 def test_reader_module_reexports_no_internal_type():

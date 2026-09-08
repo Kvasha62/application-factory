@@ -2,14 +2,19 @@
 
 A consumer receives exactly one object: :class:`TenantAuthorityClient`. It
 offers the read operations of the published contract and returns immutable
-values. It holds no reference to the engine, the registry store, the audit
-journal, the idempotency table or any mutation operation — so no internal object
-is reachable through the boundary, and every read crosses authentication,
-authorization, ownership validation and audit like any other contract request.
+values. Its own state is three values — an opaque contract-channel handle, a
+service credential and a Platform Instance binding — and no callable, closure or
+cell: the component's ASGI application, deployment, engine, store, audit journal,
+idempotency table and mutation operations are therefore unreachable through any
+attribute of the client — including the cells of a closure, of which it now has
+none. Every read still crosses
+authentication, authorization, ownership validation and audit, because the
+channel executes the published contract inside the component.
 """
 
 from __future__ import annotations
 
+import weakref
 from typing import Any, Mapping
 from urllib.parse import quote
 
@@ -25,7 +30,10 @@ from tenant_authority.errors import (
     TenantConflict,
     TenantNotFound,
 )
-from tenant_authority.transport import ContractTransport, asgi_transport
+# The transport is reached through the module, never through a re-exported name:
+# the published surface of this module stays two objects wide (client + builder),
+# and the channel table itself remains an attribute of an internal module.
+from tenant_authority import transport as _transport
 
 #: The published error classes are rebuilt from the status code and the
 #: machine-readable reason, so a consumer catches the same exception types the
@@ -53,25 +61,48 @@ _DEFAULT_REASON_BY_STATUS: dict[int, DenyReason] = {
 }
 
 
+__all__ = [
+    "AuthenticationDenied",
+    "AuthorizationDenied",
+    "ContractViolation",
+    "InvalidTransition",
+    "LifecycleDecision",
+    "OwnershipDenied",
+    "TenantAuthorityClient",
+    "TenantAuthorityError",
+    "TenantConflict",
+    "TenantNotFound",
+    "TenantSnapshot",
+    "TenantState",
+    "build_client",
+]
+
+
 class TenantAuthorityClient:
     """Value-only reader over the published Tenant Authority contract.
 
     ``GET /api/v1/tenants/{tenant_id}`` and
     ``GET /api/v1/tenants/{tenant_id}/lifecycle`` are the only operations it
     performs; the exact same API is available to a remote consumer.
+
+    ``channel`` is the opaque handle of a contract channel opened by the provider.
+    It is deliberately not a callable: a consumer holding values cannot walk from
+    them into the object graph of the component that issued them.
     """
 
-    __slots__ = ("_transport", "_credential", "_expected_platform_id")
+    __slots__ = ("_channel", "_credential", "_expected_platform_id", "__weakref__")
 
     def __init__(
         self,
-        transport: ContractTransport,
+        channel: str,
         credential: str,
         expected_platform_id: str | None = None,
     ) -> None:
         if not credential:
             raise ValueError("a Tenant Authority service credential is required")
-        self._transport = transport
+        if not isinstance(channel, str) or not channel:
+            raise ValueError("a Tenant Authority contract channel handle is required")
+        self._channel = channel
         self._credential = credential
         self._expected_platform_id = expected_platform_id
 
@@ -142,7 +173,7 @@ class TenantAuthorityClient:
         if correlation_id:
             headers.append(("x-correlation-id", correlation_id))
 
-        status, payload = self._transport("GET", path, headers, None)
+        status, payload = _transport.call_contract(self._channel, "GET", path, headers, None)
         if 200 <= status < 300:
             return payload
         raise self._error(status, payload)
@@ -176,13 +207,17 @@ def build_client(
     credential: str,
     expected_platform_id: str | None = None,
 ) -> TenantAuthorityClient:
-    """Publish the component for one consumer: contract app in, client out.
+    """Publish the component for one consumer: contract app in, value-only client out.
 
-    ``app`` is the component's published ASGI contract (not an internal object);
-    the resulting client never exposes it and never exposes anything else either.
+    ``app`` — the component's published ASGI contract — is handed to the provider's
+    own channel table and stays there: the client receives the handle back, not the
+    application. A client dropped by its consumer revokes that handle, so the table
+    is not a place where applications accumulate.
     """
-    return TenantAuthorityClient(
-        asgi_transport(app),
-        credential,
-        expected_platform_id,
-    )
+    channel = _transport.open_channel(app)
+    client = TenantAuthorityClient(channel, credential, expected_platform_id)
+    finalizer = weakref.finalize(client, _transport._revoke, channel)
+    # Nothing to run at interpreter exit: the process is going away anyway, and a
+    # half-torn-down module is not a place to reach for a dictionary.
+    finalizer.atexit = False
+    return client

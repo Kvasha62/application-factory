@@ -22,7 +22,7 @@
           "lookup",
           "lifecycle_decision"
         ],
-        "note": "Tenant state and ownership are read from the authority at the authorization boundary; the effective tenant id is still derived only from verified identity. The client is value-only and is bound to this component's own service identity: identity receives no engine, store, audit journal or mutation operation, and cannot choose the actor recorded in the authority's journal. Identity's published HTTP surface (`identity_service.api`) serves only its own API: the authority's contract application is not owned or re-exported by it. A Tenant of another Platform Instance is answered as unknown, so identity reports TENANT_UNKNOWN while the authority keeps the precise ownership denial."
+        "note": "Tenant state and ownership are read from the authority at the authorization boundary; the effective tenant id is still derived only from verified identity. The client is value-only and is bound to this component's own service identity: identity receives no engine, store, audit journal or mutation operation, and cannot choose the actor recorded in the authority's journal. Identity's published HTTP surface (`identity_service.api`) serves only its own API: the authority's contract application is not owned or re-exported by it. A Tenant of another Platform Instance is answered as unknown, so identity reports TENANT_UNKNOWN while the authority keeps the precise ownership denial. The client is value-only down to its own state — an opaque contract channel handle, a credential and a Platform Instance binding — so identity holds neither the authority's ASGI application nor a transport object that could reach it."
       }
     ]
   },
