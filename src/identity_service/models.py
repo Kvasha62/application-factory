@@ -34,6 +34,7 @@ class DenyReason(StrEnum):
     TENANT_NOT_ACTIVE = "tenant_not_active"
     INSUFFICIENT_AUTHORIZATION = "insufficient_authorization"
     UNKNOWN_RESOURCE = "unknown_resource"
+    IDEMPOTENCY_CONFLICT = "idempotency_conflict"
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,3 +100,14 @@ class ProtectedRecord:
     record_id: str
     tenant_id: str
     body: str
+
+
+@dataclass(frozen=True, slots=True)
+class IdempotencyRecord:
+    key: str
+    identity_id: str
+    tenant_id: str
+    operation: str
+    record_id: str
+    fingerprint: str
+    stored_record_id: str

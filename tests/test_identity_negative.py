@@ -76,6 +76,43 @@ def test_idempotent_replay_requires_write_authorization():
     assert e.store.audit[-1].decision is Decision.DENY
 
 
+def test_idempotency_other_identity_same_tenant_conflict():
+    e = engine()
+    e.write_record("token-human-a", "rec_ik", "once", "ten_a", idempotency_key="ik-shared")
+    with pytest.raises(AccessDenied) as exc:
+        e.write_record("token-human-c", "rec_ik", "once", "ten_a", idempotency_key="ik-shared")
+    assert exc.value.reason is DenyReason.IDEMPOTENCY_CONFLICT
+    assert e.store.records["rec_ik"].body == "once"
+    assert e.store.audit[-1].reason == DenyReason.IDEMPOTENCY_CONFLICT.value
+
+
+def test_idempotency_same_identity_different_record_id_conflict():
+    e = engine()
+    e.write_record("token-human-a", "rec_ik_a", "once", "ten_a", idempotency_key="ik-rid")
+    with pytest.raises(AccessDenied) as exc:
+        e.write_record("token-human-a", "rec_ik_b", "once", "ten_a", idempotency_key="ik-rid")
+    assert exc.value.reason is DenyReason.IDEMPOTENCY_CONFLICT
+    assert "rec_ik_b" not in e.store.records
+
+
+def test_idempotency_same_identity_different_body_conflict():
+    e = engine()
+    e.write_record("token-human-a", "rec_ik_body", "once", "ten_a", idempotency_key="ik-body")
+    with pytest.raises(AccessDenied) as exc:
+        e.write_record("token-human-a", "rec_ik_body", "twice", "ten_a", idempotency_key="ik-body")
+    assert exc.value.reason is DenyReason.IDEMPOTENCY_CONFLICT
+    assert e.store.records["rec_ik_body"].body == "once"
+
+
+def test_unknown_resource_is_audited():
+    e = engine()
+    with pytest.raises(AccessDenied) as exc:
+        e.read_record("token-human-a", "rec_missing", "ten_a")
+    assert exc.value.reason is DenyReason.UNKNOWN_RESOURCE
+    assert e.store.audit[-1].decision is Decision.DENY
+    assert e.store.audit[-1].reason == DenyReason.UNKNOWN_RESOURCE.value
+
+
 def test_authn_without_authz_does_not_grant_access():
     e = engine()
     ident = e.verify_identity("token-service")

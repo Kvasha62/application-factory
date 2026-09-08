@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass
 
@@ -12,6 +13,7 @@ from identity_service.models import (
     DenyReason,
     IdentityKind,
     ObservabilityContext,
+    IdempotencyRecord,
     ProtectedRecord,
     TenantContext,
     TenantStatus,
@@ -27,6 +29,11 @@ ACTIVE_ONLY = {TenantStatus.ACTIVE}
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def _fingerprint(operation: str, record_id: str, body: str) -> str:
+    payload = f"{operation}\n{record_id}\n{body}".encode()
+    return hashlib.sha256(payload).hexdigest()
 
 
 @dataclass
@@ -210,34 +217,52 @@ class IdentityEngine:
         identity, tenant, authz, obs = self._gate(
             token, claimed_tenant_id, "records.write", "records.write", request_id
         )
-        if idempotency_key and idempotency_key in self.store.idempotency:
-            existing_id = self.store.idempotency[idempotency_key]
-            existing = self.store.records[existing_id]
-            if existing.tenant_id != tenant.tenant_id:
-                self.audit(
+        fingerprint = _fingerprint("records.write", record_id, body)
+        if idempotency_key:
+            existing_key = self.store.idempotency.get(idempotency_key)
+            if existing_key is not None:
+                same_request = (
+                    existing_key.identity_id == identity.identity_id
+                    and existing_key.tenant_id == tenant.tenant_id
+                    and existing_key.operation == "records.write"
+                    and existing_key.record_id == record_id
+                    and existing_key.fingerprint == fingerprint
+                )
+                if not same_request:
+                    self.audit(
+                        action="records.write",
+                        decision=Decision.DENY,
+                        reason=DenyReason.IDEMPOTENCY_CONFLICT.value,
+                        identity=identity,
+                        tenant=tenant,
+                        obs=obs,
+                        details={"idempotency_key": idempotency_key},
+                    )
+                    raise AccessDenied(DenyReason.IDEMPOTENCY_CONFLICT)
+                existing = self.store.records[existing_key.stored_record_id]
+                event = self.audit(
                     action="records.write",
-                    decision=Decision.DENY,
-                    reason=DenyReason.UNKNOWN_RESOURCE.value,
+                    decision=Decision.ALLOW,
+                    reason="idempotent_replay",
                     identity=identity,
                     tenant=tenant,
                     obs=obs,
+                    details={"record_id": existing.record_id, "kind": authz.identity.kind.value},
                 )
-                raise AccessDenied(DenyReason.UNKNOWN_RESOURCE)
-            event = self.audit(
-                action="records.write",
-                decision=Decision.ALLOW,
-                reason="idempotent_replay",
-                identity=identity,
-                tenant=tenant,
-                obs=obs,
-                details={"record_id": existing.record_id, "kind": authz.identity.kind.value},
-            )
-            return existing, obs, event
+                return existing, obs, event
 
         record = ProtectedRecord(record_id, tenant.tenant_id, body)
         self.store.records[record_id] = record
         if idempotency_key:
-            self.store.idempotency[idempotency_key] = record_id
+            self.store.idempotency[idempotency_key] = IdempotencyRecord(
+                key=idempotency_key,
+                identity_id=identity.identity_id,
+                tenant_id=tenant.tenant_id,
+                operation="records.write",
+                record_id=record_id,
+                fingerprint=fingerprint,
+                stored_record_id=record_id,
+            )
         event = self.audit(
             action="records.write",
             decision=Decision.ALLOW,
@@ -264,6 +289,14 @@ class IdentityEngine:
         )
         record = self.store.records.get(record_id)
         if record is None:
+            self.audit(
+                action=action,
+                decision=Decision.DENY,
+                reason=DenyReason.UNKNOWN_RESOURCE.value,
+                identity=identity,
+                tenant=tenant,
+                obs=obs,
+            )
             raise AccessDenied(DenyReason.UNKNOWN_RESOURCE)
         if record.tenant_id != tenant.tenant_id:
             # Isolation: do not leak existence of foreign tenant data.

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from identity_service.models import (
     AuditEvent,
+    IdempotencyRecord,
     IdentityKind,
     ProtectedRecord,
     TenantAssociation,
@@ -23,7 +24,7 @@ class IdentityStore:
     associations: dict[tuple[str, str], TenantAssociation] = field(default_factory=dict)
     records: dict[str, ProtectedRecord] = field(default_factory=dict)
     audit: list[AuditEvent] = field(default_factory=list)
-    idempotency: dict[str, str] = field(default_factory=dict)
+    idempotency: dict[str, IdempotencyRecord] = field(default_factory=dict)
 
     def seed_demo(self) -> None:
         human_a = VerifiedIdentity(
@@ -32,17 +33,22 @@ class IdentityStore:
         human_b = VerifiedIdentity(
             "idn_human_b", IdentityKind.HUMAN, "user-b@example.test", home_tenant_id="ten_b"
         )
+        human_c = VerifiedIdentity(
+            "idn_human_c", IdentityKind.HUMAN, "user-c@example.test", home_tenant_id="ten_a"
+        )
         svc = VerifiedIdentity(
             "idn_service_jobs", IdentityKind.SERVICE, "svc://jobs", home_tenant_id="ten_a"
         )
         self.identities = {
             human_a.identity_id: human_a,
             human_b.identity_id: human_b,
+            human_c.identity_id: human_c,
             svc.identity_id: svc,
         }
         self.tokens = {
             "token-human-a": human_a.identity_id,
             "token-human-b": human_b.identity_id,
+            "token-human-c": human_c.identity_id,
             "token-service": svc.identity_id,
             "token-unknown": "idn_missing",
         }
@@ -64,6 +70,9 @@ class IdentityStore:
             ),
             ("idn_human_b", "ten_b"): TenantAssociation(
                 "idn_human_b", "ten_b", frozenset({"records.read", "records.write"})
+            ),
+            ("idn_human_c", "ten_a"): TenantAssociation(
+                "idn_human_c", "ten_a", frozenset({"records.read", "records.write"})
             ),
             ("idn_service_jobs", "ten_a"): TenantAssociation(
                 "idn_service_jobs", "ten_a", frozenset({"records.read"})

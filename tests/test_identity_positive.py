@@ -53,7 +53,7 @@ def test_idempotent_write():
         "token-human-a", "rec_new", "once", "ten_a", idempotency_key="ik-1"
     )
     r2, _, a2 = e.write_record(
-        "token-human-a", "rec_new", "twice", "ten_a", idempotency_key="ik-1"
+        "token-human-a", "rec_new", "once", "ten_a", idempotency_key="ik-1"
     )
     assert r1.body == r2.body == "once"
     assert a2.reason == "idempotent_replay"
