@@ -220,8 +220,10 @@ def test_an_unreachable_tenant_authority_denies_instead_of_allowing():
     instance = monolith()
     assert decide(instance, "token-human-a").allowed
 
+    # Break the published contract channel underneath the adapter: from this
+    # component's side the dependency simply stops answering.
     tenant_authority_transport.close_channel(
-        instance.authorization.engine.tenant_authority._channel
+        instance.authorization.engine.tenant_authority._client._channel
     )
 
     decision = decide(instance, "token-human-a", request_id="req-authority-down")

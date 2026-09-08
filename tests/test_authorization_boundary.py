@@ -23,6 +23,7 @@ import pytest
 from fastapi import FastAPI
 
 from authorization_service import contracts, errors, policy, reader, transport
+from authorization_service.adapters import identity_port, tenant_authority_port
 from authorization_service.contracts import Decision, Reason, ResourceRef
 from authorization_service.deployment import AuthorizationDeployment, build_deployment
 from authorization_service.engine import AuthorizationEngine
@@ -370,12 +371,13 @@ def test_the_ports_ask_for_reads_and_nothing_else():
     assert authority_methods == {"lifecycle_decision"}
 
     instance = monolith()
-    assert isinstance(instance.identity_context_client, IdentityContextPort)
-    assert isinstance(instance.tenant_authority_client, TenantAuthorityPort)
-    # The engine holds published clients, not components.
+    # The engine holds this component's own adapters over the published clients:
+    # one read each, and no way back into the component that answered.
     engine = instance.authorization.engine
-    assert type(engine.identity).__name__ == "IdentityContextClient"
-    assert type(engine.tenant_authority).__name__ == "TenantAuthorityClient"
+    assert type(engine.identity).__name__ == "IdentityContextAdapter"
+    assert type(engine.tenant_authority).__name__ == "TenantAuthorityAdapter"
+    assert isinstance(engine.identity, IdentityContextPort)
+    assert isinstance(engine.tenant_authority, TenantAuthorityPort)
     reached = walk_state(engine.identity) | walk_state(engine.tenant_authority)
     for label, target in (
         ("identity engine", instance.identity),
@@ -405,8 +407,8 @@ def test_two_platform_instances_do_not_share_a_boundary():
     instance = monolith()
     other = build_deployment(
         {"platform_id": "plt_other", "environment": "test"},
-        identity=instance.identity_context_client,
-        tenant_authority=instance.tenant_authority_client,
+        identity=identity_port(instance.identity_context_client),
+        tenant_authority=tenant_authority_port(instance.tenant_authority_client),
         seed_demo=True,
         with_http=True,
     )

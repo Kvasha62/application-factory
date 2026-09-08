@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from authorization_service.adapters import identity_port, tenant_authority_port
 from authorization_service.contracts import Decision, Reason, ResourceRef
 from authorization_service.deployment import build_deployment
 from authorization_service.store import AuthorizationStore
@@ -128,8 +129,8 @@ def test_without_the_identity_component_no_decision_can_be_made():
     instance = monolith()
     deployment = build_deployment(
         {"platform_id": PLATFORM_ID, "environment": "test"},
-        identity=SilentIdentity(),
-        tenant_authority=instance.tenant_authority_client,
+        identity=identity_port(SilentIdentity()),
+        tenant_authority=tenant_authority_port(instance.tenant_authority_client),
         seed_demo=True,
         with_http=True,
     )
@@ -169,8 +170,8 @@ def test_an_identity_denial_is_translated_and_never_swallowed():
 
         deployment = build_deployment(
             {"platform_id": PLATFORM_ID, "environment": "test"},
-            identity=Denying(denial),
-            tenant_authority=instance.tenant_authority_client,
+            identity=identity_port(Denying(denial)),
+            tenant_authority=tenant_authority_port(instance.tenant_authority_client),
             store=AuthorizationStore(),
             seed_demo=True,
             with_http=True,
@@ -191,8 +192,8 @@ def test_an_unknown_identity_answer_fails_closed():
     instance = monolith()
     deployment = build_deployment(
         {"platform_id": PLATFORM_ID, "environment": "test"},
-        identity=Surprising(),
-        tenant_authority=instance.tenant_authority_client,
+        identity=identity_port(Surprising()),
+        tenant_authority=tenant_authority_port(instance.tenant_authority_client),
         seed_demo=True,
         with_http=True,
     )

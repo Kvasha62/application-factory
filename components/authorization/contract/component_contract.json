@@ -22,7 +22,9 @@
   "api": {
     "openapi": "components/authorization/contract/openapi.yaml",
     "base_path": "/api/v1",
-    "supported_majors": ["v1"],
+    "supported_majors": [
+      "v1"
+    ],
     "operations": [
       {
         "method": "POST",
@@ -39,7 +41,10 @@
         "resource: type, id and the Tenant that owns it, stated by the data owner",
         "operation: the action the data owner is about to perform"
       ],
-      "response": ["decision: ALLOW or DENY", "reason: one stable code from the published set"],
+      "response": [
+        "decision: ALLOW or DENY",
+        "reason: one stable code from the published set"
+      ],
       "default": "deny",
       "decision_chain": [
         "verified_subject",
@@ -48,7 +53,9 @@
         "tenant_lifecycle",
         "explicit_permission"
       ],
-      "allow_reasons": ["permitted"],
+      "allow_reasons": [
+        "permitted"
+      ],
       "deny_reasons": [
         "missing_identity",
         "invalid_identity",
@@ -77,9 +84,16 @@
         "call": "authorization_service.transport.call_contract",
         "close": "authorization_service.transport.close_channel"
       },
-      "consumer_state": ["opaque contract channel handle (str)", "service credential (str)"],
-      "operations": ["decide"],
-      "returns": ["authorization_service.contracts.AuthorizationDecision"],
+      "consumer_state": [
+        "opaque contract channel handle (str)",
+        "service credential (str)"
+      ],
+      "operations": [
+        "decide"
+      ],
+      "returns": [
+        "authorization_service.contracts.AuthorizationDecision"
+      ],
       "errors": [
         "authorization_service.errors.CallerNotAuthenticated — the asking component presented no verifiable service identity (401)",
         "authorization_service.errors.CallerNotAuthorized — the asking component may not ask for decisions, or belongs to another Platform Instance (403)",
@@ -121,18 +135,30 @@
         "contract": "components/identity/contract/component_contract.json",
         "mechanism": "contract client over the published API of identity, executed in process at Level 0",
         "consumer_surface": "identity_service.reader.IdentityContextClient",
-        "operations": ["resolve_context"],
-        "note": "The verified subject and the effective tenant of a request come from IS-001. This component has no identity verification and no tenant derivation of its own, so no second tenant-context mechanism can exist here (A-002)."
+        "local_port": "authorization_service.ports.IdentityContextPort",
+        "local_adapter": "authorization_service.adapters.IdentityContextAdapter",
+        "local_answer_type": "authorization_service.consumed.SubjectContext",
+        "operations": [
+          "resolve_context"
+        ],
+        "note": "The verified subject and the effective tenant of a request come from IS-001. This component has no identity verification and no tenant derivation of its own, so no second tenant-context mechanism can exist here (A-002).",
+        "dependency_isolation": "No module of authorization imports identity_service or tenant_authority: the published client is adapted at the composition boundary and only values owned by this component reach the decision logic (ARCHITECTURE.md 1.1, 6.1, LAW-04)."
       },
       {
         "component_id": "tenant_authority",
         "contract": "components/tenant_authority/contract/component_contract.json",
         "mechanism": "contract client over the published API of tenant_authority, executed in process at Level 0",
         "consumer_surface": "tenant_authority.reader.TenantAuthorityClient",
+        "local_port": "authorization_service.ports.TenantAuthorityPort",
+        "local_adapter": "authorization_service.adapters.TenantAuthorityAdapter",
+        "local_answer_type": "authorization_service.consumed.TenantVerdict",
         "credential_source": "deployment secret resolved by the composition root: the service identity of this component",
         "demo_credential": "svc-token-authorization",
-        "operations": ["lifecycle_decision"],
-        "note": "The Tenant lifecycle verdict is read at decision time and never cached: a Tenant suspended between two decisions is denied on the next one (A-007)."
+        "operations": [
+          "lifecycle_decision"
+        ],
+        "note": "The Tenant lifecycle verdict is read at decision time and never cached: a Tenant suspended between two decisions is denied on the next one (A-007).",
+        "dependency_isolation": "No module of authorization imports identity_service or tenant_authority: the published client is adapted at the composition boundary and only values owned by this component reach the decision logic (ARCHITECTURE.md 1.1, 6.1, LAW-04)."
       }
     ],
     "refusal_semantics": {
@@ -168,7 +194,9 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "additionalProperties": false,
-    "required": ["platform_id"],
+    "required": [
+      "platform_id"
+    ],
     "properties": {
       "platform_id": {
         "type": "string",
@@ -189,9 +217,18 @@
     "owner": "authorization",
     "logical_schema": "authorization",
     "datasets": [
-      {"name": "permission_grants", "scope": "tenant-scoped"},
-      {"name": "service_access", "scope": "platform-scoped"},
-      {"name": "audit_events", "scope": "platform-scoped"}
+      {
+        "name": "permission_grants",
+        "scope": "tenant-scoped"
+      },
+      {
+        "name": "service_access",
+        "scope": "platform-scoped"
+      },
+      {
+        "name": "audit_events",
+        "scope": "platform-scoped"
+      }
     ],
     "notes": [
       "A permission grant exists inside exactly one Tenant (LAW-16a): the same subject in another Tenant is another grant, and no grant crosses a tenant boundary.",
@@ -219,6 +256,7 @@
     ],
     "denials_audited": true,
     "refusals_audited": true,
+    "refusal_audit_scope": "every refusal of the published contract, including a request rejected by the contract schema before any decision logic runs; the record carries request_id and correlation_id of the caller",
     "note": "Audit is owned data, not a public event contract, and is not readable through the published surface."
   },
   "observability": {
@@ -248,7 +286,9 @@
     "boundary": "permission_authority",
     "model": "explicit_permission_grant_on_subject_within_tenant",
     "enforcement_point": "the component that owns the data",
-    "permissions": ["authorization.decide"],
+    "permissions": [
+      "authorization.decide"
+    ],
     "authentication_does_not_imply_authorization": true,
     "default_decision": "DENY",
     "tenant_context_source": "identity",

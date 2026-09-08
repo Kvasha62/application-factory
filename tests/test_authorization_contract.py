@@ -211,6 +211,47 @@ def test_declared_audit_fields_exist_on_a_real_audit_record():
         assert hasattr(event, field), field
 
 
+def test_every_declared_refusal_is_audited_as_the_contract_claims():
+    """`refusals_audited` is a promise about all of them, schema included."""
+    audit = contract()["audit"]
+    assert audit["refusals_audited"] is True
+    declared = contract()["api"]["refusal_semantics"]["refused"]
+
+    instance = monolith()
+    http = instance.authorization_http()
+    valid = {
+        "operation": "records.read",
+        "resource": {"resource_type": "record", "resource_id": "rec_a1", "tenant_id": "ten_a"},
+    }
+    # One request per declared status family, including the one the published
+    # schema rejects before any handler of this component runs.
+    requests = {
+        "401": ({}, valid),
+        "403": ({"Authorization": "Bearer authz-svc-token-reporting"}, valid),
+        "422": (
+            {"Authorization": "Bearer authz-svc-token-records"},
+            {"resource": valid["resource"]},
+        ),
+    }
+    assert set(requests) == set(declared)
+
+    for status, (extra_headers, body) in requests.items():
+        request_id = f"req-declared-{status}"
+        response = http.post(
+            "/api/v1/decisions",
+            headers={**extra_headers, "X-Request-Id": request_id, "X-Correlation-Id": "cor-decl"},
+            json=body,
+        )
+        assert response.status_code == int(status)
+        reason = response.json()["detail"]["reason"]
+        assert reason in declared[status].split(", ")
+        event = next(
+            item for item in instance.authorization.store.audit if item.request_id == request_id
+        )
+        assert event.details["refused"] == reason
+        assert event.correlation_id == "cor-decl"
+
+
 def test_declared_configuration_schema_matches_the_loader():
     schema = contract()["configuration_schema"]
     assert schema["additionalProperties"] is False
@@ -238,22 +279,35 @@ def test_declared_dependencies_are_the_ones_that_are_wired():
     consumed = {item["component_id"]: item for item in data["api"]["consumes"]}
     assert set(consumed) == set(dependencies)
 
+    import importlib
+
+    def resolve(path: str):
+        module_name, _, class_name = path.rpartition(".")
+        return getattr(importlib.import_module(module_name), class_name)
+
     instance = monolith()
     engine = instance.authorization.engine
-    for component_id, surface in (
-        ("identity", type(engine.identity)),
-        ("tenant_authority", type(engine.tenant_authority)),
+    for component_id, wired in (
+        ("identity", engine.identity),
+        ("tenant_authority", engine.tenant_authority),
     ):
-        module_name, _, class_name = consumed[component_id]["consumer_surface"].rpartition(".")
-        import importlib
+        entry = consumed[component_id]
+        # What is wired into the engine is this component's own adapter over the
+        # declared consumer surface — never the provider's client itself.
+        assert type(wired) is resolve(entry["local_adapter"])
+        assert isinstance(wired, resolve(entry["local_port"]))
+        assert resolve(entry["local_adapter"]).__module__.startswith("authorization_service.")
+        assert resolve(entry["local_answer_type"]).__module__.startswith("authorization_service.")
 
-        assert surface is getattr(importlib.import_module(module_name), class_name)
-        # The declared operations exist on the published surface, and the
-        # surface itself offers nothing beyond the reads that were declared.
-        declared_operations = set(consumed[component_id]["operations"])
+        # The declared operations exist on the published surface of the provider
+        # and on the port, and neither offers anything beyond the declared reads.
+        surface = resolve(entry["consumer_surface"])
+        declared_operations = set(entry["operations"])
         available = {name for name in dir(surface) if not name.startswith("_")}
         assert declared_operations <= available
         assert available <= declared_operations | {"lookup"}
+        port_operations = {n for n in dir(resolve(entry["local_port"])) if not n.startswith("_")}
+        assert port_operations == declared_operations
 
 
 def test_the_declared_version_ranges_admit_the_versions_in_this_repository():

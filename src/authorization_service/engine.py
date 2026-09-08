@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping
 
 from authorization_service import COMPONENT_ID, COMPONENT_VERSION
 from authorization_service.config import AuthorizationConfig
@@ -39,6 +39,11 @@ from authorization_service.errors import (
     CallerNotAuthorized,
     MalformedDecisionRequest,
 )
+from authorization_service.consumed import (
+    DependencyRefusal,
+    SubjectContext,
+    TenantVerdict,
+)
 from authorization_service.models import AuditEvent, ObservabilityContext, ServiceAccess
 from authorization_service.policy import (
     identity_denial,
@@ -47,11 +52,6 @@ from authorization_service.policy import (
 )
 from authorization_service.ports import IdentityContextPort, TenantAuthorityPort
 from authorization_service.store import PERM_DECIDE, AuthorizationStore
-from identity_service.contracts import VerifiedContext
-from identity_service.errors import AccessDenied
-from identity_service.errors import ContractViolation as IdentityContractViolation
-from tenant_authority.errors import ContractViolation as TenantAuthorityContractViolation
-from tenant_authority.errors import TenantAuthorityError
 
 DECISION_ACTION = "authorization.decide"
 
@@ -212,27 +212,35 @@ class AuthorizationEngine:
         claimed_tenant_id: str | None,
         request_id: str,
         correlation_id: str,
-    ) -> VerifiedContext | Reason:
-        """Ask IS-001 who the subject is and which Tenant is effective.
+    ) -> SubjectContext | Reason:
+        """Ask the identity port who the subject is and which Tenant is effective.
 
         No fallback exists: if the authority does not answer, the decision is a
         denial. This is also why no second tenant-context mechanism can appear
         here — the tenant is not derivable in this component at all.
+
+        Only values of this component cross the port (see
+        :mod:`authorization_service.consumed`), so nothing of the provider's
+        implementation is known, caught or stored here. A port that misbehaves
+        instead of answering is a port that did not answer: it denies.
         """
         try:
-            return self.identity.resolve_context(
+            answer = self.identity.resolve_context(
                 subject_credential,
                 claimed_tenant_id=claimed_tenant_id,
                 request_id=request_id,
                 correlation_id=correlation_id,
             )
-        except AccessDenied as exc:
-            return identity_denial(exc.reason.value)
-        except IdentityContractViolation:
+        except Exception:
             return Reason.AUTHORITY_UNAVAILABLE
+        if isinstance(answer, SubjectContext):
+            return answer
+        if isinstance(answer, DependencyRefusal):
+            return identity_denial(answer.reason_code)
+        return Reason.AUTHORITY_UNAVAILABLE
 
     @staticmethod
-    def _resource_check(context: VerifiedContext, resource: ResourceRef) -> Reason | None:
+    def _resource_check(context: SubjectContext, resource: ResourceRef) -> Reason | None:
         """Invariant 4: the resource of another Tenant is never accessible.
 
         A tenant-scoped resource whose owning Tenant the data owner did not
@@ -246,23 +254,30 @@ class AuthorizationEngine:
         return None
 
     def _lifecycle_check(
-        self, context: VerifiedContext, obs: ObservabilityContext
+        self, context: SubjectContext, obs: ObservabilityContext
     ) -> Reason | None:
-        """Invariant 7: read the Tenant verdict from IS-002 at decision time."""
+        """Invariant 7: read the Tenant verdict through the port at decision time.
+
+        The verdict is a value of this component; a Tenant the authority refuses
+        to answer about, for whatever published reason, is a Tenant this
+        boundary does not serve.
+        """
         try:
-            verdict = self.tenant_authority.lifecycle_decision(
+            answer = self.tenant_authority.lifecycle_decision(
                 context.tenant_id,
                 expected_platform_id=self.current_platform_id,
                 request_id=obs.request_id,
                 correlation_id=obs.correlation_id,
             )
-        except TenantAuthorityError as exc:
-            return tenant_authority_denial(getattr(exc.reason, "value", None))
-        except TenantAuthorityContractViolation:
+        except Exception:
             return Reason.AUTHORITY_UNAVAILABLE
-        if verdict.permitted:
+        if isinstance(answer, DependencyRefusal):
+            return tenant_authority_denial(answer.reason_code)
+        if not isinstance(answer, TenantVerdict):
+            return Reason.AUTHORITY_UNAVAILABLE
+        if answer.permitted:
             return None
-        return lifecycle_denial(verdict.reason)
+        return lifecycle_denial(answer.reason_code)
 
     # ------------------------------------------------------------ caller gate
     def verify_service_identity(self, token: str | None) -> ServiceAccess:
@@ -355,6 +370,70 @@ class AuthorizationEngine:
             operation=operation,
             resource=resource,
             details={"refused": exc.reason.value, **exc.details},
+        )
+        # The refusal carries the ids it was audited with, so the caller can be
+        # pointed at its own record in the journal — including when the request
+        # arrived without any request context of its own.
+        exc.details.setdefault("request_id", obs.request_id)
+        exc.details.setdefault("correlation_id", obs.correlation_id)
+        return exc
+
+    def refuse_unreadable_request(
+        self,
+        token: str | None,
+        *,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        details: Mapping[str, Any] | None = None,
+    ) -> MalformedDecisionRequest:
+        """Audit a request the published contract could not even read.
+
+        A request rejected by the contract schema — a missing field, a field the
+        contract does not declare, a value of the wrong type — never reaches
+        :meth:`decide`, so without this path the refusal would be the only
+        security-relevant event of the component that leaves no trace. It is
+        audited exactly like every other refusal to answer: as a ``DENY`` of the
+        *request*, attributed to the calling service where one could be
+        verified, with ``request_id`` and ``correlation_id``.
+
+        It stays a refusal, not a decision: an unreadable question has no
+        authorization meaning, and answering ``DENY`` would hide a defect of the
+        consuming component behind a security-looking answer.
+        """
+        obs = self.observability(
+            access=None,
+            tenant_id=None,
+            subject_id=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        try:
+            access: ServiceAccess | None = self.verify_service_identity(token)
+        except AuthorizationServiceError:
+            # An unreadable request from an unidentified caller is still audited;
+            # the caller is simply unknown, which is itself worth recording.
+            access = None
+        if access is not None and access.platform_id != self.config.platform_id:
+            access = None
+        obs = self.observability(
+            access=access,
+            tenant_id=None,
+            subject_id=None,
+            request_id=obs.request_id,
+            correlation_id=obs.correlation_id,
+        )
+        exc = MalformedDecisionRequest(
+            CallerDenyReason.MALFORMED_REQUEST,
+            "the request does not match the published decision contract",
+            details=dict(details or {}),
+        )
+        self._refuse(
+            exc,
+            action=DECISION_ACTION,
+            access=access,
+            obs=obs,
+            operation=None,
+            resource=None,
         )
         return exc
 

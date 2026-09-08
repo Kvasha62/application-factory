@@ -17,6 +17,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from authorization_service.adapters import identity_port, tenant_authority_port
 from authorization_service.contracts import AuthorizationDecision, ResourceRef
 from authorization_service.deployment import (
     AuthorizationDeployment,
@@ -126,13 +127,16 @@ def monolith() -> Monolith:
         AUTHORIZATION_TA_CREDENTIAL,
         expected_platform_id=identity_config.current_platform_id,
     )
+    # The published clients are adapted to the ports of IS-003 by IS-003's own
+    # adapters: the component consumes contracts, never another component's
+    # types. Wiring them is the job of this composition root.
     authorization = build_authorization(
         {
             "platform_id": authority.current_platform_id,
             "environment": authority.config.environment,
         },
-        identity=identity_context_client,
-        tenant_authority=authorization_authority_client,
+        identity=identity_port(identity_context_client),
+        tenant_authority=tenant_authority_port(authorization_authority_client),
         seed_demo=True,
         with_http=True,
     )

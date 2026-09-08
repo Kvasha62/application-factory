@@ -20,7 +20,9 @@ nothing: the deployment it is bound to is built by a composition root.
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from authorization_service import COMPONENT_ID, COMPONENT_VERSION
@@ -109,15 +111,33 @@ def _decision_out(decision: AuthorizationDecision) -> DecisionOut:
     )
 
 
+def _refusal_detail(exc: AuthorizationServiceError, request_id: str | None) -> dict:
+    """The published body of a refusal: the reason, and the id it was audited with."""
+    return {
+        "decision": "DENY",
+        "reason": exc.reason.value,
+        "request_id": exc.details.get("request_id") or request_id,
+    }
+
+
 def _refused(exc: AuthorizationServiceError, request_id: str | None) -> HTTPException:
     return HTTPException(
         status_code=exc.status_code,
-        detail={
-            "decision": "DENY",
-            "reason": exc.reason.value,
-            "request_id": request_id,
-        },
+        detail=_refusal_detail(exc, request_id),
     )
+
+
+def _schema_problems(exc: RequestValidationError) -> list[str]:
+    """Describe what the contract could not read — never the values it was sent.
+
+    Only the location and the kind of problem are kept: an audit journal records
+    that a request was unreadable, not the payload of the component that sent it.
+    """
+    problems = []
+    for error in exc.errors():
+        location = ".".join(str(part) for part in error.get("loc", ()))
+        problems.append(f"{location or 'body'}: {error.get('type', 'invalid')}")
+    return sorted(problems)
 
 
 def create_app(deployment: AuthorizationDeployment) -> FastAPI:
@@ -127,6 +147,30 @@ def create_app(deployment: AuthorizationDeployment) -> FastAPI:
         title="IS-003 Authorization Boundary / Permission Authority",
         version=COMPONENT_VERSION,
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def unreadable_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+        """Refuse — and audit — a request the contract schema rejected.
+
+        The schema rejects a request before any handler of this component runs,
+        so the refusal is produced here explicitly instead of silently: a
+        malformed request to the decision contract is security-relevant, and
+        every refusal of this component appears in its audit journal with the
+        caller's ``request_id`` and ``correlation_id`` (invariant 9).
+
+        This is a transport-level refusal (``422``), not an authorization
+        answer: no decision was made, so none is reported.
+        """
+        refusal = engine.refuse_unreadable_request(
+            _token(request.headers.get("authorization")),
+            request_id=request.headers.get("x-request-id"),
+            correlation_id=request.headers.get("x-correlation-id"),
+            details={"schema_problems": _schema_problems(exc), "path": request.url.path},
+        )
+        return JSONResponse(
+            status_code=refusal.status_code,
+            content={"detail": _refusal_detail(refusal, request.headers.get("x-request-id"))},
+        )
 
     @app.get("/health")
     def health() -> dict:
