@@ -1,0 +1,304 @@
+{
+  "component_id": "saga",
+  "component_version": "0.1.0",
+  "class": "platform_service",
+  "maturity_level": "level_0_modular_monolith",
+  "task": "IS-006 (GitHub Issue #18)",
+  "purpose": "Saga / Workflow Consistency Boundary",
+  "summary": "Explicit, observable and bounded workflow state for genuinely multi-step business operations, always reaching a defined terminal state after success, retry, compensation or failure. Not a workflow platform.",
+  "invariants": [
+    "S-001 every saga has a stable saga_id",
+    "S-002 a saga has explicit state; no undefined partial state is silently accepted",
+    "S-003 every step has explicit state and unambiguous identity",
+    "S-004 repeated delivery of the same step is safe through the IS-005 idempotency boundary",
+    "S-005 step errors are not silently lost",
+    "S-006 a failed step has a defined recovery path: retry, compensation or terminal failure",
+    "S-007 compensation is itself idempotent and uses the existing authorization and data-owner boundaries",
+    "S-008 every saga reaches a defined terminal state: COMPLETED, COMPENSATED or FAILED",
+    "S-009 tenant context is immutable throughout the saga; IS-001 remains the source of the effective tenant context and IS-002 remains authoritative for tenant lifecycle",
+    "S-010 IS-006 creates no second identity, tenant-context, authorization or idempotency mechanism",
+    "S-011 saga and step transitions are auditable and observable with the required correlation context",
+    "S-012 a saga cannot bypass component or data-owner boundaries or access another component's internals or data directly"
+  ],
+  "state_model": {
+    "saga_states": ["STARTED", "RUNNING", "COMPENSATING", "COMPLETED", "COMPENSATED", "FAILED"],
+    "terminal_saga_states": ["COMPLETED", "COMPENSATED", "FAILED"],
+    "saga_transitions": {
+      "STARTED": ["RUNNING"],
+      "RUNNING": ["COMPLETED", "COMPENSATING", "FAILED"],
+      "COMPENSATING": ["COMPENSATED", "FAILED"],
+      "COMPLETED": [],
+      "COMPENSATED": [],
+      "FAILED": []
+    },
+    "step_states": [
+      "PENDING",
+      "RUNNING",
+      "COMPLETED",
+      "RETRYING",
+      "FAILED",
+      "COMPENSATING",
+      "COMPENSATED",
+      "COMPENSATION_FAILED"
+    ],
+    "step_transitions": {
+      "PENDING": ["RUNNING"],
+      "RUNNING": ["COMPLETED", "RETRYING", "FAILED"],
+      "RETRYING": ["RUNNING"],
+      "COMPLETED": ["COMPENSATING"],
+      "COMPENSATING": ["COMPENSATED", "COMPENSATION_FAILED"],
+      "FAILED": [],
+      "COMPENSATED": [],
+      "COMPENSATION_FAILED": []
+    },
+    "notes": [
+      "RETRYING is represented at step level, not as a separate global saga state.",
+      "A terminal saga never holds a step in RUNNING, RETRYING or COMPENSATING; the store refuses to write such a state.",
+      "A transition that is not declared above is refused by the store and writes nothing."
+    ]
+  },
+  "saga_contract": {
+    "spec_reference": "docs/ARCHITECTURE.md §6.4",
+    "fields": {
+      "saga_id": "stable identity of the workflow, generated or supplied at start",
+      "correlation_id": "carried on every delivery and recorded on every transition",
+      "tenant_id": "the effective Tenant resolved by IS-001; immutable for the whole workflow",
+      "step_id": "declared per step, unique inside one definition",
+      "state": "the explicit saga and step states of state_model",
+      "retry_policy": "RetryPolicy(max_attempts, delay_seconds); only a failure the step declared retryable is retried",
+      "timeout": "StepDefinition.timeout_seconds; an attempt returning past it is a failure, never a silent success",
+      "compensation": "declared with the step, before it executes; a step with nothing to undo declares an explicit no-op",
+      "idempotency": "delegated to IS-005 under the command identity saga:<saga_id>:step:<step_id>:<phase>",
+      "terminal_state": "COMPLETED, COMPENSATED or FAILED"
+    }
+  },
+  "api": {
+    "openapi": "not_applicable",
+    "operations": [
+      {
+        "method": "INTERNAL",
+        "purpose": "start a workflow (resolve the tenant context, create the workflow state)",
+        "authorization_operation": "none (enforced by the business component each step calls)",
+        "idempotency": "saga_id is unique; a duplicate saga_id is refused"
+      },
+      {
+        "method": "INTERNAL",
+        "purpose": "run a workflow to a terminal state",
+        "authorization_operation": "none (enforced by the business component each step calls)",
+        "idempotency": "safe to deliver again: completed steps replay through IS-005"
+      },
+      {
+        "method": "INTERNAL",
+        "purpose": "deliver or re-deliver exactly one step",
+        "authorization_operation": "none (enforced by the business component the step calls)",
+        "idempotency": "IS-005 (command identity of the step)"
+      },
+      {
+        "method": "INTERNAL",
+        "purpose": "read workflow state and the audit trail",
+        "authorization_operation": "none (read-only workflow state of this component)",
+        "idempotency": "natural"
+      }
+    ],
+    "consumer_surface": {
+      "module": "saga",
+      "published_as": [
+        "SagaExecutor",
+        "SagaDefinition",
+        "StepDefinition",
+        "RetryPolicy",
+        "SagaState",
+        "StepState",
+        "SagaSnapshot",
+        "StepSnapshot",
+        "StepContext",
+        "FailureInfo",
+        "SagaAuditEvent"
+      ],
+      "operations": ["start", "run", "deliver_step", "snapshot", "audit_trail"],
+      "errors": [
+        "SagaError",
+        "SagaDefinitionError",
+        "SagaNotFound",
+        "SagaTerminalState",
+        "SagaRefused",
+        "SagaContextViolation",
+        "StepConflict",
+        "StepUnknown",
+        "StepFailure",
+        "IllegalStateTransition",
+        "SagaStoreExhausted"
+      ],
+      "internal_modules": [
+        "saga.executor",
+        "saga.store",
+        "saga.models",
+        "saga.ports",
+        "saga.consumed",
+        "saga.errors"
+      ]
+    }
+  },
+  "events": {
+    "envelope": "CloudEvents",
+    "status": "declared_only",
+    "published": [],
+    "consumed": [],
+    "note": "IS-006 publishes no inter-component events and implements no event bus (explicit non-goal of Issue #18). The workflow audit journal is owned data, not a public event contract."
+  },
+  "data_export_cdc": {
+    "status": "declared_only",
+    "streams": [],
+    "note": "Workflow state is internal and transient in this slice. No CDC infrastructure exists, so none is declared as implemented."
+  },
+  "ui": {
+    "kind": "none",
+    "embedding": "not_applicable"
+  },
+  "configuration_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "actor_service_id": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Service identity this executor acts with; recorded on every audit event."
+      },
+      "max_sagas": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 256,
+        "description": "Bound of the Level 0 in-memory workflow store. A full store refuses a new workflow instead of growing without limit."
+      }
+    }
+  },
+  "data_ownership": {
+    "owner": "saga",
+    "logical_schema": "saga",
+    "datasets": [
+      {
+        "name": "saga_records",
+        "scope": "tenant-scoped",
+        "note": "Workflow state of each saga: immutable context (saga_id, tenant_id, identity_id, platform_id, correlation/trace/request ids), state and terminal failure information."
+      },
+      {
+        "name": "step_records",
+        "scope": "tenant-scoped",
+        "note": "Per-step state, attempt counter, failure information and the workflow fact that the command-safety boundary recorded the effect."
+      },
+      {
+        "name": "workflow_audit",
+        "scope": "platform-scoped",
+        "note": "Append-only journal of every workflow transition, refusal, retry, timeout and compensation failure, with the correlation context of ARCHITECTURE.md §26."
+      }
+    ],
+    "notes": [
+      "This component owns workflow state and nothing else: no identity, no tenant registry, no permission grant, no idempotency table and no copy of business data belonging to another component.",
+      "The value a step's business contract returned is handed to the following steps in process and is not persisted; a step result is not owned saga state.",
+      "No credential is persisted: a subject credential is presented per delivery, and the store and the audit journal hold identities only (ARCHITECTURE.md §27)."
+    ]
+  },
+  "authn": {
+    "service": "delegated",
+    "human": "delegated",
+    "note": "Every delivery presents a subject credential that IS-001 verifies. IS-006 performs no authentication of its own and stores no credential."
+  },
+  "authz": {
+    "enforcement_boundary": "data_owner",
+    "decision_source": "authorization",
+    "decision_source_component": "IS-003 Authorization Boundary, asked by the component that owns the data",
+    "default_decision": "DENY",
+    "enforcement_point": "the business component each step calls",
+    "tenant_context_source": "identity",
+    "tenant_lifecycle_source": "tenant_authority",
+    "operations_guarded": [],
+    "authentication_does_not_imply_authorization": true,
+    "note": "IS-006 grants nothing and decides nothing: it contains no authorization mechanism. A step reaches a data owner through that owner's published contract, so the decision of IS-003 and the enforcement of the data owner apply to steps and to compensations exactly as to any other caller. A refusal is a step failure with a defined recovery path and is never retried as if it were transient."
+  },
+  "observability": {
+    "context_fields": [
+      "timestamp",
+      "component_id",
+      "component_version",
+      "saga_id",
+      "step_id",
+      "state",
+      "reason",
+      "tenant_id",
+      "identity_id",
+      "actor_service_id",
+      "platform_id",
+      "request_id",
+      "correlation_id",
+      "trace_id",
+      "security_sensitive"
+    ],
+    "audited_actions": [
+      "saga.created",
+      "saga.start_refused",
+      "saga.transition",
+      "saga.terminal",
+      "saga.delivery_refused",
+      "saga.step.started",
+      "saga.step.attempt",
+      "saga.step.completed",
+      "saga.step.redelivered",
+      "saga.step.skipped",
+      "saga.step.retrying",
+      "saga.step.failed",
+      "saga.step.conflict",
+      "saga.step.compensating",
+      "saga.step.compensated",
+      "saga.step.compensation_failed"
+    ],
+    "note": "Security-sensitive refusals (tenant mismatch, missing permission, identity mismatch, idempotency conflict) and every terminal transition are recorded with the full correlation context. Replays and conflicts reported by the IS-005 boundary are recorded in the same journal."
+  },
+  "compatibility_policy": {
+    "api": "additive-minor-breaking-major"
+  },
+  "dependencies": [
+    {
+      "component_id": "idempotency_guard",
+      "version_range": ">=0.1.0,<0.2.0",
+      "kind": "internal-consumer-surface",
+      "contract": "components/idempotency/contract/component_contract.json",
+      "direction": "saga -> idempotency_guard (exactly-once delivery of every step effect and compensation)",
+      "note": "IS-006 implements no second idempotency mechanism: the command identity of a step is delivered to IS-005, which decides between executing, replaying and refusing a conflict."
+    },
+    {
+      "component_id": "identity",
+      "version_range": ">=0.1.0,<0.2.0",
+      "kind": "api",
+      "contract": "components/identity/contract/component_contract.json",
+      "direction": "saga -> identity (read-only tenant context of one delivery)",
+      "note": "Consumed through the TenantContextPort of saga.ports; the effective Tenant is resolved by IS-001 and is immutable for the whole workflow."
+    }
+  ],
+  "consumed_at_runtime_by_steps": {
+    "note": "Business steps are declared by the workflow and wired by a composition root to the published contract of whichever component owns the data. The path is always Saga -> component contract -> component data owner; IS-006 holds no store handle, session or internal type of any business component.",
+    "examples_in_this_repository": [
+      "components/records/contract/component_contract.json"
+    ]
+  },
+  "non_goals": [
+    "no Kafka, RabbitMQ, Redis, Celery, Temporal or other external workflow engine",
+    "no distributed transaction coordinator, no distributed locks",
+    "no production distributed recovery infrastructure",
+    "no event-bus implementation",
+    "no microservice decomposition",
+    "no new OIDC/IAM, tenant-context, authorization or idempotency mechanism",
+    "no Component Catalog, Composer, Golden Bundles or Release Trains",
+    "no universal DAL and no direct cross-component database access",
+    "not a generic workflow platform: a saga is required only for genuinely multi-step operations crossing independent business/data-owner boundaries"
+  ],
+  "level_0_allowance": {
+    "store": "bounded in-memory workflow store (default bound 256 sagas)",
+    "executor": "in-process, deterministic; steps of one workflow are delivered by one thread at a time inside the executor",
+    "recovery": "deterministic retry and compensation, proven by behavioral tests",
+    "stated_limitations": [
+      "A timeout is evaluated when an attempt returns: a hung handler cannot be preempted in this slice.",
+      "Recovery is in-process; there is no cross-process recovery and none is claimed."
+    ]
+  }
+}

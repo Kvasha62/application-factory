@@ -1,0 +1,214 @@
+openapi: 3.1.0
+info:
+  title: Saga / Workflow Consistency Boundary Contract
+  version: 0.1.0
+  description: |
+    Foundation contract of IS-006 (Saga / Workflow Consistency Boundary).
+
+    This slice publishes **no HTTP endpoint**: the component is consumed in
+    process through `saga.SagaExecutor` (`start`, `run`, `deliver_step`,
+    `snapshot`, `audit_trail`), so `api.openapi` is `not_applicable` in the
+    Component Contract. The schemas below fix the shape of the values that
+    cross that boundary — workflow state, step state, failure information and
+    the audited transition — so a future transport can be added without
+    redefining the model.
+
+    Nothing here grants access. A workflow reaches business data only through
+    the published contract of the component that owns it, and that component
+    remains the enforcement boundary.
+components:
+  schemas:
+    SagaState:
+      type: string
+      description: Explicit state of one workflow. The last three are terminal.
+      enum: [STARTED, RUNNING, COMPENSATING, COMPLETED, COMPENSATED, FAILED]
+    StepState:
+      type: string
+      description: |
+        Explicit state of one step, including its recovery progress. RETRYING
+        is a step-level state: it says "this attempt failed and another attempt
+        is allowed", not "the whole workflow is retrying".
+      enum:
+        - PENDING
+        - RUNNING
+        - COMPLETED
+        - RETRYING
+        - FAILED
+        - COMPENSATING
+        - COMPENSATED
+        - COMPENSATION_FAILED
+    FailureInfo:
+      type: object
+      description: |
+        One recorded failure. Errors are never silently lost: the reason is the
+        machine-readable reason stated by the party that failed or refused, and
+        is stored unchanged by this component.
+      required: [step_id, phase, kind, reason, attempts]
+      properties:
+        step_id:
+          type: string
+        phase:
+          type: string
+          enum: [execute, compensate]
+        kind:
+          type: string
+          enum: [step_failure, unclassified, timeout, compensation_failed]
+        reason:
+          type: string
+          description: |
+            Machine-readable reason owned by the party that stated it (for
+            example a published deny reason of the business boundary).
+        attempts:
+          type: integer
+          minimum: 0
+        retryable:
+          type: boolean
+        security_sensitive:
+          type: boolean
+    StepSnapshot:
+      type: object
+      description: |
+        Published read of one step. It carries no business data: `effect_recorded`
+        states the workflow fact that the IS-005 boundary recorded the effect,
+        not what the effect returned.
+      required: [step_id, operation, state, attempts, effect_recorded]
+      properties:
+        step_id:
+          type: string
+        operation:
+          type: string
+        state:
+          $ref: '#/components/schemas/StepState'
+        attempts:
+          type: integer
+          minimum: 0
+        effect_recorded:
+          type: boolean
+        failure:
+          oneOf:
+            - $ref: '#/components/schemas/FailureInfo'
+            - type: 'null'
+    SagaSnapshot:
+      type: object
+      description: |
+        Published read of one workflow: state, immutable correlation/tenant
+        context, per-step state and the failure information of a terminal
+        failure. A value only — it grants nothing and exposes no store handle.
+      required:
+        - saga_id
+        - definition
+        - state
+        - tenant_id
+        - identity_id
+        - platform_id
+        - actor_service_id
+        - steps
+      properties:
+        saga_id:
+          type: string
+        definition:
+          type: string
+        state:
+          $ref: '#/components/schemas/SagaState'
+        terminal:
+          type: boolean
+          description: True for COMPLETED, COMPENSATED and FAILED.
+        tenant_id:
+          type: string
+          description: The effective Tenant resolved by IS-001; immutable for the workflow.
+        identity_id:
+          type: string
+        platform_id:
+          type: string
+        actor_service_id:
+          type: string
+        request_id:
+          type: [string, 'null']
+        correlation_id:
+          type: [string, 'null']
+        trace_id:
+          type: [string, 'null']
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/StepSnapshot'
+        failure:
+          oneOf:
+            - $ref: '#/components/schemas/FailureInfo'
+            - type: 'null'
+        compensation_failures:
+          type: array
+          items:
+            $ref: '#/components/schemas/FailureInfo'
+    SagaAuditEvent:
+      type: object
+      description: |
+        One audited workflow transition with the observability context required
+        by ARCHITECTURE.md §26. The journal is append-only.
+      required:
+        - seq
+        - timestamp
+        - action
+        - component_id
+        - component_version
+        - saga_id
+      properties:
+        seq:
+          type: integer
+          minimum: 1
+        timestamp:
+          type: string
+        action:
+          type: string
+          description: One of the audited actions listed in the Component Contract.
+        component_id:
+          type: string
+        component_version:
+          type: string
+        saga_id:
+          type: [string, 'null']
+          description: Null for a refused start — no workflow exists yet.
+        step_id:
+          type: [string, 'null']
+        state:
+          type: [string, 'null']
+        reason:
+          type: [string, 'null']
+        tenant_id:
+          type: [string, 'null']
+        identity_id:
+          type: [string, 'null']
+        actor_service_id:
+          type: [string, 'null']
+        platform_id:
+          type: [string, 'null']
+        request_id:
+          type: [string, 'null']
+        correlation_id:
+          type: [string, 'null']
+        trace_id:
+          type: [string, 'null']
+        security_sensitive:
+          type: boolean
+    SagaRefusal:
+      type: object
+      description: |
+        Shape of the component's refusals. `reason` is stable and
+        machine-readable; a refusal is never a partial success.
+      required: [error, reason]
+      properties:
+        error:
+          type: string
+          enum:
+            - saga_not_found
+            - terminal_state
+            - step_unknown
+            - idempotency_conflict
+            - illegal_state_transition
+            - saga_store_exhausted
+        reason:
+          type: string
+          description: |
+            For a refused start or delivery: the reason stated by IS-001 or the
+            reason of the context violation (for example `tenant_mismatch`,
+            `identity_mismatch`).

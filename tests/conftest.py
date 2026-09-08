@@ -18,7 +18,11 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from authorization_service.adapters import identity_port, tenant_authority_port
-from authorization_service.contracts import AuthorizationDecision, ResourceRef
+from authorization_service.contracts import (
+    AuthorizationDecision,
+    ContractViolation as AuthorizationContractViolation,
+    ResourceRef,
+)
 from authorization_service.deployment import (
     AuthorizationDeployment,
     build_deployment as build_authorization,
@@ -27,12 +31,20 @@ from authorization_service.reader import AuthorizationClient
 from identity_service.api import create_app as create_identity_app
 from identity_service.config import IdentityConfig
 from identity_service.engine import IdentityEngine
+from identity_service.errors import AccessDenied as IdentityAccessDenied
+from identity_service.errors import ContractViolation as IdentityContractViolation
 from identity_service.reader import IdentityContextClient, build_client as build_identity_client
 from identity_service.store import IdentityStore
 from records_service.adapters import authorization_port as records_authorization_port
 from records_service.deployment import RecordsDeployment, build_deployment as build_records
+from records_service.errors import AccessRefused as RecordsAccessRefused
+from records_service.errors import ContractViolation as RecordsContractViolation
 from records_service.reader import RecordsClient
 from records_service.store import RecordsStore
+from saga.consumed import TenantContextAnswer, TenantContextRefusal
+from saga.errors import StepFailure
+from saga.executor import SagaExecutor
+from saga.models import RetryPolicy, SagaDefinition, StepDefinition
 from tenant_authority.contracts import TenantState
 from tenant_authority.deployment import TenantAuthorityDeployment, build_deployment
 from tenant_authority.lifecycle import LIFECYCLE_CHAIN
@@ -380,3 +392,449 @@ def provision_tenant(
         authority.engine.transition_tenant("svc-token-admin", tenant_id, next_state)
     assert authority.engine.lookup(tenant_id).state is state
     return tenant_id
+
+
+# ---------------------------------------------------------------- IS-006 harness
+#
+# The Saga boundary is a platform service with no business data of its own, so
+# its proof needs a composition: workflows whose steps reach a data owner
+# through a published contract. Everything below is composition-root material —
+# the same role ``RecordsBoundary`` plays for IS-004 — and none of it lives
+# inside the component.
+
+#: Human of Tenant A; the composition root grants it the reservation operations.
+SAGA_CREDENTIAL_A = "token-human-a"
+#: Service identity of Tenant A with ``records.read`` only: authenticated, but
+#: not authorized for the reservation operations (authentication is not
+#: authorization).
+SAGA_CREDENTIAL_SERVICE = "token-service"
+#: Human of Tenant B, used to prove that a workflow of Tenant A cannot act for B.
+SAGA_CREDENTIAL_B = "token-human-b"
+#: A second human of Tenant A: same tenant, another identity.
+SAGA_CREDENTIAL_C = "token-human-c"
+
+RESERVATION_TYPE = "reservation"
+RESERVATION_RESERVE = "reservations.reserve"
+RESERVATION_RELEASE = "reservations.release"
+RESERVATION_OPERATIONS = (RESERVATION_RESERVE, RESERVATION_RELEASE)
+
+#: Denial reasons that are security-relevant: they must stay observable.
+SECURITY_REFUSAL_REASONS = frozenset(
+    {
+        "missing_identity",
+        "invalid_identity",
+        "unknown_identity",
+        "missing_tenant_context",
+        "tenant_mismatch",
+        "tenant_unknown",
+        "platform_ownership_mismatch",
+        "resource_tenant_unknown",
+        "resource_tenant_mismatch",
+        "permission_not_granted",
+    }
+)
+
+#: Denial reasons that mean "the dependency could not answer": transient, and
+#: therefore the only refusals a step declares retryable.
+DEPENDENCY_REFUSAL_REASONS = frozenset({"authorization_unavailable"})
+
+
+class DomainRefused(Exception):
+    """The demo data owner's own domain refusal, with a machine-readable reason."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
+@dataclass(frozen=True, slots=True)
+class ReservationView:
+    """The value an allowed reservation operation returns. Business data."""
+
+    reservation_id: str
+    tenant_id: str
+    state: str
+
+
+@dataclass
+class ReservationsBoundary:
+    """Demo data owner for IS-006: reversible operations behind the real IS-003 chain.
+
+    Reserve and release are exact inverses, which is what makes a compensation
+    observable as a real business operation instead of a no-op. The boundary
+    owns its data, asks IS-003 for every operation and enforces the answer
+    itself — exactly the consumer side of the contract boundary that
+    ``RecordsBoundary`` demonstrates for IS-004. The counters are the
+    behavioral proof that a refused or replayed step applied no effect.
+    """
+
+    authorization: AuthorizationClient
+    tenants: dict[str, str] = field(default_factory=dict)
+    states: dict[str, str] = field(default_factory=dict)
+    applied_reserves: int = 0
+    applied_releases: int = 0
+
+    @property
+    def applied_effects(self) -> int:
+        return self.applied_reserves + self.applied_releases
+
+    def reserve(
+        self,
+        subject_credential: str | None,
+        reservation_id: str,
+        *,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> ReservationView:
+        self._decide(
+            subject_credential,
+            RESERVATION_RESERVE,
+            reservation_id,
+            claimed_tenant_id=claimed_tenant_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        if reservation_id not in self.tenants:
+            raise DomainRefused("reservation_unknown")
+        if self.states[reservation_id] == "reserved":
+            # The owner's own state machine: a repeated reserve is a refusal,
+            # never a second effect.
+            raise DomainRefused("already_reserved")
+        self.states[reservation_id] = "reserved"
+        self.applied_reserves += 1
+        return ReservationView(reservation_id, self.tenants[reservation_id], "reserved")
+
+    def release(
+        self,
+        subject_credential: str | None,
+        reservation_id: str,
+        *,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> ReservationView:
+        self._decide(
+            subject_credential,
+            RESERVATION_RELEASE,
+            reservation_id,
+            claimed_tenant_id=claimed_tenant_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        if reservation_id not in self.tenants:
+            raise DomainRefused("reservation_unknown")
+        if self.states[reservation_id] != "reserved":
+            raise DomainRefused("not_reserved")
+        self.states[reservation_id] = "available"
+        self.applied_releases += 1
+        return ReservationView(reservation_id, self.tenants[reservation_id], "available")
+
+    def _decide(
+        self,
+        subject_credential: str | None,
+        operation: str,
+        reservation_id: str,
+        *,
+        claimed_tenant_id: str | None,
+        request_id: str | None,
+        correlation_id: str | None,
+    ) -> AuthorizationDecision:
+        decision = self.authorization.decide(
+            subject_credential,
+            operation=operation,
+            resource=ResourceRef(
+                RESERVATION_TYPE, reservation_id, self.tenants.get(reservation_id)
+            ),
+            claimed_tenant_id=claimed_tenant_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        if not decision.allowed:
+            # The data owner enforces; the authority only answered.
+            raise Refused(decision)
+        return decision
+
+
+class IdentityContextAdapter:
+    """IS-006's tenant-context port over the published client of IS-001.
+
+    This is the composition root's translation, not a second identity
+    mechanism: the answer is reduced to the values of
+    :mod:`saga.consumed`, and a refusal stays a refusal.
+    """
+
+    def __init__(self, client: IdentityContextClient) -> None:
+        self._client = client
+
+    def resolve(
+        self,
+        subject_credential: str | None,
+        *,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> TenantContextAnswer | TenantContextRefusal:
+        try:
+            context = self._client.resolve_context(
+                subject_credential,
+                claimed_tenant_id=claimed_tenant_id,
+                request_id=request_id,
+                correlation_id=correlation_id,
+            )
+        except IdentityAccessDenied as exc:
+            return TenantContextRefusal(exc.reason.value)
+        except IdentityContractViolation:
+            return TenantContextRefusal("tenant_context_unavailable")
+        return TenantContextAnswer(
+            identity_id=context.identity_id,
+            tenant_id=context.tenant_id,
+            platform_id=context.platform_id,
+            kind=context.kind.value,
+        )
+
+
+def contract_step(call: Any) -> Any:
+    """Wrap a component-contract call in the failure vocabulary of IS-006.
+
+    A refusal of a business boundary becomes a :class:`saga.errors.StepFailure`
+    carrying the published reason unchanged; only a dependency that could not
+    answer is declared retryable, and identity/tenant/permission denials are
+    marked security-sensitive so the workflow audits them as such.
+    """
+
+    def handler(ctx: Any) -> Any:
+        try:
+            return call(ctx)
+        except Refused as exc:
+            reason = exc.decision.reason.value
+            raise StepFailure(
+                reason,
+                retryable=reason in DEPENDENCY_REFUSAL_REASONS,
+                security_sensitive=reason in SECURITY_REFUSAL_REASONS,
+            ) from exc
+        except RecordsAccessRefused as exc:
+            raise StepFailure(
+                exc.reason,
+                retryable=exc.reason in DEPENDENCY_REFUSAL_REASONS,
+                security_sensitive=exc.reason in SECURITY_REFUSAL_REASONS,
+            ) from exc
+        except DomainRefused as exc:
+            raise StepFailure(exc.reason) from exc
+        except (
+            AuthorizationContractViolation,
+            RecordsContractViolation,
+            IdentityContractViolation,
+        ) as exc:
+            # The dependency did not answer at all: transient, never a success.
+            raise StepFailure("dependency_unavailable", retryable=True) from exc
+
+    return handler
+
+
+@dataclass
+class SagaHarness:
+    """One composed Platform Instance plus the Saga executor under test."""
+
+    instance: Monolith
+    executor: SagaExecutor
+    reservations: ReservationsBoundary
+    records_client: RecordsClient
+    records_store: CountingRecordsStore
+
+    @property
+    def guard(self) -> Any:
+        """The IS-005 command-safety boundary this executor delivers through."""
+        return self.executor.idempotency
+
+    def actions(self, saga_id: str) -> list[str]:
+        return [event.action for event in self.executor.audit_trail(saga_id)]
+
+    def events(self, saga_id: str) -> list[Any]:
+        return list(self.executor.audit_trail(saga_id))
+
+    def definition(self, name: str, *steps: StepDefinition) -> SagaDefinition:
+        return SagaDefinition(name, steps)
+
+    def reserve_step(
+        self,
+        step_id: str,
+        reservation_id: str,
+        *,
+        retry: RetryPolicy | None = None,
+        timeout_seconds: float | None = None,
+        fail_before: Any = None,
+        fail_after: Any = None,
+        undo_fails: Any = None,
+        payload: dict[str, Any] | None = None,
+    ) -> StepDefinition:
+        """A step reserving one resource through the demo data owner's contract.
+
+        ``fail_before`` / ``fail_after`` / ``undo_fails`` accept an exception or
+        a callable receiving the step context, so a test can fail the first
+        attempt only, fail after the business effect was applied, or fail the
+        compensation — deterministically and without threads.
+        """
+        boundary = self.reservations
+
+        def raise_if(declared: Any, ctx: Any) -> None:
+            if declared is None:
+                return
+            outcome = declared(ctx) if callable(declared) else declared
+            if outcome is not None:
+                raise outcome
+
+        def call(ctx: Any) -> Any:
+            raise_if(fail_before, ctx)
+            view = boundary.reserve(
+                ctx.subject_credential,
+                reservation_id,
+                claimed_tenant_id=ctx.tenant_id,
+                request_id=ctx.request_id,
+                correlation_id=ctx.correlation_id,
+            )
+            raise_if(fail_after, ctx)
+            return view
+
+        def undo(ctx: Any) -> Any:
+            raise_if(undo_fails, ctx)
+            return boundary.release(
+                ctx.subject_credential,
+                reservation_id,
+                claimed_tenant_id=ctx.tenant_id,
+                request_id=ctx.request_id,
+                correlation_id=ctx.correlation_id,
+            )
+
+        return StepDefinition(
+            step_id=step_id,
+            operation=RESERVATION_RESERVE,
+            execute=contract_step(call),
+            compensate=contract_step(undo),
+            payload={"reservation_id": reservation_id, **(payload or {})},
+            retry=retry or RetryPolicy(),
+            timeout_seconds=timeout_seconds,
+        )
+
+    def records_step(
+        self,
+        step_id: str,
+        resource_id: str,
+        *,
+        transition: str | None = None,
+        retry: RetryPolicy | None = None,
+        fail_before: Any = None,
+    ) -> StepDefinition:
+        """A step against the real IS-004 data owner, through its published contract.
+
+        Reads change no owned state, so the compensation is an explicit no-op:
+        the absence of an undo is declared, not forgotten.
+        """
+        client = self.records_client
+
+        def call(ctx: Any) -> Any:
+            if fail_before is not None:
+                outcome = fail_before(ctx) if callable(fail_before) else fail_before
+                if outcome is not None:
+                    raise outcome
+            if transition is not None:
+                return client.transition_resource(
+                    ctx.subject_credential,
+                    resource_id,
+                    transition,
+                    claimed_tenant_id=ctx.tenant_id,
+                    request_id=ctx.request_id,
+                    correlation_id=ctx.correlation_id,
+                )
+            return client.read_resource(
+                ctx.subject_credential,
+                resource_id,
+                claimed_tenant_id=ctx.tenant_id,
+                request_id=ctx.request_id,
+                correlation_id=ctx.correlation_id,
+            )
+
+        def undo(ctx: Any) -> None:
+            return None
+
+        return StepDefinition(
+            step_id=step_id,
+            operation="records.write" if transition else "records.read",
+            execute=contract_step(call),
+            compensate=contract_step(undo),
+            payload={"resource_id": resource_id, "transition": transition},
+            retry=retry or RetryPolicy(),
+        )
+
+    def start(
+        self,
+        definition: SagaDefinition,
+        credential: str | None = SAGA_CREDENTIAL_A,
+        **kwargs: Any,
+    ) -> Any:
+        return self.executor.start(definition, subject_credential=credential, **kwargs)
+
+
+def saga_harness(
+    *,
+    reservations: dict[str, str] | None = None,
+    actor_service_id: str = "svc-saga",
+    **executor_kwargs: Any,
+) -> SagaHarness:
+    """Compose IS-001/IS-002/IS-003/IS-004 plus the IS-006 executor for one test.
+
+    The saga receives an IS-001 tenant-context port and its own IS-005 guard;
+    the business steps it is given reach the data owners through their published
+    contracts. Nothing of any other component's internals crosses into it.
+    """
+    instance = monolith()
+    # Provisioning the grant vocabulary of the demo data owner is the
+    # composition root's job: IS-003 publishes no grant management API.
+    instance.authorization.store.grant(
+        "ten_a", "idn_human_a", *RESERVATION_OPERATIONS
+    )
+    instance.authorization.store.grant(
+        "ten_b", "idn_human_b", *RESERVATION_OPERATIONS
+    )
+
+    owned = reservations if reservations is not None else {
+        "res_a1": "ten_a",
+        "res_a2": "ten_a",
+        "res_a3": "ten_a",
+        "res_b1": "ten_b",
+    }
+    boundary = ReservationsBoundary(
+        authorization=instance.authorization_client,
+        tenants=dict(owned),
+        states={reservation_id: "available" for reservation_id in owned},
+    )
+
+    # A second data owner over the real IS-004 component, with a counting store
+    # so "no business effect" is a measured fact and not an assumption.
+    counting = CountingRecordsStore()
+    counting.seed_demo()
+    records = build_records(
+        {
+            "platform_id": instance.authority.current_platform_id,
+            "environment": instance.authority.config.environment,
+        },
+        authorization=records_authorization_port(
+            instance.authorization.publish(credential=DATA_OWNER_CREDENTIAL)
+        ),
+        store=counting,
+        seed_demo=False,
+        with_http=True,
+    )
+
+    executor = SagaExecutor(
+        tenant_context=IdentityContextAdapter(instance.identity_context_client),
+        actor_service_id=actor_service_id,
+        **executor_kwargs,
+    )
+    return SagaHarness(
+        instance=instance,
+        executor=executor,
+        reservations=boundary,
+        records_client=records.publish(),
+        records_store=counting,
+    )
