@@ -9,27 +9,48 @@ from identity_service.engine import IdentityEngine
 from identity_service.errors import AccessDenied
 from identity_service.models import DenyReason
 from identity_service.store import IdentityStore
-from tenant_authority.runtime import build_runtime
+from tenant_authority.deployment import build_deployment
 
-# Composition root of the Level 0 modular monolith: Tenant Authority (IS-002) is
-# wired in as the authoritative Tenant registry, and identity consumes it through
-# its published contract only — never through internal modules or its store.
-tenant_authority_runtime = build_runtime({"platform_id": "plt_demo"}, seed_demo=True)
+# Composition root of the Level 0 modular monolith. Tenant Authority (IS-002) is
+# published to identity through its contract client only: identity never receives
+# the deployment, the engine, the store, the audit journal or any mutation
+# operation (invariant T-009, ARCHITECTURE.md §1.1). The credential below is a
+# deployment secret in production; the demo wiring uses the component's demo
+# service identity, whose permissions are exactly the two published reads.
+TENANT_AUTHORITY_CREDENTIAL = "svc-token-identity"
+_tenant_authority_deployment = build_deployment(
+    {"platform_id": "plt_demo"}, seed_demo=True, with_http=True
+)
 
 store = IdentityStore()
 store.seed_demo()
 identity_config = IdentityConfig.from_mapping(
     {
-        # Composition root binds both components to the same Platform Instance.
-        "current_platform_id": tenant_authority_runtime.current_platform_id,
-        "environment": tenant_authority_runtime.config.environment,
+        # The composition root binds both components to the same Platform Instance;
+        # a mismatch would be denied by the contract cross-check, not ignored.
+        "current_platform_id": _tenant_authority_deployment.current_platform_id,
+        "environment": _tenant_authority_deployment.config.environment,
     }
+)
+tenant_authority = _tenant_authority_deployment.publish(
+    credential=TENANT_AUTHORITY_CREDENTIAL,
+    expected_platform_id=identity_config.current_platform_id,
 )
 engine = IdentityEngine(
     store=store,
-    tenant_authority=tenant_authority_runtime.reader,
+    tenant_authority=tenant_authority,
     config=identity_config,
 )
+
+def tenant_authority_contract_app():
+    """The published contract application of the Tenant Authority in use.
+
+    Deliberately the only handle this module exposes: the deployment (engine,
+    store, configuration) stays composition-internal, so nothing in this module
+    is a path to another component's internals.
+    """
+    return _tenant_authority_deployment.contract_app()
+
 
 app = FastAPI(title="IS-001 Identity / Tenant Context", version=COMPONENT_VERSION)
 

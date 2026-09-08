@@ -223,7 +223,15 @@ def test_enforcement_is_live_not_a_snapshot_taken_at_context_resolution():
     assert write_outcome(
         identity_engine, token="token-idn_live", record_id="rec_live", claimed="ten_a"
     )[0] == "ALLOW"
-    assert authority.store.audit[-1].action == "tenant.transition"
+    actions = [event.action for event in authority.store.audit]
+    last_transition = len(actions) - 1 - actions[::-1].index("tenant.transition")
+    # Enforcement is live: the consumer's own reads at the authorization boundary
+    # are the events that follow the transition in the authority's journal.
+    assert actions[last_transition + 1 :] == ["tenant.read", "tenant.lifecycle"]
+    enforcing = authority.store.audit[last_transition + 1 :]
+    assert {event.actor_id for event in enforcing} == {"svc_identity"}
+    assert {event.decision for event in enforcing} == {AuthorityDecision.ALLOW}
+    assert {event.tenant_id for event in enforcing} == {"ten_a"}
 
 
 def test_suspension_blocks_reads_as_well_as_writes():

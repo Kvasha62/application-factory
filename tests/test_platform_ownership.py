@@ -22,13 +22,14 @@ from identity_service.models import (
 from identity_service.store import IdentityStore
 from tenant_authority.api import create_app
 from tenant_authority.contracts import TenantState
+from tenant_authority.models import Decision as AuthorityDecision
 from tenant_authority.errors import (
     AuthorizationDenied,
     DenyReason as AuthorityDeny,
     OwnershipDenied,
     TenantNotFound,
 )
-from tenant_authority.runtime import build_runtime
+from tenant_authority.deployment import build_deployment
 from tests.conftest import DEMO_CONFIG, PLATFORM_ID
 
 
@@ -36,7 +37,7 @@ OTHER_PLATFORM_CONFIG = {"platform_id": "plt_other", "environment": "test"}
 
 
 def test_a_tenant_is_registered_in_exactly_one_platform():
-    authority = build_runtime(DEMO_CONFIG, seed_demo=True)
+    authority = build_deployment(DEMO_CONFIG, seed_demo=True, with_http=True)
     assert authority.engine.lookup("ten_a").platform_id == PLATFORM_ID
     with pytest.raises(OwnershipDenied):
         authority.engine.lookup("ten_a", expected_platform_id="plt_other")
@@ -46,7 +47,7 @@ def test_context_of_another_platform_instance_cannot_see_this_tenants():
     """A second Platform Instance context never resolves Tenant A of platform P."""
     from tenant_authority.models import TenantRecord
 
-    other = build_runtime(OTHER_PLATFORM_CONFIG, seed_demo=False)
+    other = build_deployment(OTHER_PLATFORM_CONFIG, seed_demo=False, with_http=True)
     other.store.tenants["ten_b_own"] = TenantRecord(
         "ten_b_own", "plt_other", TenantState.ACTIVE, "2026-09-08T00:00:00+00:00",
         "2026-09-08T00:00:00+00:00",
@@ -72,7 +73,7 @@ def test_context_of_another_platform_instance_cannot_see_this_tenants():
 
 
 def test_authorized_operation_on_foreign_tenant_is_denied_with_not_found_shape():
-    authority = build_runtime(DEMO_CONFIG, seed_demo=True)
+    authority = build_deployment(DEMO_CONFIG, seed_demo=True, with_http=True)
     with pytest.raises(OwnershipDenied) as exc:
         authority.engine.get_tenant("svc-token-admin", "ten_foreign")
     assert exc.value.reason is AuthorityDeny.FOREIGN_TENANT
@@ -84,7 +85,7 @@ def test_authorized_operation_on_foreign_tenant_is_denied_with_not_found_shape()
 
 
 def test_foreign_tenant_does_not_appear_in_platform_listings():
-    authority = build_runtime(DEMO_CONFIG, seed_demo=True)
+    authority = build_deployment(DEMO_CONFIG, seed_demo=True, with_http=True)
     listed, _, _ = authority.engine.list_tenants("svc-token-admin")
     ids = {snapshot.tenant_id for snapshot in listed}
     assert "ten_a" in ids and "ten_b" in ids
@@ -93,7 +94,7 @@ def test_foreign_tenant_does_not_appear_in_platform_listings():
 
 
 def test_service_identity_of_another_platform_cannot_operate_this_registry():
-    authority = build_runtime(DEMO_CONFIG, seed_demo=True)
+    authority = build_deployment(DEMO_CONFIG, seed_demo=True, with_http=True)
     with pytest.raises(AuthorizationDenied) as exc:
         authority.engine.transition_tenant("svc-token-foreign-admin", "ten_a", "suspended")
     assert exc.value.reason is AuthorityDeny.PLATFORM_MISMATCH
@@ -103,7 +104,7 @@ def test_service_identity_of_another_platform_cannot_operate_this_registry():
 
 def test_claimed_platform_id_is_only_a_cross_check():
     """A caller cannot retarget an operation by rewriting `platform_id` (T-007)."""
-    authority = build_runtime(DEMO_CONFIG, seed_demo=True)
+    authority = build_deployment(DEMO_CONFIG, seed_demo=True, with_http=True)
     with pytest.raises(AuthorizationDenied) as exc:
         authority.engine.create_tenant(
             "svc-token-admin", claimed_platform_id="plt_other", tenant_id="ten_spoof"
@@ -119,7 +120,7 @@ def test_claimed_platform_id_is_only_a_cross_check():
 
 def test_effective_tenant_of_foreign_platform_never_resolves_in_identity_context():
     """Cross-check through IS-001: an identity bound to a foreign Tenant is denied."""
-    authority = build_runtime(DEMO_CONFIG, seed_demo=True)
+    authority = build_deployment(DEMO_CONFIG, seed_demo=True, with_http=True)
     store = IdentityStore()
     store.seed_demo()
     store.identities["idn_foreign"] = VerifiedIdentity(
@@ -131,23 +132,30 @@ def test_effective_tenant_of_foreign_platform_never_resolves_in_identity_context
     )
     engine = IdentityEngine(
         store=store,
-        tenant_authority=authority.reader,
+        tenant_authority=authority.publish(
+            credential="svc-token-identity", expected_platform_id=PLATFORM_ID
+        ),
         config=IdentityConfig.from_mapping({"current_platform_id": PLATFORM_ID}),
     )
 
     # The foreign Tenant resolves in the identity association, but the Tenant
-    # Authority ownership check denies it at the authorization boundary.
+    # Authority ownership check denies it at the authorization boundary. Over the
+    # published contract a Tenant of another Platform Instance is answered exactly
+    # like a missing one, so the consumer only ever learns "tenant unknown".
     with pytest.raises(AccessDenied) as exc:
         engine.write_record("token-foreign", "rec_spoof", "payload", "ten_foreign")
-    assert exc.value.reason is DenyReason.PLATFORM_OWNERSHIP_MISMATCH
-    assert engine.store.audit[-1].reason == DenyReason.PLATFORM_OWNERSHIP_MISMATCH.value
+    assert exc.value.reason is DenyReason.TENANT_UNKNOWN
+    assert engine.store.audit[-1].reason == DenyReason.TENANT_UNKNOWN.value
     assert "rec_spoof" not in engine.store.records
-    # Tenant Authority observed the same security-sensitive denial.
-    assert authority.store.audit[-1].reason == "foreign_tenant"
+    # The authority records the precise security-relevant reason for investigation.
+    denial = authority.store.audit[-1]
+    assert denial.reason == "foreign_tenant"
+    assert denial.action == "tenant.read"
+    assert denial.decision is AuthorityDecision.DENY
 
 
 def test_http_surface_never_returns_a_foreign_tenant():
-    authority = build_runtime(DEMO_CONFIG, seed_demo=True)
+    authority = build_deployment(DEMO_CONFIG, seed_demo=True, with_http=True)
     client = TestClient(create_app(authority))
     headers = {"Authorization": "Bearer svc-token-admin"}
 

@@ -84,5 +84,15 @@ class InvalidTransition(TenantAuthorityError):
     status_code = 409
 
 
+class ContractViolation(Exception):
+    """The component answered outside its published contract (transport fault).
+
+    Raised by the Level 0 contract transport. It is deliberately **not** an
+    :class:`TenantAuthorityError`: it is not an access decision, and a consumer
+    must fail closed on it instead of assuming that a Tenant exists and is
+    servable.
+    """
+
+
 class ConfigurationError(Exception):
-    """Invalid or unknown configuration of the Tenant Authority component."""
+    """Invalid or unknown configuration of the Tenant Authority component (ARCHITECTURE.md §20)."""

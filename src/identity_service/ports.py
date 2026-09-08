@@ -1,11 +1,12 @@
 """Ports through which Identity consumes other components.
 
-IS-001 must not read another component's storage or internal modules
-(ARCHITECTURE.md §1.1, LAW-04, invariant T-009). It depends on this narrow port,
-which is the published read surface of Tenant Authority (IS-002) — the tenant
-state and Platform Instance ownership come from the authority, never from a
-local copy, so the repository cannot grow a second source of Tenant state
-(invariant T-004).
+IS-001 may not read another component's storage or internal modules
+(ARCHITECTURE.md §1.1, LAW-04, invariant T-009). It depends on this narrow
+port — the published read surface of Tenant Authority (IS-002) — and the only
+implementation it is wired with is a value-only client over that contract.
+Tenant state and Platform Instance ownership therefore come from the authority
+and never from a local copy, so the repository cannot grow a second source of
+Tenant state (invariant T-004).
 """
 
 from __future__ import annotations
@@ -24,7 +25,6 @@ class TenantAuthorityPort(Protocol):
         tenant_id: str,
         *,
         expected_platform_id: str | None = None,
-        consumer_id: str | None = None,
         request_id: str | None = None,
         correlation_id: str | None = None,
     ) -> TenantSnapshot: ...
@@ -34,7 +34,6 @@ class TenantAuthorityPort(Protocol):
         tenant_id: str,
         *,
         expected_platform_id: str | None = None,
-        consumer_id: str | None = None,
         request_id: str | None = None,
         correlation_id: str | None = None,
     ) -> LifecycleDecision: ...

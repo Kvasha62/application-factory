@@ -14,7 +14,7 @@
       "T-005 transitions are limited to the published state machine",
       "T-006 deleted cannot be resurrected",
       "T-008 disallowed lifecycle states block ordinary tenant-scoped operations",
-      "T-009 no component gets direct access to this store",
+      "T-009 no component gets direct access to this store: a consumer is published the contract reads listed under api.consumer_surface and receives values only",
       "T-010 lifecycle transitions are audited",
       "T-011 operations carry the standard observability context"
     ]
@@ -32,10 +32,32 @@
       {"method": "GET", "path": "/api/v1/tenants/{tenant_id}/transitions", "purpose": "lifecycle transition history"},
       {"method": "POST", "path": "/api/v1/tenants/{tenant_id}/transitions", "purpose": "request a lifecycle transition", "idempotency": "Idempotency-Key"}
     ],
-    "in_process_contract": {
-      "module": "tenant_authority.contracts",
+    "consumer_surface": {
+      "module": "tenant_authority.reader",
+      "published_as": "TenantAuthorityClient",
+      "published_by": "tenant_authority.deployment.TenantAuthorityDeployment.publish",
+      "transport": "tenant_authority.transport.asgi_transport — the published HTTP contract executed in process (ARCHITECTURE.md §1.1 interaction mode API, Level 0)",
       "operations": ["lookup", "lifecycle_decision"],
-      "note": "Level 0 modular monolith entry point. It returns the same read model as GET /api/v1/tenants/{tenant_id} and /lifecycle, exposes no store, and is not an authorization decision: the data-owner component still applies its own authentication, permission and tenant-scope checks."
+      "returns": ["tenant_authority.contracts.TenantSnapshot", "tenant_authority.contracts.LifecycleDecision"],
+      "errors": ["tenant_authority.errors.TenantAuthorityError and its published subclasses, reconstructed from status code and machine-readable reason",
+        "tenant_authority.errors.ContractViolation — raised when the component answers outside its contract; a consumer must fail closed"],
+      "guarantees": [
+        "values only: no store handle, audit journal, idempotency table, engine reference or mutation operation is reachable through the published surface",
+        "every read is executed by the same routing, service-identity authentication, permission check, Platform Instance ownership validation and audit code that serves an HTTP request",
+        "the consuming service identity comes from the credential bound to the client and cannot be chosen by the caller",
+        "an answer outside the published contract raises tenant_authority.errors.ContractViolation, so a consumer fails closed instead of assuming that the Tenant is servable"
+      ],
+      "internal_modules": [
+        "tenant_authority.engine",
+        "tenant_authority.store",
+        "tenant_authority.models",
+        "tenant_authority.lifecycle",
+        "tenant_authority.config",
+        "tenant_authority.api",
+        "tenant_authority.deployment",
+        "tenant_authority.transport"
+      ],
+      "note": "The deployment object is composition-internal: it assembles engine, store and contract application for the composition root and for this component's own tests and is never handed to a consumer. There is no consumer-facing runtime API and no second Tenant Context mechanism."
     },
     "denial_semantics": {
       "foreign_tenant_response": "answered as tenant_not_found at the transport level; the precise reason remains in the audit journal",

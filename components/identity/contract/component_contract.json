@@ -13,12 +13,15 @@
       {
         "component_id": "tenant_authority",
         "contract": "components/tenant_authority/contract/component_contract.json",
+        "mechanism": "contract client over the published API of tenant_authority, executed in process at Level 0",
+        "consumer_surface": "tenant_authority.reader.TenantAuthorityClient",
+        "credential_source": "deployment secret resolved by the composition root: the service identity of the consuming component",
+        "demo_credential": "svc-token-identity",
         "operations": [
           "lookup",
           "lifecycle_decision"
         ],
-        "mechanism": "published read contract (TenantAuthorityReader at Level 0)",
-        "note": "Tenant state and ownership are read from the authority at the authorization boundary; the effective tenant id is still derived only from verified identity."
+        "note": "Tenant state and ownership are read from the authority at the authorization boundary; the effective tenant id is still derived only from verified identity. The client is value-only and is bound to this component's own service identity: identity receives no engine, store, audit journal or mutation operation, and cannot choose the actor recorded in the authority's journal. A Tenant of another Platform Instance is answered as unknown, so identity reports TENANT_UNKNOWN while the authority keeps the precise ownership denial."
       }
     ]
   },

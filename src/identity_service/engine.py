@@ -23,6 +23,7 @@ from identity_service.models import (
 from identity_service.ports import TenantAuthorityPort
 from identity_service.store import IdentityStore
 from tenant_authority.contracts import TenantSnapshot
+from tenant_authority.errors import ContractViolation
 from tenant_authority.errors import DenyReason as TenantAuthorityDenial
 from tenant_authority.errors import TenantAuthorityError
 
@@ -37,9 +38,14 @@ TENANT_LIFECYCLE_DENIALS: dict[str, DenyReason] = {
     "unsupported_state": DenyReason.TENANT_NOT_ACTIVE,
 }
 
+#: Tenant Authority answers a Tenant of another Platform Instance exactly like a
+#: missing one, so the contract-level reason for both is `tenant_not_found`; a
+#: platform cross-check failure (`platform_mismatch`) means this component is
+#: wired to the wrong Platform Instance and is reported distinctly.
 TENANT_AUTHORITY_DENIALS: dict[str, DenyReason] = {
     TenantAuthorityDenial.TENANT_NOT_FOUND.value: DenyReason.TENANT_UNKNOWN,
     TenantAuthorityDenial.FOREIGN_TENANT.value: DenyReason.PLATFORM_OWNERSHIP_MISMATCH,
+    TenantAuthorityDenial.PLATFORM_MISMATCH.value: DenyReason.PLATFORM_OWNERSHIP_MISMATCH,
 }
 
 
@@ -144,16 +150,20 @@ class IdentityEngine:
             return self.tenant_authority.lookup(
                 tenant_id,
                 expected_platform_id=self.current_platform_id,
-                consumer_id=COMPONENT_ID,
                 request_id=request_id,
                 correlation_id=correlation_id,
             )
-        except TenantAuthorityError as exc:
+        except (TenantAuthorityError, ContractViolation) as exc:
+            # A transport fault is handled like an unknown Tenant: no answer from
+            # the authority is never read as "this Tenant may be served".
             raise AccessDenied(self._authority_denial(exc)) from exc
 
     @staticmethod
-    def _authority_denial(exc: TenantAuthorityError) -> DenyReason:
-        return TENANT_AUTHORITY_DENIALS.get(exc.reason.value, DenyReason.TENANT_UNKNOWN)
+    def _authority_denial(exc: BaseException) -> DenyReason:
+        reason = getattr(exc, "reason", None)
+        if reason is None:
+            return DenyReason.TENANT_UNKNOWN
+        return TENANT_AUTHORITY_DENIALS.get(reason.value, DenyReason.TENANT_UNKNOWN)
 
     # ------------------------------------------------------------------ authz
     def authorize(
@@ -169,11 +179,13 @@ class IdentityEngine:
             # T-008: a Tenant in a lifecycle state that must not be served
             # blocks ordinary tenant-scoped operations. The state machine and
             # the operational policy belong to Tenant Authority, not to us.
-            decision = self.tenant_authority.lifecycle_decision(
-                tenant.tenant_id,
-                expected_platform_id=self.current_platform_id,
-                consumer_id=COMPONENT_ID,
-            )
+            try:
+                decision = self.tenant_authority.lifecycle_decision(
+                    tenant.tenant_id,
+                    expected_platform_id=self.current_platform_id,
+                )
+            except (TenantAuthorityError, ContractViolation) as exc:
+                raise AccessDenied(self._authority_denial(exc)) from exc
             if not decision.permitted:
                 raise AccessDenied(TENANT_LIFECYCLE_DENIALS[decision.reason])
 

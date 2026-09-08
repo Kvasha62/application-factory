@@ -7,6 +7,7 @@ tenant-context не появляется, и прямой доступ к чуж
 
 from __future__ import annotations
 
+import importlib
 import json
 from dataclasses import fields
 from pathlib import Path
@@ -16,15 +17,15 @@ from fastapi.testclient import TestClient
 
 from identity_service import models as identity_models
 from identity_service.api import app as identity_app
-from identity_service.api import tenant_authority_runtime
+from identity_service.api import tenant_authority_contract_app
 from identity_service.engine import IdentityEngine
 from identity_service.config import IdentityConfig
 from identity_service.errors import AccessDenied
-from identity_service.models import DenyReason, TenantAssociation, TenantContext
+from identity_service.models import Decision, DenyReason, TenantAssociation, TenantContext
 from identity_service.ports import TenantAuthorityPort
 from identity_service.store import IdentityStore
-from tests.conftest import composed
-from tenant_authority.api import create_app
+from tests.conftest import composed, tenant_authority
+from tenant_authority.errors import ContractViolation
 from tenant_authority.contracts import (
     TENANT_STATE_SOURCE,
     LifecycleDecision,
@@ -44,12 +45,12 @@ class StubAuthority:
         self.permitted = permitted
         self.reason = reason
 
-    def lookup(self, tenant_id, *, expected_platform_id=None, consumer_id=None, **_):
+    def lookup(self, tenant_id, *, expected_platform_id=None, **_):
         self.calls.append(f"lookup:{tenant_id}")
         stamp = "2026-09-08T00:00:00+00:00"
         return TenantSnapshot(tenant_id, expected_platform_id or "plt_stub", self.state, stamp, stamp)
 
-    def lifecycle_decision(self, tenant_id, *, expected_platform_id=None, consumer_id=None, **_):
+    def lifecycle_decision(self, tenant_id, *, expected_platform_id=None, **_):
         self.calls.append(f"lifecycle:{tenant_id}")
         return LifecycleDecision(
             tenant_id,
@@ -122,19 +123,22 @@ def test_deletion_requested_state_is_enforced_through_the_identity_boundary():
 
 
 def test_identity_consumes_the_published_port_only():
-    """T-009: the wiring hands identity a contract object, never a store handle."""
+    """T-009: the wiring hands identity a contract object, never a store handle.
+
+    The exhaustive behavioral proof of the boundary lives in
+    ``tests/test_component_boundary.py``; this test keeps the guard on the
+    consumer side: identity holds a port-typed value-only client and no storage.
+    """
     identity_engine, _ = composed()
-    reader = identity_engine.tenant_authority
-    assert isinstance(reader, TenantAuthorityPort)
-    # The published surface is exactly the two contract reads: no store, no
-    # audit journal, no idempotency table, no mutation operation.
-    published = {name for name in dir(reader) if not name.startswith("_")}
+    client = identity_engine.tenant_authority
+    assert isinstance(client, TenantAuthorityPort)
+    published = {name for name in dir(client) if not name.startswith("_")}
     assert published == {"lookup", "lifecycle_decision"}
-    for forbidden in ("store", "transitions", "audit", "idempotency", "transition_tenant", "create_tenant"):
-        assert not hasattr(reader, forbidden), forbidden
-    # Identity itself receives no storage handle for Tenants.
-    assert "store" not in {f.name for f in fields(IdentityEngine)} or True
+    for forbidden in ("store", "transitions", "audit", "idempotency",
+                      "transition_tenant", "create_tenant", "engine", "config"):
+        assert not hasattr(client, forbidden), forbidden
     assert not hasattr(IdentityEngine, "tenant_store")
+    assert not hasattr(IdentityEngine, "tenant_registry")
 
 
 def test_state_source_is_reported_and_cannot_be_forced_by_a_caller():
@@ -165,13 +169,13 @@ def test_only_tenant_authority_can_change_tenant_state():
         assert identity_client.get(path).status_code == 404, path
         assert identity_client.post(path, json={"state": "active"}).status_code == 404, path
 
-    authority_client = TestClient(create_app(tenant_authority_runtime))
+    authority_client = TestClient(tenant_authority_contract_app())
     assert authority_client.get("/api/v1/tenants/ten_a/lifecycle").status_code == 401
 
 
 def test_lifecycle_written_through_the_authority_api_is_enforced_by_the_identity_api():
     """End-to-end over both published HTTP contracts: one source of truth."""
-    authority_client = TestClient(create_app(tenant_authority_runtime))
+    authority_client = TestClient(tenant_authority_contract_app())
     identity_client = TestClient(identity_app)
     headers = {"Authorization": "Bearer svc-token-admin"}
     user = {"Authorization": "Bearer token-human-a", "X-Tenant-Id": "ten_a"}
@@ -259,32 +263,54 @@ def test_effective_tenant_derivation_is_unchanged_by_is_002():
         identity_engine.store.associations.pop(("idn_human_a", "ten_b"), None)
 
 
+#: Modules of Tenant Authority that are internal to the component.
 TENANT_AUTHORITY_INTERNALS = (
     "tenant_authority.engine",
     "tenant_authority.store",
     "tenant_authority.models",
     "tenant_authority.lifecycle",
     "tenant_authority.config",
+    "tenant_authority.api",
+    "tenant_authority.transport",
+    "tenant_authority.deployment",
 )
 
-TENANT_AUTHORITY_CONTRACT_MODULES = ("tenant_authority.contracts", "tenant_authority.errors")
+#: The whole shared surface of the component: data contract, errors, client.
+TENANT_AUTHORITY_PUBLISHED_MODULES = (
+    "tenant_authority.contracts",
+    "tenant_authority.errors",
+    "tenant_authority.reader",
+)
 
 
 def test_identity_never_imports_tenant_authority_internals():
     """Automated guard for ARCHITECTURE.md §1.1 / LAW-04 / invariant T-009.
 
     Identity may depend on the published contract (`contracts`, `errors`) and on
-    the composition root of a Level 0 deployment (`runtime`); it must not reach
-    the engine, store, models, lifecycle or configuration of another component.
+    the published client (`reader`). Only its composition root may assemble the
+    component (deployment); the engine, the store, the models, the lifecycle
+    machinery, the configuration and the HTTP/transport plumbing are off limits.
     """
     offenders = []
     for module in sorted(Path("src/identity_service").glob("*.py")):
-        text = module.read_text(encoding="utf-8")
-        for internal in TENANT_AUTHORITY_INTERNALS:
-            if f"import {internal}" in text or f"from {internal}" in text:
-                offenders.append(f"{module.name} -> {internal}")
-        if module.name != "api.py" and "from tenant_authority.runtime" in text:
-            offenders.append(f"{module.name} -> tenant_authority.runtime (composition root)")
+        imported = set()
+        for line in module.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("from tenant_authority") and " import" in line:
+                imported.add(line.split(" import")[0][len("from ") :].strip())
+            elif line.startswith("import tenant_authority"):
+                imported.add(line[len("import ") :].split()[0].strip().rstrip(","))
+        for name in sorted(imported):
+            root = name if name.startswith("tenant_authority") else f"tenant_authority.{name}"
+            # Only the composition root of the Level 0 monolith may assemble the
+            # component; every other module of identity must not even see it.
+            composing = module.name == "api.py" and root == "tenant_authority.deployment"
+            if root in TENANT_AUTHORITY_INTERNALS and not composing:
+                offenders.append(f"{module.name} -> {root} (internal)")
+            elif not composing and root not in (
+                TENANT_AUTHORITY_PUBLISHED_MODULES + ("tenant_authority",)
+            ):
+                offenders.append(f"{module.name} -> {root} (undeclared)")
     assert offenders == []
 
 
@@ -303,3 +329,57 @@ def test_published_contract_modules_are_the_only_shared_surface():
     assert annotated.type == "TenantState"
     assert identity_models.TenantState is authority_contracts.TenantState
     assert identity_models.TenantContext.__module__ == "identity_service.models"
+
+
+def test_identity_declares_the_consumer_surface_it_actually_uses():
+    """The declared consumption is the used one — and it is a value-only client.
+
+    Contract-side conformance of the component boundary: the surface named in
+    IS-001's contract is the object identity is really wired with, its operations
+    are exactly what it can call, and the credential the composition root uses is
+    a service identity holding exactly the two published reads.
+    """
+    data = json.loads(IDENTITY_CONTRACT.read_text(encoding="utf-8"))
+    consumed = data["api"]["consumes"][0]
+    assert consumed["component_id"] == "tenant_authority"
+    assert consumed["mechanism"].startswith("contract client over the published API")
+
+    module_name, _, class_name = consumed["consumer_surface"].rpartition(".")
+    client_class = getattr(importlib.import_module(module_name), class_name)
+
+    identity_api = importlib.import_module("identity_service.api")
+    assert type(identity_api.tenant_authority) is client_class
+    assert type(identity_api.engine.tenant_authority) is client_class
+    assert {
+        name for name in dir(identity_api.engine.tenant_authority) if not name.startswith("_")
+    } == set(consumed["operations"])
+
+    from tenant_authority.store import LOOKUP_PERMISSIONS
+
+    authority = tenant_authority()
+    access = authority.engine.verify_service_identity(consumed["demo_credential"])
+    assert access.permissions == LOOKUP_PERMISSIONS
+    assert access.platform_id == authority.current_platform_id
+
+
+def test_a_transport_fault_denies_and_is_audited_at_the_boundary():
+    """No answer from the authority is never read as "this Tenant may be served"."""
+
+    class UnreachableAuthority:
+        def lookup(self, tenant_id, **_):
+            raise ContractViolation("tenant authority did not answer")
+
+        def lifecycle_decision(self, tenant_id, **_):
+            raise ContractViolation("tenant authority did not answer")
+
+    identity_engine = bare_identity_engine(UnreachableAuthority())
+    with pytest.raises(AccessDenied) as exc:
+        identity_engine.read_record("token-human-a", "rec_a1", "ten_a")
+    assert exc.value.reason is DenyReason.TENANT_UNKNOWN
+    denial = identity_engine.store.audit[-1]
+    assert denial.reason == DenyReason.TENANT_UNKNOWN.value
+    assert denial.decision is Decision.DENY
+
+    with pytest.raises(AccessDenied):
+        identity_engine.write_record("token-human-a", "rec_new", "body", "ten_a")
+    assert "rec_new" not in identity_engine.store.records

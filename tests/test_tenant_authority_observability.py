@@ -114,7 +114,8 @@ def test_one_request_is_traceable_in_both_component_journals():
     """
     from identity_service.api import app as identity_app
     from identity_service.api import engine as identity_engine
-    from identity_service.api import tenant_authority_runtime
+    # A test may inspect the composition root's internals; a consumer cannot.
+    from identity_service.api import _tenant_authority_deployment as authority_deployment
     from identity_service.models import TenantAssociation
 
     client = TestClient(identity_app)
@@ -141,7 +142,7 @@ def test_one_request_is_traceable_in_both_component_journals():
         "cor-cross-1",
     )
 
-    authority_event = tenant_authority_runtime.store.audit[-1]
+    authority_event = authority_deployment.store.audit[-1]
     assert authority_event.reason == "tenant_not_found"
     assert (authority_event.request_id, authority_event.correlation_id) == (
         "req-cross-1",

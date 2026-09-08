@@ -9,9 +9,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import tenant_authority
+from tests.conftest import DEMO_CONFIG, tenant_authority
 from tenant_authority.api import create_app
 from tenant_authority.contracts import TenantState
+from tenant_authority.deployment import build_deployment
 from tenant_authority.errors import AuthorizationDenied, DenyReason
 from tenant_authority.lifecycle import ALLOWED_TRANSITIONS, OPERATION_POLICY
 from tenant_authority.models import AuditEvent, LifecycleTransition
@@ -148,6 +149,77 @@ def test_contract_declares_the_lifecycle_of_the_component_itself():
     invariants = " ".join(data["data_scope_authority"]["invariants"])
     for expected in ("T-001", "T-002", "T-003", "T-004", "T-005", "T-006", "T-008"):
         assert expected in invariants
+
+
+def test_declared_consumer_surface_is_the_real_published_surface():
+    """Conformance of the boundary declaration: what the contract names exists.
+
+    The check is behavioral — the declared module, type, operations, return values
+    and transport are resolved and exercised at runtime.
+    """
+    import importlib
+    import importlib.util
+    import inspect
+
+    surface = contract()["api"]["consumer_surface"]
+    module = importlib.import_module(surface["module"])
+    client_class = getattr(module, surface["published_as"])
+
+    # The publisher named by the contract really publishes the client.
+    holder_path, _, publisher_attr = surface["published_by"].rpartition(".")
+    holder_module_name, _, holder_name = holder_path.rpartition(".")
+    assert publisher_attr == "publish"
+    holder_module = importlib.import_module(holder_module_name)
+    publisher = getattr(holder_module, holder_name)
+    assert callable(getattr(publisher, publisher_attr))
+
+    deployment = build_deployment(DEMO_CONFIG, seed_demo=True, with_http=True)
+    client = deployment.publish(credential="svc-token-identity")
+    assert type(client) is client_class
+
+    declared_operations = set(surface["operations"])
+    assert {n for n in dir(client) if not n.startswith("_")} == declared_operations
+    # The declared operations are implemented by the published module itself, not
+    # delegated to an internal object that the consumer could then reach.
+    for name in declared_operations:
+        owner = inspect.getmodule(getattr(client_class, name))
+        assert owner.__name__ == surface["module"], name
+
+    returns = {entry.rsplit(".", 1)[1] for entry in surface["returns"]}
+    assert returns == {
+        type(client.lookup("ten_a")).__name__,
+        type(client.lifecycle_decision("ten_a")).__name__,
+    }
+
+    # The declared transport executes the published contract and returns data only.
+    transport_name = surface["transport"].split(" ")[0]
+    transport_module = importlib.import_module(transport_name.rpartition(".")[0])
+    transport_call = getattr(transport_module, transport_name.rpartition(".")[2])
+    status, payload = transport_call(deployment.contract_app())(
+        "GET",
+        "/api/v1/tenants/ten_a",
+        [("authorization", "Bearer svc-token-identity")],
+        None,
+    )
+    assert status == 200
+    assert payload["tenant_id"] == "ten_a"
+    assert payload["state_source"] == "tenant_authority"
+    assert set(payload) == {
+        "tenant_id",
+        "platform_id",
+        "state",
+        "created_at",
+        "updated_at",
+        "state_source",
+    }
+
+    # The published module re-exports none of the declared internal modules, and
+    # every declared internal module exists (nothing is declared that was removed).
+    for internal in surface["internal_modules"]:
+        assert importlib.util.find_spec(internal) is not None, internal
+        assert not hasattr(module, internal.rsplit(".", 1)[1]), internal
+    assert importlib.util.find_spec("tenant_authority.runtime") is None
+    assert not hasattr(module, "TenantAuthorityReader")
 
 
 def test_published_state_machine_equals_the_runtime_state_machine():

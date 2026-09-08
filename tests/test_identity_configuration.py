@@ -40,9 +40,17 @@ def test_declared_token_prefix_is_the_configured_one():
     store = IdentityStore()
     store.seed_demo()
     store.tokens = {
-        f"identity-token-{key[6:]}": value for key, value in store.tokens.items() if key.startswith("token-")
+        f"identity-token-{key[6:]}": value
+        for key, value in store.tokens.items()
+        if key.startswith("token-")
     }
-    engine = IdentityEngine(store=store, tenant_authority=authority.reader, config=config)
+    engine = IdentityEngine(
+        store=store,
+        tenant_authority=authority.publish(
+            credential="svc-token-identity", expected_platform_id=config.current_platform_id
+        ),
+        config=config,
+    )
 
     assert engine.verify_identity("identity-token-human-a").identity_id == "idn_human_a"
     # The previously valid prefix is no longer accepted by this configuration.

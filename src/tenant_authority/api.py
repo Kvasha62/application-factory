@@ -1,8 +1,10 @@
-"""HTTP surface of the Tenant Authority component (published contract `/api/v1`).
+"""HTTP surface of the Tenant Authority component — the published contract.
 
-Everything outside this module is internal: no other component may reach the
-Tenant Registry store, the audit journal or the engine internals directly
-(invariant T-009, ARCHITECTURE.md §1.1).
+Everything else (engine, store, audit journal, idempotency table, mutation
+operations) is internal: no other component may reach it directly
+(invariant T-009, ARCHITECTURE.md §1.1, LAW-04). Level 0 consumers talk to this
+contract in-process through ``tenant_authority.transport`` and receive the
+value-only client from ``tenant_authority.reader``.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from tenant_authority.contracts import LifecycleDecision, TenantSnapshot, Tenant
 from tenant_authority.errors import DenyReason, TenantAuthorityError
 from tenant_authority.lifecycle import ALLOWED_TRANSITIONS
 from tenant_authority.models import LifecycleTransition
-from tenant_authority.runtime import TenantAuthorityRuntime, build_runtime
+from tenant_authority.deployment import TenantAuthorityDeployment, build_deployment
 
 
 class TenantOut(BaseModel):
@@ -129,8 +131,9 @@ def _token(authorization: str | None) -> str | None:
     return authorization
 
 
-def create_app(runtime: TenantAuthorityRuntime) -> FastAPI:
-    engine = runtime.engine
+def create_app(deployment: TenantAuthorityDeployment) -> FastAPI:
+    """Bind the published HTTP contract to one Tenant Authority deployment."""
+    engine = deployment.engine
     app = FastAPI(
         title="IS-002 Tenant Authority / Tenant Lifecycle",
         version=COMPONENT_VERSION,
@@ -286,9 +289,7 @@ def create_app(runtime: TenantAuthorityRuntime) -> FastAPI:
     return app
 
 
-def build_demo_app() -> tuple[FastAPI, TenantAuthorityRuntime]:
-    runtime = build_runtime({"platform_id": "plt_demo"}, seed_demo=True)
-    return create_app(runtime), runtime
+_deployment = build_deployment({"platform_id": "plt_demo"}, seed_demo=True, with_http=True)
 
-
-app, runtime = build_demo_app()
+#: ASGI application of the standalone demo deployment (`tenant_authority.api:app`).
+app = _deployment.http_app

@@ -94,28 +94,23 @@ class TenantAuthorityEngine:
         """Deployment identity of this Platform Instance (T-003 input)."""
         return self.config.platform_id
 
-    # -- published contract reads: no second mechanism, authoritative lookup ----
+    # -- authoritative reads used by the published contract (internal API) ------
     def lookup(
         self,
         tenant_id: str,
         *,
         expected_platform_id: str | None = None,
-        consumer_id: str | None = None,
         request_id: str | None = None,
         correlation_id: str | None = None,
     ) -> TenantSnapshot:
-        """Authoritative Tenant state for a trusted in-process consumer.
+        """Authoritative Tenant state; the published surface wraps this read.
 
         ``expected_platform_id`` is the consumer's current Platform Instance:
         a Tenant of another instance is never returned (T-003).
         """
         return _snapshot(
             self._authoritative_read(
-                tenant_id,
-                expected_platform_id,
-                consumer_id,
-                request_id,
-                correlation_id,
+                tenant_id, expected_platform_id, request_id, correlation_id
             )
         )
 
@@ -124,7 +119,6 @@ class TenantAuthorityEngine:
         tenant_id: str,
         *,
         expected_platform_id: str | None = None,
-        consumer_id: str | None = None,
         request_id: str | None = None,
         correlation_id: str | None = None,
     ) -> LifecycleDecision:
@@ -134,11 +128,7 @@ class TenantAuthorityEngine:
         Platform Instance) are audited here as well as at the consuming boundary.
         """
         record = self._authoritative_read(
-            tenant_id,
-            expected_platform_id,
-            consumer_id,
-            request_id,
-            correlation_id,
+            tenant_id, expected_platform_id, request_id, correlation_id
         )
         return operation_decision(record.tenant_id, record.platform_id, record.state)
 
@@ -146,7 +136,6 @@ class TenantAuthorityEngine:
         self,
         tenant_id: str,
         expected_platform_id: str | None,
-        consumer_id: str | None,
         request_id: str | None,
         correlation_id: str | None,
     ) -> TenantRecord:
@@ -167,7 +156,6 @@ class TenantAuthorityEngine:
                 access=None,
                 obs=obs,
                 tenant_id=tenant_id,
-                details={} if consumer_id is None else {"consumer_id": consumer_id},
             )
             raise
 

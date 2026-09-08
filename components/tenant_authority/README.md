@@ -76,8 +76,25 @@ tenant-scoped операции запрещены в состояниях `provi
 ## Публичный контракт
 
 - HTTP: `/api/v1` — см. `contract/openapi.yaml` и `contract/component_contract.json`;
-- Level 0 (in-process): `tenant_authority.contracts.TenantAuthorityReader` —
+- уровень 0 (in-process): `tenant_authority.reader.TenantAuthorityClient` —
   ровно две операции чтения, `lookup` и `lifecycle_decision`.
+
+Граница компонента контрактно-опосредованная, а не соглашенческая: клиент
+выполняет опубликованный HTTP-контракт внутри процесса
+(`tenant_authority.transport.asgi_transport`) и принимает наружу только значения
+из `tenant_authority.contracts`. Через опубликованную поверхность недоступны
+хранилище, журнал аудита, таблица идемпотентности, методы мутаций и сам engine —
+ни под открытым именем, ни под закрытым (`_source`, `_store`, `_engine`);
+атрибутов-ссылок на внутренние объекты у клиента нет вообще (`__slots__` из
+transport/credential/platform). Каждый чтение проходит аутентификацию
+сервисной идентичности, проверку права, валидацию принадлежности Platform
+Instance и запись в аудит — тот же код, что и для HTTP-запроса.
+
+Отказ, выданный на чужой Tenant, приходит потребителю как `tenant_not_found`
+(см. `api.denial_semantics`): точная причина `foreign_tenant` остаётся в журнале
+аудита компонента. Сбой транспорта (не-JSON, отсутствие ответа) поднимает
+`tenant_authority.transport.ContractViolation` — потребитель падает закрытым,
+а не считает Tenant обслуживаемым.
 
 Чтение состояния Tenant **не является** решением авторизации: компонент-владелец
 данных сам применяет аутентификацию, права и tenant-границу на своей границе
@@ -100,8 +117,11 @@ authoritative lookup состояния и принадлежности Tenant. 
 реестра Tenant в identity удалена, как и второй набор значений состояний —
 второго механизма не появляется (T-004).
 
-Композиция Level 0 выполняется в `tenant_authority.runtime.build_runtime()`:
-потребителю передаётся только `runtime.reader`.
+Композиция Level 0 выполняется в `tenant_authority.deployment.build_deployment()`;
+объект `TenantAuthorityDeployment` (engine, store, config, HTTP-приложение) —
+**внутренний** для сборки и наружу потребителю не передаётся: композиционный корень
+вызывает `deployment.publish(credential=...)` и отдаёт клиенту только клиент.
+Отдельного «runtime API» для потребителей больше нет.
 
 ## Отказ в обслуживании по состоянию
 

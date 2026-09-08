@@ -1,21 +1,19 @@
-"""Public contract of the Tenant Authority component (IS-002).
+"""Published data contract of the Tenant Authority component (IS-002).
 
-This module is the only Tenant Authority surface that other components may
-depend on. It publishes the Tenant vocabulary, the authoritative read model and
-the error classes. Internal modules (``store``, ``engine`` internals, audit
-journal) are not part of the contract and must not be imported by consumers
-(ARCHITECTURE.md §1.1, LAW-04, invariant T-009).
+This module publishes the Tenant vocabulary, the immutable read model returned
+across the boundary and the error classes. Internal modules (``engine``,
+``store``, ``models``, ``lifecycle``, the audit journal and the mutation
+operations) are not part of the contract and must not be imported or reached
+through the published surface (ARCHITECTURE.md §1.1, LAW-04, invariant T-009).
 
-Consumers inside the Level 0 modular monolith use these dataclasses through the
-published operation semantics of ``GET /api/v1/tenants/...`` — the in-process
-client adapter returns exactly the same objects the HTTP contract serializes.
+The object a consumer receives is ``tenant_authority.reader.TenantAuthorityClient``
+— two read operations over the published API, values in and values out.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
 
 from tenant_authority.errors import (
     AuthenticationDenied,
@@ -47,7 +45,10 @@ class TenantState(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class TenantSnapshot:
-    """Authoritative read model of a Tenant.
+    """Immutable read model of a Tenant.
+
+    A value, never a live record: mutating it is impossible and cannot affect the
+    registry, and holding it never keeps a handle on the authority's storage.
 
     ``state_source`` names the component that owns the lifecycle state, so a
     consumer can never mistake a locally cached copy for the authoritative one.
@@ -77,83 +78,7 @@ class LifecycleDecision:
     reason: str
 
 
-class AuthoritativeSource(Protocol):
-    """Operations an implementation must provide to be published to consumers."""
-
-    def lookup(
-        self,
-        tenant_id: str,
-        *,
-        expected_platform_id: str | None = None,
-        consumer_id: str | None = None,
-        request_id: str | None = None,
-        correlation_id: str | None = None,
-    ) -> TenantSnapshot: ...
-
-    def lifecycle_decision(
-        self,
-        tenant_id: str,
-        *,
-        expected_platform_id: str | None = None,
-        consumer_id: str | None = None,
-        request_id: str | None = None,
-        correlation_id: str | None = None,
-    ) -> LifecycleDecision: ...
-
-
-class TenantAuthorityReader:
-    """The narrow in-process view of the authority handed to other components.
-
-    Only the published read operations are reachable. A consumer gets no handle
-    on the registry store, the audit journal, the idempotency table or any
-    mutation operation — invariant T-009 is enforced by the shape of this object,
-    not by convention. Reaching ``_source`` is a boundary violation, not a
-    supported integration path.
-    """
-
-    __slots__ = ("_source",)
-
-    def __init__(self, source: AuthoritativeSource) -> None:
-        self._source = source
-
-    def lookup(
-        self,
-        tenant_id: str,
-        *,
-        expected_platform_id: str | None = None,
-        consumer_id: str | None = None,
-        request_id: str | None = None,
-        correlation_id: str | None = None,
-    ) -> TenantSnapshot:
-        return self._source.lookup(
-            tenant_id,
-            expected_platform_id=expected_platform_id,
-            consumer_id=consumer_id,
-            request_id=request_id,
-            correlation_id=correlation_id,
-        )
-
-    def lifecycle_decision(
-        self,
-        tenant_id: str,
-        *,
-        expected_platform_id: str | None = None,
-        consumer_id: str | None = None,
-        request_id: str | None = None,
-        correlation_id: str | None = None,
-    ) -> LifecycleDecision:
-        return self._source.lifecycle_decision(
-            tenant_id,
-            expected_platform_id=expected_platform_id,
-            consumer_id=consumer_id,
-            request_id=request_id,
-            correlation_id=correlation_id,
-        )
-
-
 __all__ = [
-    "AuthoritativeSource",
-    "TenantAuthorityReader",
     "AuthenticationDenied",
     "AuthorizationDenied",
     "DenyReason",
