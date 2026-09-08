@@ -1,3 +1,5 @@
+import threading
+import time
 from typing import Any
 
 import pytest
@@ -16,6 +18,81 @@ class AuthorizationDeny(Exception):
 
 class DependencyFailure(Exception):
     pass
+
+
+def test_missing_key_refuses_execution():
+    guard = IdempotencyGuard(audit_sink=lambda a, d: None)
+
+    executed = 0
+
+    def effect():
+        nonlocal executed
+        executed += 1
+        return "success"
+
+    with pytest.raises(IdempotencyConflict):
+        guard.execute(
+            None,
+            identity="user-1",
+            tenant_id="ten-a",
+            operation="create",
+            resource="res-1",
+            fingerprint="hash-1",
+            effect=effect,
+        )
+
+    with pytest.raises(IdempotencyConflict):
+        guard.execute(
+            "",
+            identity="user-1",
+            tenant_id="ten-a",
+            operation="create",
+            resource="res-1",
+            fingerprint="hash-1",
+            effect=effect,
+        )
+
+    assert executed == 0
+
+
+def test_concurrency_only_one_effect_executes():
+    guard = IdempotencyGuard(audit_sink=lambda a, d: None)
+
+    executed = 0
+
+    def effect():
+        nonlocal executed
+        # Induce a sleep so concurrent threads would otherwise step on each other
+        time.sleep(0.05)
+        executed += 1
+        return "concurrent-success"
+
+    def worker(results: list, index: int):
+        try:
+            res = guard.execute(
+                "concurrent-key",
+                identity="user-1",
+                tenant_id="ten-a",
+                operation="create",
+                resource="res-1",
+                fingerprint="hash",
+                effect=effect,
+            )
+            results[index] = res
+        except Exception as e:  # noqa: BLE001
+            results[index] = e
+
+    results = [None] * 5
+    threads = [threading.Thread(target=worker, args=(results, i)) for i in range(5)]
+
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert executed == 1
+    for r in results:
+        assert r == "concurrent-success"
 
 
 def test_first_execution_runs_effect():
