@@ -18,6 +18,17 @@ from identity_service.engine import IdentityEngine
 from identity_service.errors import AccessDenied
 from identity_service.models import DenyReason
 
+#: The published surface of this component: its own models and its own factory.
+#: Names imported for use are not part of it, and nothing of another component is.
+__all__ = [
+    "AUTHENTICATION_DENIALS",
+    "ErrorOut",
+    "IdentityOut",
+    "RecordOut",
+    "WriteIn",
+    "create_app",
+]
+
 AUTHENTICATION_DENIALS = frozenset(
     {
         DenyReason.MISSING_IDENTITY,

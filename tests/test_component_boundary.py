@@ -442,6 +442,19 @@ def test_identity_api_module_publishes_only_its_own_api():
     parameters = inspect.signature(identity_api.create_app).parameters
     assert list(parameters) == ["engine"]
 
+    # The module declares what it publishes, and everything it declares belongs to
+    # this component: a name of another component can be neither imported for use
+    # nor re-exported out.
+    declared = list(identity_api.__all__)
+    assert set(declared) <= set(published), set(declared) - set(published)
+    for name in declared:
+        value = getattr(identity_api, name)
+        origin = str(getattr(value, "__module__", "") or "")
+        if inspect.isclass(value) or inspect.isfunction(value):
+            assert origin.startswith("identity_service."), (name, origin)
+        assert not origin.startswith("tenant_authority"), (name, origin)
+        assert not isinstance(value, FastAPI), (name, "declared ASGI application")
+
     for name, value in published.items():
         assert not isinstance(value, FastAPI), f"{name} is an ASGI application"
         assert not isinstance(
