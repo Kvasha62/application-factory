@@ -1,0 +1,83 @@
+{
+  "component_id": "idempotency_guard",
+  "component_version": "0.1.0",
+  "class": "platform_service",
+  "maturity_level": "level_0_modular_monolith",
+  "task": "IS-005 (GitHub Issue #16)",
+  "purpose": "Command Safety Boundary / Idempotency Guard",
+  "invariants": [
+    "I-001 one logical command identity executes exactly once and saves its result",
+    "I-002 exact replay returns the same result and does not execute the effect",
+    "I-003 same idempotency key with different fingerprint/payload is a CONFLICT",
+    "I-004 same idempotency key from a different identity is a CONFLICT",
+    "I-005 same idempotency key in a different tenant context is a CONFLICT",
+    "I-006 Authorization DENY or dependency failure does not create an idempotency record and no effect is executed",
+    "I-007 idempotency guard creates no second identity or tenant mechanism",
+    "I-008 cross-tenant or cross-identity replays are security-sensitive and audited"
+  ],
+  "api": {
+    "openapi": "not_applicable",
+    "operations": [
+      {
+        "method": "INTERNAL",
+        "purpose": "execute safely",
+        "authorization_operation": "none (enforced by the wrapping business service)",
+        "idempotency": "self"
+      }
+    ],
+    "consumer_surface": {
+      "module": "idempotency.guard",
+      "published_as": "IdempotencyGuard",
+      "operations": [
+        "execute"
+      ],
+      "errors": [
+        "IdempotencyConflict"
+      ]
+    }
+  },
+  "events": {
+    "status": "declared_only",
+    "published": [],
+    "consumed": [],
+    "note": "Idempotency guard publishes no external events."
+  },
+  "data_export_cdc": {
+    "status": "declared_only",
+    "streams": [],
+    "note": "Idempotency state is transient and internal. No CDC."
+  },
+  "ui": {
+    "kind": "none",
+    "embedding": "not_applicable"
+  },
+  "configuration_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "data_ownership": {
+    "owner": "idempotency_guard",
+    "logical_schema": "in-memory (bounded)",
+    "datasets": [
+      {
+        "name": "idempotency_records",
+        "scope": "platform-scoped",
+        "note": "Transient storage mapping idempotency_key to execution results"
+      }
+    ]
+  },
+  "authn": {
+    "service": "delegated",
+    "human": "delegated"
+  },
+  "authz": {
+    "enforcement_boundary": "none",
+    "note": "Idempotency guard executes AFTER the authorization decision. It relies on the wrapping service for authorization."
+  },
+  "compatibility_policy": {
+    "api": "additive-minor-breaking-major"
+  },
+  "dependencies": []
+}
