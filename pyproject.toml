@@ -9,11 +9,70 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The Quality Gate (scripts/quality-gate.ps1, CI: .github/workflows/quality-gate.yml)
+# must be reproducible: the exact versions of the tools it runs are pinned here.
 dev = [
     "pytest>=8.3.0",
+    "ruff==0.16.6",
+    "black==26.5.1",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
+
+# ---------------------------------------------------------------------------
+# Quality Gate tooling — Ruff
+#
+# Ruff runs its default rule set (E4/E7/E9/F plus the recommended B, BLE, SIM,
+# S, TRY, PL, RET groups). No rule is disabled project-wide.
+#
+# One documented, per-file exception — the fail-closed pattern:
+#
+#     try:
+#         answer = <dependency>.call(...)
+#     except Exception:
+#         return refusal                      # any unexpected answer fails closed
+#
+# Catching a narrower, closed set of exception types would weaken the
+# security invariant: a dependency that answers with an unforeseen error type
+# must still be converted into a refusal, never into access. BLE001 (and the
+# S110/S112 forms of the same pattern in the boundary tests, where a broad
+# catch is what makes the traversal / outcome collection total) is therefore
+# suppressed exactly in the files below and nowhere else.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI declares request parameters as default arguments: the documented
+# B008 exception for the framework's own callables.
+extend-immutable-calls = ["fastapi.Query"]
+
+[tool.ruff.lint.per-file-ignores]
+# Fail-closed dependency boundaries — see the policy note above (BLE001).
+"src/authorization_service/adapters.py" = ["BLE001"]
+"src/authorization_service/engine.py" = ["BLE001"]
+"src/learning_service/adapters.py" = ["BLE001"]
+"src/learning_service/engine.py" = ["BLE001"]
+"src/records_service/adapters.py" = ["BLE001"]
+"src/records_service/engine.py" = ["BLE001"]
+"src/saga/executor.py" = ["BLE001"]
+# Boundary tests whose point is to stay total under ANY exception form:
+# object-graph traversal ("a broken attribute is no door") and threaded
+# outcome collection.
+"tests/test_authorization_security.py" = ["BLE001", "S110"]
+"tests/test_component_boundary.py" = ["BLE001", "S110", "S112"]
+"tests/test_idempotency_guard.py" = ["BLE001"]
+"tests/test_learning_boundary.py" = ["BLE001", "S112"]
+"tests/test_records_bypass_resistance.py" = ["BLE001", "S112"]
+"tests/test_saga_acceptance.py" = ["BLE001"]
+"tests/test_saga_boundary.py" = ["BLE001", "S112"]
+"tests/test_tenant_authority_observability.py" = ["BLE001", "S110"]
+
+# ---------------------------------------------------------------------------
+# Quality Gate tooling — Black (same line length as Ruff: one style, one width)
+# ---------------------------------------------------------------------------
+[tool.black]
+line-length = 88
