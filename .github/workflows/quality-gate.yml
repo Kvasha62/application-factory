@@ -1,0 +1,61 @@
+# Quality Gate (CI) — machine-verifiable conformance (ARCHITECTURE.md §42, §27).
+#
+# CI counterpart of scripts/quality-gate.ps1 (local, PowerShell): the local
+# gate's checks — compile, Ruff, Black, test suite — plus a CI-only
+# dependency audit (§27: dependencies are checked regularly, i.e. in the
+# automated delivery flow, not on every local run).
+#
+# The project itself (runtime + [dev] dependencies) is installed from
+# pyproject.toml, the single source of truth for the development tooling
+# the gate runs (pinned ruff==0.16.6 / black==26.5.1 live in
+# [project.optional-dependencies] dev). The only dependency pinned in this
+# file is pip-audit: a CI-only security scanner that the local gate does
+# not run, and therefore deliberately not a project dependency. Do not
+# duplicate other dependency pins in this file; keep it in sync with
+# pyproject.toml only when the gate steps themselves change.
+
+name: Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate:
+    name: Install + Dependency check + Compile + Ruff + Black + Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project with dev dependencies (declared in pyproject.toml)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Dependency check (machine-verifiable, ARCHITECTURE.md §27)
+        run: |
+          python -m pip install pip-audit==2.10.1
+          python -m pip check
+          python -m pip_audit
+
+      - name: Compile source
+        run: python -m compileall -q src
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Black
+        run: black --check .
+
+      - name: Test suite
+        run: python -m pytest tests/
