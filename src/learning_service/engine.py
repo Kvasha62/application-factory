@@ -38,7 +38,7 @@ import json
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from idempotency.errors import IdempotencyConflict
@@ -175,7 +175,9 @@ def _payload_fingerprint(operation: str, payload: dict[str, Any]) -> str:
     return hashlib.sha256(f"{operation}\n{canonical}\n".encode()).hexdigest()
 
 
-def _validation_problem(title: Any, texts: dict[str, tuple[Any, int, bool]]) -> str | None:
+def _validation_problem(
+    title: Any, texts: dict[str, tuple[Any, int, bool]]
+) -> str | None:
     """The first content rule a command payload violates, or ``None``.
 
     ``title`` must be a non-empty string of at most :data:`TITLE_MAX` chars;
@@ -326,8 +328,10 @@ class LearningEngine:
     ) -> tuple[SubmissionView, ObservabilityContext, AccessAuditEvent]:
         """Serve one owned submission — and only after the full chain allowed it."""
         obs = self.observability(
-            tenant_id=None, subject_id=None,
-            request_id=request_id, correlation_id=correlation_id,
+            tenant_id=None,
+            subject_id=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
         )
 
         # --- step 1: the ownership boundary of this component ----------------
@@ -426,8 +430,10 @@ class LearningEngine:
         Assignment's own tenant.
         """
         obs = self.observability(
-            tenant_id=None, subject_id=None,
-            request_id=request_id, correlation_id=correlation_id,
+            tenant_id=None,
+            subject_id=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
         )
 
         # --- step 1: the ownership boundary of this component ----------------
@@ -517,8 +523,10 @@ class LearningEngine:
         replay of the first command returns the recorded result.
         """
         obs = self.observability(
-            tenant_id=None, subject_id=None,
-            request_id=request_id, correlation_id=correlation_id,
+            tenant_id=None,
+            subject_id=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
         )
 
         # --- step 1: the ownership boundary of this component ----------------
@@ -597,7 +605,10 @@ class LearningEngine:
                 assignment_id=submission.assignment_id,
                 submission_id=submission_id,
                 claimed_tenant_id=claimed_tenant_id,
-                details={"kind": "domain_refusal", "submission_state": submission.status},
+                details={
+                    "kind": "domain_refusal",
+                    "submission_state": submission.status,
+                },
             )
 
         # 3b. idempotency: a state-changing command requires the mandatory key.
@@ -660,7 +671,10 @@ class LearningEngine:
                 assignment_id=submission.assignment_id,
                 submission_id=submission_id,
                 claimed_tenant_id=claimed_tenant_id,
-                details={"kind": "domain_refusal", "submission_state": submission.status},
+                details={
+                    "kind": "domain_refusal",
+                    "submission_state": submission.status,
+                },
             )
 
         # 3c. the review effect ran exactly once; the result is the submission
@@ -725,9 +739,7 @@ class LearningEngine:
             answer = TenantContextRefusal(None)
         if isinstance(answer, TenantContextRefusal):
             code = answer.reason_code
-            if code in _AUTHENTICATION_DENIALS:
-                reason, subject_id, tenant_id = code, None, None
-            elif code in DENY_REASONS:
+            if code in _AUTHENTICATION_DENIALS or code in DENY_REASONS:
                 reason, subject_id, tenant_id = code, None, None
             else:
                 reason = OwnDenyReason.AUTHORIZATION_UNAVAILABLE
@@ -743,8 +755,11 @@ class LearningEngine:
                 assignment_id=None,
                 submission_id=None,
                 claimed_tenant_id=claimed_tenant_id,
-                details=None if reason != OwnDenyReason.AUTHORIZATION_UNAVAILABLE
-                else {"stated_code": code},
+                details=(
+                    None
+                    if reason != OwnDenyReason.AUTHORIZATION_UNAVAILABLE
+                    else {"stated_code": code}
+                ),
             )
         return (
             self.observability(
@@ -780,8 +795,10 @@ class LearningEngine:
         """
         action = OPERATION_COURSE_CREATE
         obs = self.observability(
-            tenant_id=None, subject_id=None,
-            request_id=request_id, correlation_id=correlation_id,
+            tenant_id=None,
+            subject_id=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
         )
 
         # --- step 0: the payload content rules --------------------------------
@@ -947,8 +964,10 @@ class LearningEngine:
         child's Tenant is the parent's Tenant by construction.
         """
         obs = self.observability(
-            tenant_id=None, subject_id=None,
-            request_id=request_id, correlation_id=correlation_id,
+            tenant_id=None,
+            subject_id=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
         )
 
         # --- step 1: the ownership boundary of this component ----------------
@@ -1097,8 +1116,10 @@ class LearningEngine:
         """Create one Module inside a Course — ``learning.modules.create``."""
         action = OPERATION_MODULE_CREATE
         obs0 = self.observability(
-            tenant_id=None, subject_id=None,
-            request_id=request_id, correlation_id=correlation_id,
+            tenant_id=None,
+            subject_id=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
         )
         problem = _validation_problem(title, {}) or _position_problem(position)
         if problem is not None:
@@ -1157,8 +1178,10 @@ class LearningEngine:
         """Create one Lesson inside a Module — ``learning.lessons.create``."""
         action = OPERATION_LESSON_CREATE
         obs0 = self.observability(
-            tenant_id=None, subject_id=None,
-            request_id=request_id, correlation_id=correlation_id,
+            tenant_id=None,
+            subject_id=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
         )
         problem = _validation_problem(
             title, {"content": (content, CONTENT_MAX, False)}
@@ -1190,7 +1213,10 @@ class LearningEngine:
             request_id=request_id,
             correlation_id=correlation_id,
             effect=lambda: self.store.create_lesson(
-                module_id, title=title, content=content, position=position,
+                module_id,
+                title=title,
+                content=content,
+                position=position,
                 now=self.clock(),
             ),
         )
@@ -1225,8 +1251,10 @@ class LearningEngine:
         """
         action = OPERATION_ASSIGNMENT_CREATE
         obs0 = self.observability(
-            tenant_id=None, subject_id=None,
-            request_id=request_id, correlation_id=correlation_id,
+            tenant_id=None,
+            subject_id=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
         )
         problem = _validation_problem(
             title, {"instructions": (instructions, INSTRUCTIONS_MAX, False)}
@@ -1293,8 +1321,10 @@ class LearningEngine:
         meanwhile changed state.
         """
         obs = self.observability(
-            tenant_id=None, subject_id=None,
-            request_id=request_id, correlation_id=correlation_id,
+            tenant_id=None,
+            subject_id=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
         )
 
         # --- step 1: the ownership boundary of this component ----------------
@@ -1521,8 +1551,10 @@ class LearningEngine:
         content, without any policy logic inside this component.
         """
         obs = self.observability(
-            tenant_id=None, subject_id=None,
-            request_id=request_id, correlation_id=correlation_id,
+            tenant_id=None,
+            subject_id=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
         )
 
         # --- step 1: the ownership boundary of this component ----------------
@@ -1620,8 +1652,10 @@ class LearningEngine:
     ) -> AccessRefused:
         """Refuse — and audit — a request the published schema rejected."""
         obs = self.observability(
-            tenant_id=None, subject_id=None,
-            request_id=request_id, correlation_id=correlation_id,
+            tenant_id=None,
+            subject_id=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
         )
         exc = AccessRefused(
             "malformed_request",

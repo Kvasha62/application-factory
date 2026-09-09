@@ -341,8 +341,10 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
         return learning_harness().http().get("/api/v1/learning/submissions/sub_a1_1")
 
     def scenario_401_list():
-        return learning_harness().http().get(
-            "/api/v1/learning/assignments/asg_a1/submissions"
+        return (
+            learning_harness()
+            .http()
+            .get("/api/v1/learning/assignments/asg_a1/submissions")
         )
 
     def scenario_403():
@@ -356,9 +358,13 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
         )
 
     def scenario_403_list():
-        return learning_harness().http().get(
-            "/api/v1/learning/assignments/asg_b1/submissions",
-            headers={"authorization": f"Bearer {TEACHER_A}"},
+        return (
+            learning_harness()
+            .http()
+            .get(
+                "/api/v1/learning/assignments/asg_b1/submissions",
+                headers={"authorization": f"Bearer {TEACHER_A}"},
+            )
         )
 
     def scenario_404():
@@ -384,9 +390,13 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
         )
 
     def scenario_404_list():
-        return learning_harness().http().get(
-            "/api/v1/learning/assignments/missing/submissions",
-            headers={"authorization": f"Bearer {TEACHER_A}"},
+        return (
+            learning_harness()
+            .http()
+            .get(
+                "/api/v1/learning/assignments/missing/submissions",
+                headers={"authorization": f"Bearer {TEACHER_A}"},
+            )
         )
 
     def scenario_503():
@@ -589,10 +599,10 @@ def test_dependency_isolation_is_declared_with_the_real_module_names():
     assert consumed["operations"] == ["decide"]
     identity = by_component["identity"]
     assert identity["local_port"] == "learning_service.ports.TenantContextPort"
+    assert identity["local_adapter"] == "learning_service.adapters.TenantContextAdapter"
     assert (
-        identity["local_adapter"] == "learning_service.adapters.TenantContextAdapter"
+        identity["local_answer_type"] == "learning_service.consumed.TenantContextAnswer"
     )
-    assert identity["local_answer_type"] == "learning_service.consumed.TenantContextAnswer"
     assert identity["operations"] == ["resolve_context"]
 
 

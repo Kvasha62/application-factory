@@ -60,7 +60,10 @@ def test_every_published_deny_keeps_the_owned_data_untouched(reason):
 def test_an_allow_invokes_the_owned_data_operation_exactly_once():
     store = CountingRecordsStore()
     allow = DecisionAnswer(
-        decision="ALLOW", reason="permitted", subject_id="idn_human_a", tenant_id="ten_a"
+        decision="ALLOW",
+        reason="permitted",
+        subject_id="idn_human_a",
+        tenant_id="ten_a",
     )
     deployment = records_deployment(StubAuthorizationPort(allow), store=store)
     engine = deployment.engine
@@ -138,7 +141,10 @@ def test_domain_refusal_after_allow_still_never_writes_invalid_state():
     refusal: the owner enforces its state machine itself."""
     store = CountingRecordsStore()
     allow = DecisionAnswer(
-        decision="ALLOW", reason="permitted", subject_id="idn_human_a", tenant_id="ten_a"
+        decision="ALLOW",
+        reason="permitted",
+        subject_id="idn_human_a",
+        tenant_id="ten_a",
     )
     deployment = records_deployment(StubAuthorizationPort(allow), store=store)
     engine = deployment.engine

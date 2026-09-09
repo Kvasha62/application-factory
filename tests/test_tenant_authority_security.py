@@ -19,7 +19,9 @@ from tenant_authority.errors import (
 from tests.conftest import composed, provision_tenant, tenant_authority
 
 
-@pytest.mark.parametrize("token", [None, "", "   ", "not-a-service-token", "svc-token-nope"])
+@pytest.mark.parametrize(
+    "token", [None, "", "   ", "not-a-service-token", "svc-token-nope"]
+)
 def test_absent_or_unverifiable_service_identity_is_denied(token):
     ta = tenant_authority()
     with pytest.raises(AuthenticationDenied) as exc:
@@ -47,7 +49,9 @@ def test_authentication_does_not_imply_authorization():
     assert readable.tenant_id == "ten_a"
 
     with pytest.raises(AuthorizationDenied) as exc:
-        ta.engine.transition_tenant("svc-token-identity", "ten_a", TenantState.SUSPENDED)
+        ta.engine.transition_tenant(
+            "svc-token-identity", "ten_a", TenantState.SUSPENDED
+        )
     assert exc.value.reason is DenyReason.INSUFFICIENT_AUTHORIZATION
     assert ta.engine.lookup("ten_a").state is TenantState.ACTIVE
 
@@ -69,7 +73,9 @@ def test_unknown_tenant_operations_are_denied():
     with pytest.raises(TenantNotFound):
         ta.engine.lifecycle_decision("ten_missing")
     with pytest.raises(TenantNotFound):
-        ta.engine.transition_tenant("svc-token-admin", "ten_missing", TenantState.ACTIVE)
+        ta.engine.transition_tenant(
+            "svc-token-admin", "ten_missing", TenantState.ACTIVE
+        )
 
 
 def test_foreign_tenant_is_never_returned_through_an_authorized_read():
@@ -77,9 +83,13 @@ def test_foreign_tenant_is_never_returned_through_an_authorized_read():
     with pytest.raises(OwnershipDenied):
         ta.engine.get_tenant("svc-token-admin", "ten_foreign")
     with pytest.raises(OwnershipDenied):
-        ta.engine.lifecycle_decision("ten_foreign", expected_platform_id=ta.current_platform_id)
+        ta.engine.lifecycle_decision(
+            "ten_foreign", expected_platform_id=ta.current_platform_id
+        )
     with pytest.raises(OwnershipDenied):
-        ta.engine.transition_tenant("svc-token-admin", "ten_foreign", TenantState.SUSPENDED)
+        ta.engine.transition_tenant(
+            "svc-token-admin", "ten_foreign", TenantState.SUSPENDED
+        )
     assert ta.store.tenants["ten_foreign"].state is TenantState.ACTIVE
 
 
@@ -117,9 +127,12 @@ def test_tenant_spoofing_by_caller_cannot_change_the_effective_tenant():
     # A matching claim is accepted but never widens the effective tenant.
     record, _, _ = identity_engine.read_record("token-human-a", "rec_a1", "ten_a")
     assert record.tenant_id == "ten_a"
-    assert identity_engine.resolve_tenant_context(
-        identity_engine.verify_identity("token-human-a"), None
-    ).tenant_id == "ten_a"
+    assert (
+        identity_engine.resolve_tenant_context(
+            identity_engine.verify_identity("token-human-a"), None
+        ).tenant_id
+        == "ten_a"
+    )
 
 
 def test_missing_or_absent_authorization_at_the_identity_boundary():
@@ -145,11 +158,14 @@ def test_denials_are_returned_as_http_errors_without_leaking_internals():
         "request_id": None,
     }
 
-    forbidden = client.get("/api/v1/tenants/ten_a", headers={"Authorization": "Bearer svc-token-unknown"})
+    forbidden = client.get(
+        "/api/v1/tenants/ten_a", headers={"Authorization": "Bearer svc-token-unknown"}
+    )
     assert forbidden.status_code == 401
 
     not_found = client.get(
-        "/api/v1/tenants/ten_missing", headers={"Authorization": "Bearer svc-token-admin"}
+        "/api/v1/tenants/ten_missing",
+        headers={"Authorization": "Bearer svc-token-admin"},
     )
     assert not_found.status_code == 404
     assert not_found.json()["detail"]["reason"] == "tenant_not_found"
@@ -174,5 +190,7 @@ def test_error_payloads_do_not_disclose_tenant_existence_across_platforms():
     assert foreign.status_code == missing.status_code == 404
     assert foreign.json()["detail"] == missing.json()["detail"]
     # The audit journal still distinguishes the two cases for operators.
-    reasons = [event.reason for event in ta.store.audit if event.action == "tenant.read"]
+    reasons = [
+        event.reason for event in ta.store.audit if event.action == "tenant.read"
+    ]
     assert "foreign_tenant" in reasons and "tenant_not_found" in reasons

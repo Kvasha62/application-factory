@@ -11,6 +11,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from collections.abc import Mapping
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -174,7 +175,7 @@ def test_published_reads_expose_workflow_state_and_no_store_handle():
     forbidden = (RecordsStore, AuthorizationStore, IdentityStore, TenantAuthorityStore)
     assert not any(isinstance(obj, forbidden) for obj in reachable)
     # A snapshot is a value: immutable, and granting nothing.
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         snapshot.state = SagaState.FAILED  # type: ignore[misc]
     assert snapshot.state is SagaState.COMPLETED
     assert snapshot.step("A").state is StepState.COMPLETED

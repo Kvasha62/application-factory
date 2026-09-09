@@ -50,13 +50,16 @@ def test_context_of_another_platform_instance_cannot_see_this_tenants():
 
     other = build_deployment(OTHER_PLATFORM_CONFIG, seed_demo=False, with_http=True)
     other.store.tenants["ten_b_own"] = TenantRecord(
-        "ten_b_own", "plt_other", TenantState.ACTIVE, "2026-09-08T00:00:00+00:00",
+        "ten_b_own",
+        "plt_other",
+        TenantState.ACTIVE,
+        "2026-09-08T00:00:00+00:00",
         "2026-09-08T00:00:00+00:00",
     )
     assert other.current_platform_id == "plt_other"
-    assert other.engine.lookup("ten_b_own", expected_platform_id="plt_other").tenant_id == (
-        "ten_b_own"
-    )
+    assert other.engine.lookup(
+        "ten_b_own", expected_platform_id="plt_other"
+    ).tenant_id == ("ten_b_own")
     # Tenant A of platform P is unreachable from the context of platform B.
     with pytest.raises(TenantNotFound) as exc:
         other.engine.lookup("ten_a", expected_platform_id="plt_other")
@@ -65,7 +68,10 @@ def test_context_of_another_platform_instance_cannot_see_this_tenants():
         other.engine.lifecycle_decision("ten_a", expected_platform_id="plt_other")
     # ...and a Tenant that is present but owned by P is refused by the ownership check.
     other.store.tenants["ten_a"] = TenantRecord(
-        "ten_a", PLATFORM_ID, TenantState.ACTIVE, "2026-09-08T00:00:00+00:00",
+        "ten_a",
+        PLATFORM_ID,
+        TenantState.ACTIVE,
+        "2026-09-08T00:00:00+00:00",
         "2026-09-08T00:00:00+00:00",
     )
     with pytest.raises(OwnershipDenied) as exc:
@@ -97,7 +103,9 @@ def test_foreign_tenant_does_not_appear_in_platform_listings():
 def test_service_identity_of_another_platform_cannot_operate_this_registry():
     authority = build_deployment(DEMO_CONFIG, seed_demo=True, with_http=True)
     with pytest.raises(AuthorizationDenied) as exc:
-        authority.engine.transition_tenant("svc-token-foreign-admin", "ten_a", "suspended")
+        authority.engine.transition_tenant(
+            "svc-token-foreign-admin", "ten_a", "suspended"
+        )
     assert exc.value.reason is AuthorityDeny.PLATFORM_MISMATCH
     assert authority.engine.lookup("ten_a").state is TenantState.ACTIVE
     assert authority.store.audit[-1].reason == AuthorityDeny.PLATFORM_MISMATCH.value
@@ -125,7 +133,10 @@ def test_effective_tenant_of_foreign_platform_never_resolves_in_identity_context
     store = IdentityStore()
     store.seed_demo()
     store.identities["idn_foreign"] = VerifiedIdentity(
-        "idn_foreign", IdentityKind.HUMAN, "foreign@example.test", home_tenant_id="ten_foreign"
+        "idn_foreign",
+        IdentityKind.HUMAN,
+        "foreign@example.test",
+        home_tenant_id="ten_foreign",
     )
     store.tokens["token-foreign"] = "idn_foreign"
     store.associations[("idn_foreign", "ten_foreign")] = TenantAssociation(

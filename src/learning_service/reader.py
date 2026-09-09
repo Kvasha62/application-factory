@@ -56,7 +56,7 @@ def _view_from(payload: Mapping[str, Any]) -> SubmissionView:
     try:
         content = payload["content"]
         if not isinstance(content, dict):
-            raise ValueError("content must be an object")
+            raise TypeError("content must be an object")
         reviewed_by = payload.get("reviewed_by")
         reviewed_at = payload.get("reviewed_at")
         if reviewed_by is not None and not isinstance(reviewed_by, str):
@@ -420,7 +420,9 @@ class LearningClient:
         refusal = _refusal_of(payload)
         if refusal is None:
             if status >= 500:
-                return ContractViolation(f"learning contract failed with status {status}")
+                return ContractViolation(
+                    f"learning contract failed with status {status}"
+                )
             return ContractViolation(
                 "the learning contract refused without a published reason"
             )
@@ -438,7 +440,7 @@ def _views_from(payload: Mapping[str, Any]) -> list[SubmissionView]:
     try:
         items = payload["items"]
         if not isinstance(items, list):
-            raise ValueError("items must be a list")
+            raise TypeError("items must be a list")
         return [_view_from(item) for item in items]
     except (KeyError, TypeError, ValueError) as exc:
         raise ContractViolation(
@@ -449,7 +451,7 @@ def _views_from(payload: Mapping[str, Any]) -> list[SubmissionView]:
 def _text_field(payload: Mapping[str, Any], name: str) -> str:
     value = payload[name]
     if not isinstance(value, str):
-        raise ValueError(f"{name} must be a string")
+        raise TypeError(f"{name} must be a string")
     return value
 
 
@@ -474,10 +476,10 @@ def _lesson_from(payload: Mapping[str, Any]) -> LessonView:
     try:
         position = payload["position"]
         if isinstance(position, bool) or not isinstance(position, int):
-            raise ValueError("position must be an integer")
+            raise TypeError("position must be an integer")
         assignments = payload["assignments"]
         if not isinstance(assignments, list):
-            raise ValueError("assignments must be a list")
+            raise TypeError("assignments must be a list")
         return LessonView(
             lesson_id=_text_field(payload, "lesson_id"),
             module_id=_text_field(payload, "module_id"),
@@ -498,10 +500,10 @@ def _module_from(payload: Mapping[str, Any]) -> ModuleView:
     try:
         position = payload["position"]
         if isinstance(position, bool) or not isinstance(position, int):
-            raise ValueError("position must be an integer")
+            raise TypeError("position must be an integer")
         lessons = payload["lessons"]
         if not isinstance(lessons, list):
-            raise ValueError("lessons must be a list")
+            raise TypeError("lessons must be a list")
         return ModuleView(
             module_id=_text_field(payload, "module_id"),
             course_id=_text_field(payload, "course_id"),
@@ -521,7 +523,7 @@ def _course_from(payload: Mapping[str, Any]) -> CourseView:
     try:
         modules = payload["modules"]
         if not isinstance(modules, list):
-            raise ValueError("modules must be a list")
+            raise TypeError("modules must be a list")
         return CourseView(
             course_id=_text_field(payload, "course_id"),
             title=_text_field(payload, "title"),

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 
 from identity_service import COMPONENT_ID, COMPONENT_VERSION
 from identity_service.config import IdentityConfig
@@ -113,7 +113,9 @@ class IdentityEngine:
         Platform Instance is never resolved here (T-003, T-007).
         """
         associations = [
-            a for a in self.store.associations.values() if a.identity_id == identity.identity_id
+            a
+            for a in self.store.associations.values()
+            if a.identity_id == identity.identity_id
         ]
         if not associations:
             raise AccessDenied(DenyReason.MISSING_TENANT_CONTEXT)
@@ -259,7 +261,10 @@ class IdentityEngine:
     ) -> tuple[VerifiedIdentity, ObservabilityContext, AuditEvent]:
         identity: VerifiedIdentity | None = None
         obs = self.observability(
-            identity=None, tenant=None, request_id=request_id, correlation_id=correlation_id
+            identity=None,
+            tenant=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
         )
         try:
             identity = self.verify_identity(token)
@@ -315,7 +320,10 @@ class IdentityEngine:
         identity: VerifiedIdentity | None = None
         tenant: TenantContext | None = None
         obs = self.observability(
-            identity=None, tenant=None, request_id=request_id, correlation_id=correlation_id
+            identity=None,
+            tenant=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
         )
         try:
             identity = self.verify_identity(token)
@@ -427,7 +435,10 @@ class IdentityEngine:
                     identity=identity,
                     tenant=tenant,
                     obs=obs,
-                    details={"record_id": existing.record_id, "kind": authz.identity.kind.value},
+                    details={
+                        "record_id": existing.record_id,
+                        "kind": authz.identity.kind.value,
+                    },
                 )
                 return existing, obs, event
 
@@ -514,11 +525,16 @@ class IdentityEngine:
         action: str,
         request_id: str | None,
         correlation_id: str | None = None,
-    ) -> tuple[VerifiedIdentity, TenantContext, AuthorizationContext, ObservabilityContext]:
+    ) -> tuple[
+        VerifiedIdentity, TenantContext, AuthorizationContext, ObservabilityContext
+    ]:
         identity: VerifiedIdentity | None = None
         tenant: TenantContext | None = None
         obs = self.observability(
-            identity=None, tenant=None, request_id=request_id, correlation_id=correlation_id
+            identity=None,
+            tenant=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
         )
         try:
             identity = self.verify_identity(token)

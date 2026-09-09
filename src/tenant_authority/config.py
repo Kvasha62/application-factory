@@ -30,13 +30,17 @@ class TenantAuthorityConfig:
             )
         platform_id = payload.get("platform_id")
         if not isinstance(platform_id, str) or not platform_id.strip():
-            raise ConfigurationError("`platform_id` is required and must be a non-empty string")
+            raise ConfigurationError(
+                "`platform_id` is required and must be a non-empty string"
+            )
         environment = payload.get("environment", "standalone")
         prefix = payload.get("service_token_prefix", "svc-token-")
         if not isinstance(environment, str) or not environment.strip():
             raise ConfigurationError("`environment` must be a non-empty string")
         if not isinstance(prefix, str) or not prefix:
-            raise ConfigurationError("`service_token_prefix` must be a non-empty string")
+            raise ConfigurationError(
+                "`service_token_prefix` must be a non-empty string"
+            )
         return cls(
             platform_id=platform_id,
             environment=environment,

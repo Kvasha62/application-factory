@@ -59,7 +59,9 @@ class TenantAuthorityStore:
         by the accident of an empty table.
         """
 
-        def tenant(tenant_id: str, state: TenantState, owner: str | None = None) -> TenantRecord:
+        def tenant(
+            tenant_id: str, state: TenantState, owner: str | None = None
+        ) -> TenantRecord:
             return TenantRecord(
                 tenant_id=tenant_id,
                 platform_id=owner or platform_id,
@@ -74,13 +76,17 @@ class TenantAuthorityStore:
             "ten_b": tenant("ten_b", TenantState.ACTIVE),
             "ten_provisioning": tenant("ten_provisioning", TenantState.PROVISIONING),
             "ten_suspended": tenant("ten_suspended", TenantState.SUSPENDED),
-            "ten_deletion_requested": tenant("ten_deletion_requested", TenantState.DELETION_REQUESTED),
+            "ten_deletion_requested": tenant(
+                "ten_deletion_requested", TenantState.DELETION_REQUESTED
+            ),
             "ten_deleted": tenant("ten_deleted", TenantState.DELETED),
             "ten_foreign": tenant("ten_foreign", TenantState.ACTIVE, foreign_platform),
         }
         self.services = {
             "svc_tenant_admin": ServiceAccess(
-                "svc_tenant_admin", platform_id=platform_id, permissions=REGISTRY_PERMISSIONS
+                "svc_tenant_admin",
+                platform_id=platform_id,
+                permissions=REGISTRY_PERMISSIONS,
             ),
             "svc_identity": ServiceAccess(
                 "svc_identity", platform_id=platform_id, permissions=LOOKUP_PERMISSIONS
@@ -88,10 +94,14 @@ class TenantAuthorityStore:
             # Each consuming component has its own service identity: the actor in
             # this journal is the component that actually asked (IS-003 included).
             "svc_authorization": ServiceAccess(
-                "svc_authorization", platform_id=platform_id, permissions=LOOKUP_PERMISSIONS
+                "svc_authorization",
+                platform_id=platform_id,
+                permissions=LOOKUP_PERMISSIONS,
             ),
             "svc_foreign_admin": ServiceAccess(
-                "svc_foreign_admin", platform_id=foreign_platform, permissions=REGISTRY_PERMISSIONS
+                "svc_foreign_admin",
+                platform_id=foreign_platform,
+                permissions=REGISTRY_PERMISSIONS,
             ),
         }
         self.service_tokens = {

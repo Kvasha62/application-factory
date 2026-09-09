@@ -86,7 +86,9 @@ def walk_state(root: object, *, depth: int = 5) -> set[int]:
         if level > depth or id(value) in seen:
             continue
         seen.add(id(value))
-        if isinstance(value, (types.ModuleType, str, bytes, int, float, complex, bool, type(None))):
+        if isinstance(
+            value, (types.ModuleType, str, bytes, int, float, complex, bool, type(None))
+        ):
             continue
         members: list[object] = []
         if hasattr(value, "__dict__"):
@@ -146,7 +148,9 @@ def test_the_client_offers_no_way_to_grant_read_or_revoke_a_permission():
 
 def test_the_client_holds_values_only_and_nothing_reaches_the_application():
     deployment, client = published()
-    state = [getattr(client, slot) for slot in client.__slots__ if not slot.startswith("__")]
+    state = [
+        getattr(client, slot) for slot in client.__slots__ if not slot.startswith("__")
+    ]
     assert state and all(isinstance(value, str) for value in state)
 
     reached = walk_state(client)
@@ -166,7 +170,9 @@ def test_no_attribute_path_of_the_client_leads_to_an_internal_type():
     while frontier:
         path, value = frontier.pop(0)
         walked += 1
-        assert not isinstance(value, INTERNAL_TYPES), f"{type(value).__name__} at {path}"
+        assert not isinstance(
+            value, INTERNAL_TYPES
+        ), f"{type(value).__name__} at {path}"
         if len(path) >= 3:
             continue
         members: list[tuple[str, object]] = []
@@ -194,10 +200,14 @@ def test_asking_for_a_decision_changes_no_grant():
     deployment, client = published()
     before = {key: value.operations for key, value in deployment.store.grants.items()}
     client.decide(
-        "token-human-a", operation="records.read", resource=ResourceRef("record", "rec_a1", "ten_a")
+        "token-human-a",
+        operation="records.read",
+        resource=ResourceRef("record", "rec_a1", "ten_a"),
     )
     client.decide(
-        "token-human-b", operation="records.write", resource=ResourceRef("record", "rec_a1", "ten_a")
+        "token-human-b",
+        operation="records.write",
+        resource=ResourceRef("record", "rec_a1", "ten_a"),
     )
     after = {key: value.operations for key, value in deployment.store.grants.items()}
     assert after == before
@@ -255,7 +265,9 @@ def test_a_broken_contract_answer_fails_closed_instead_of_allowing():
 
     # A handle that was never issued grants nothing either.
     with pytest.raises(errors.ContractViolation):
-        transport.call_contract("azc-not-a-channel", "POST", "/api/v1/decisions", (), None)
+        transport.call_contract(
+            "azc-not-a-channel", "POST", "/api/v1/decisions", (), None
+        )
 
 
 def test_each_consumer_is_authenticated_and_authorized_for_itself():
@@ -263,9 +275,14 @@ def test_each_consumer_is_authenticated_and_authorized_for_itself():
     app = deployment.contract_app()
 
     allowed = reader.build_client(app, credential="authz-svc-token-records")
-    assert allowed.decide(
-        "token-human-a", operation="records.read", resource=ResourceRef("record", "rec_a1", "ten_a")
-    ).decision is Decision.ALLOW
+    assert (
+        allowed.decide(
+            "token-human-a",
+            operation="records.read",
+            resource=ResourceRef("record", "rec_a1", "ten_a"),
+        ).decision
+        is Decision.ALLOW
+    )
 
     for credential, expected in (
         ("authz-svc-token-reporting", errors.CallerNotAuthorized),
@@ -336,7 +353,9 @@ def test_a_fresh_import_of_the_published_surface_reaches_no_application():
         ("engine", instance.authorization.engine),
         ("store", instance.authorization.store),
     ):
-        assert id(target) not in reached, f"{label} reachable from a fresh reader import"
+        assert (
+            id(target) not in reached
+        ), f"{label} reachable from a fresh reader import"
     # Control: the channel table does lead to the application, so the walk above
     # is capable of finding one.
     table = types.SimpleNamespace(_CHANNELS=vars(transport)["_CHANNELS"])

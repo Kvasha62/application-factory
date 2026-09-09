@@ -322,7 +322,9 @@ def create_app(deployment: LearningDeployment) -> FastAPI:
     )
 
     @app.exception_handler(RequestValidationError)
-    async def unreadable_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+    async def unreadable_request(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
         """Refuse — and audit — a request the contract schema rejected."""
         refusal = engine.refuse_unreadable_request(
             path=request.url.path,
@@ -345,7 +347,9 @@ def create_app(deployment: LearningDeployment) -> FastAPI:
     def ready() -> dict:
         return {"status": "ready", "component_id": COMPONENT_ID}
 
-    @app.get("/api/v1/learning/submissions/{submission_id}", response_model=SubmissionOut)
+    @app.get(
+        "/api/v1/learning/submissions/{submission_id}", response_model=SubmissionOut
+    )
     def read_submission(
         submission_id: str,
         authorization: str | None = Header(default=None),

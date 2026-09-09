@@ -27,7 +27,9 @@ class IdentityConfig:
         declared = {f.name for f in fields(cls)}
         unknown = sorted(set(payload) - declared)
         if unknown:
-            raise ConfigurationError("unknown configuration key(s): " + ", ".join(unknown))
+            raise ConfigurationError(
+                "unknown configuration key(s): " + ", ".join(unknown)
+            )
 
         platform_id = payload.get("current_platform_id")
         if not isinstance(platform_id, str) or not platform_id.strip():

@@ -174,7 +174,10 @@ def test_lifecycle_read_preserves_the_caller_request_and_correlation_ids():
     assert response.json()["tenant_id"] == "ten_a"
     audited = authority.store.audit[-1]
     assert (audited.action, audited.decision) == ("tenant.lifecycle", "ALLOW")
-    assert (audited.request_id, audited.correlation_id) == ("req-lc-http", "cor-lc-http")
+    assert (audited.request_id, audited.correlation_id) == (
+        "req-lc-http",
+        "cor-lc-http",
+    )
     assert audited.tenant_id == "ten_a"
     assert audited.actor_id == "svc_identity"
 

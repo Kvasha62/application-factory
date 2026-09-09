@@ -77,7 +77,9 @@ class ASGIContractTransport:
                     loop.call_soon(ready.set)
                     loop.run_forever()
 
-                threading.Thread(target=run, name="records-contract-transport", daemon=True).start()
+                threading.Thread(
+                    target=run, name="records-contract-transport", daemon=True
+                ).start()
                 ready.wait()
                 self._portal_loop = loop
             return self._portal_loop
@@ -108,7 +110,10 @@ class ASGIContractTransport:
             # shortcut a remote one does not have.
             "headers": [
                 *(
-                    [(b"content-type", b"application/json"), (b"content-length", str(len(raw)).encode())]
+                    [
+                        (b"content-type", b"application/json"),
+                        (b"content-length", str(len(raw)).encode()),
+                    ]
                     if raw
                     else []
                 ),

@@ -90,7 +90,9 @@ def published_authority() -> tuple[TenantAuthorityDeployment, TenantAuthorityCli
 
 def client_state(client: TenantAuthorityClient) -> list[object]:
     """Every value the published object carries: its own slots, dunders excluded."""
-    return [getattr(client, name) for name in client.__slots__ if not name.startswith("__")]
+    return [
+        getattr(client, name) for name in client.__slots__ if not name.startswith("__")
+    ]
 
 
 #: Types whose instances a consumer must never reach through the published client.
@@ -150,7 +152,12 @@ def registry_state(deployment: TenantAuthorityDeployment) -> dict:
     store = deployment.store
     return {
         "tenants": {
-            key: (record.platform_id, record.state, record.created_at, record.updated_at)
+            key: (
+                record.platform_id,
+                record.state,
+                record.created_at,
+                record.updated_at,
+            )
             for key, record in store.tenants.items()
         },
         "transitions": list(store.transitions),
@@ -211,7 +218,10 @@ def test_client_exposes_no_mutation_operation_by_any_route():
         # A method bound to the engine or the store would hand out that object.
         assert bound_to is None or type(bound_to) is TenantAuthorityClient, name
         assert not hasattr(attribute, "store") and not hasattr(attribute, "tenants")
-    assert {n for n in surface if not n.startswith("_")} == {"lookup", "lifecycle_decision"}
+    assert {n for n in surface if not n.startswith("_")} == {
+        "lookup",
+        "lifecycle_decision",
+    }
 
 
 def test_client_object_has_no_writable_state_at_all():
@@ -295,7 +305,9 @@ def test_no_closure_or_cell_path_leads_to_the_application_or_deployment():
     # client used to hold, the application is reachable — this is the path that had
     # to be removed, and removing it is what makes the assertions above mean
     # something rather than being an artefact of a blind traversal.
-    assert forbidden_ids["contract application"] in walk_state(transport.asgi_transport(app))
+    assert forbidden_ids["contract application"] in walk_state(
+        transport.asgi_transport(app)
+    )
     for root_name, root in (("client", client), ("published class", CLIENT)):
         reached = walk_state(root)
         for label, target in forbidden_ids.items():
@@ -313,7 +325,9 @@ def test_no_closure_or_cell_path_leads_to_the_application_or_deployment():
     # And nothing on the client is a function object any more, so there is no
     # closure to inspect in the first place.
     assert not any(callable(value) for value in client_state(client))
-    assert not any(getattr(value, "__closure__", None) for value in published_values(CLIENT))
+    assert not any(
+        getattr(value, "__closure__", None) for value in published_values(CLIENT)
+    )
 
 
 def test_internals_are_unreachable_through_every_attribute_path():
@@ -447,7 +461,10 @@ def test_values_cross_the_boundary_not_live_records():
     assert type(first) is contracts.TenantSnapshot
     with pytest.raises(dataclasses.FrozenInstanceError):
         first.state = contracts.TenantState.DELETED  # type: ignore[misc]
-    assert registry_state(deployment)["tenants"]["ten_a"][1] is contracts.TenantState.ACTIVE
+    assert (
+        registry_state(deployment)["tenants"]["ten_a"][1]
+        is contracts.TenantState.ACTIVE
+    )
 
     decision = client.lifecycle_decision("ten_suspended")
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -540,7 +557,9 @@ def test_a_full_registry_credential_gains_no_further_reach_here():
 
 def test_foreign_tenant_is_not_disclosed_through_the_surface():
     deployment = build_deployment(DEMO_CONFIG, seed_demo=True, with_http=True)
-    client = deployment.publish(credential="svc-token-identity", expected_platform_id=PLATFORM_ID)
+    client = deployment.publish(
+        credential="svc-token-identity", expected_platform_id=PLATFORM_ID
+    )
 
     with pytest.raises(errors.TenantNotFound) as exc_info:
         client.lookup("ten_foreign")
@@ -551,7 +570,9 @@ def test_foreign_tenant_is_not_disclosed_through_the_surface():
     with pytest.raises(errors.TenantAuthorityError):
         client.lifecycle_decision("ten_foreign")
 
-    denials = [event for event in deployment.store.audit if event.decision is Decision.DENY]
+    denials = [
+        event for event in deployment.store.audit if event.decision is Decision.DENY
+    ]
     assert denials and {event.reason for event in denials} == {"foreign_tenant"}
     assert {event.tenant_id for event in denials} == {"ten_foreign"}
     for event in denials:
@@ -578,7 +599,11 @@ def test_no_consumer_facing_runtime_object_exists():
         importlib.import_module("tenant_authority.runtime")
 
     package = importlib.import_module("tenant_authority")
-    for forbidden in ("build_runtime", "TenantAuthorityRuntime", "TenantAuthorityReader"):
+    for forbidden in (
+        "build_runtime",
+        "TenantAuthorityRuntime",
+        "TenantAuthorityReader",
+    ):
         assert not hasattr(package, forbidden), forbidden
     module = importlib.import_module("tenant_authority.deployment")
     assert not hasattr(module, "build_runtime")
@@ -629,7 +654,13 @@ def test_reader_namespace_holds_no_transport_module_table_or_application():
     for name, value in namespace.items():
         assert not isinstance(value, types.ModuleType), f"{name} is a module"
         assert not isinstance(
-            value, (FastAPI, TenantAuthorityDeployment, TenantAuthorityEngine, TenantAuthorityStore)
+            value,
+            (
+                FastAPI,
+                TenantAuthorityDeployment,
+                TenantAuthorityEngine,
+                TenantAuthorityStore,
+            ),
         ), name
         origin = str(getattr(value, "__module__", "") or "")
         assert not origin.startswith("tenant_authority.transport"), (name, origin)
@@ -649,7 +680,12 @@ def test_reader_namespace_holds_no_transport_module_table_or_application():
 
     # Control: the door really does live in the internal module, so the checks above
     # are a statement about `reader`, not about an empty-by-construction namespace.
-    for door in ("_CHANNELS", "ASGIContractTransport", "asgi_transport", "call_contract"):
+    for door in (
+        "_CHANNELS",
+        "ASGIContractTransport",
+        "asgi_transport",
+        "call_contract",
+    ):
         assert hasattr(transport, door), door
     assert isinstance(vars(transport)["_CHANNELS"], dict)
 
@@ -682,7 +718,10 @@ def test_a_fresh_import_of_the_reader_surface_leaves_no_path_to_the_application(
     )
     assert client.lookup("ten_a").tenant_id == "ten_a"
     assert client.lifecycle_decision("ten_a").permitted is True
-    assert {n for n in dir(client) if not n.startswith("_")} == {"lookup", "lifecycle_decision"}
+    assert {n for n in dir(client) if not n.startswith("_")} == {
+        "lookup",
+        "lifecycle_decision",
+    }
     assert all(
         isinstance(getattr(client, name), (str, type(None)))
         for name in client.__slots__
@@ -702,7 +741,9 @@ def test_a_fresh_import_of_the_reader_surface_leaves_no_path_to_the_application(
         ("engine", deployment.engine),
         ("store", deployment.store),
     ):
-        assert id(target) not in reached, f"{label} reachable from a fresh reader import"
+        assert (
+            id(target) not in reached
+        ), f"{label} reachable from a fresh reader import"
     # Control: the channel table leads to the application, so a namespace that binds
     # it — which is what `reader` did before this fix — is caught by the walk above
     # rather than by a lucky choice of names to look at.
@@ -738,7 +779,13 @@ def test_the_only_published_consumer_type_is_the_client():
     # application, deployment, engine or store — not even inside a container.
     for name, value in vars(reader).items():
         assert not isinstance(
-            value, (FastAPI, TenantAuthorityDeployment, TenantAuthorityEngine, TenantAuthorityStore)
+            value,
+            (
+                FastAPI,
+                TenantAuthorityDeployment,
+                TenantAuthorityEngine,
+                TenantAuthorityStore,
+            ),
         ), name
         if isinstance(value, (list, tuple, set, frozenset, dict)):
             container = list(value.values()) if isinstance(value, dict) else list(value)
@@ -765,11 +812,13 @@ def test_the_only_published_consumer_type_is_the_client():
     # fails closed rather than adapting to whatever object it was given.
     deployment = build_deployment(DEMO_CONFIG, seed_demo=True, with_http=True)
     with pytest.raises(TypeError):
-        reader.build_client(deployment.engine, credential="svc-token-identity").lookup("ten_a")
-    with pytest.raises(TypeError):
-        reader.build_client(deployment.store, credential="svc-token-identity").lifecycle_decision(
+        reader.build_client(deployment.engine, credential="svc-token-identity").lookup(
             "ten_a"
         )
+    with pytest.raises(TypeError):
+        reader.build_client(
+            deployment.store, credential="svc-token-identity"
+        ).lifecycle_decision("ten_a")
 
 
 def test_identity_api_module_publishes_only_its_own_api():
@@ -781,7 +830,9 @@ def test_identity_api_module_publishes_only_its_own_api():
     """
     identity_api = importlib.import_module("identity_service.api")
     published = {
-        name: value for name, value in vars(identity_api).items() if not name.startswith("_")
+        name: value
+        for name, value in vars(identity_api).items()
+        if not name.startswith("_")
     }
 
     assert "create_app" in published
@@ -876,13 +927,15 @@ def test_composed_identity_application_carries_no_tenant_authority_object():
     while frontier:
         path, value = frontier.pop(0)
         walked += 1
-        assert not isinstance(value, forbidden_types), f"{type(value).__name__} at {path}"
+        assert not isinstance(
+            value, forbidden_types
+        ), f"{type(value).__name__} at {path}"
         assert id(value) not in internal_app_names, f"authority handle at {path}"
         # No ASGI application of another component is reachable, and the published
         # client stays exactly the published client: two reads, value-only state.
-        assert not (isinstance(value, FastAPI) and value is not identity_app), (
-            f"foreign ASGI application at {path}"
-        )
+        assert not (
+            isinstance(value, FastAPI) and value is not identity_app
+        ), f"foreign ASGI application at {path}"
         if isinstance(value, TenantAuthorityClient):
             assert {n for n in dir(value) if not n.startswith("_")} == {
                 "lookup",
@@ -918,8 +971,13 @@ def test_composed_identity_application_carries_no_tenant_authority_object():
                 contents = cell.cell_contents
             except ValueError:
                 continue
-            if isinstance(contents, forbidden_types) or id(contents) in internal_app_names:
-                pytest.fail(f"authority reachable at {path + (f'__closure__[{index}]',)}")
+            if (
+                isinstance(contents, forbidden_types)
+                or id(contents) in internal_app_names
+            ):
+                pytest.fail(
+                    f"authority reachable at {path + (f'__closure__[{index}]',)}"
+                )
             frontier.append((path + (f"__closure__[{index}]",), contents))
     assert walked > 0
 
@@ -936,8 +994,12 @@ def test_composed_identity_application_carries_no_tenant_authority_object():
         if id(instance.tenant_authority_client) in reached:
             client_reached += 1
         for label, target in authority_objects.items():
-            assert id(target) not in reached, f"{label} reachable from {endpoint.__name__}"
-    assert client_reached >= 1, "the walk must reach the composed state to prove anything"
+            assert (
+                id(target) not in reached
+            ), f"{label} reachable from {endpoint.__name__}"
+    assert (
+        client_reached >= 1
+    ), "the walk must reach the composed state to prove anything"
 
     # And from the handle identity holds, the same is true one level further in.
     reached = walk_state(instance.identity.tenant_authority)
@@ -946,7 +1008,9 @@ def test_composed_identity_application_carries_no_tenant_authority_object():
 
     # Routes stay inside identity: no Tenant Authority operation is served here.
     identity_paths = {r.path for r in identity_app.routes if hasattr(r, "path")}
-    authority_paths = {r.path for r in instance.authority_app.routes if hasattr(r, "path")}
+    authority_paths = {
+        r.path for r in instance.authority_app.routes if hasattr(r, "path")
+    }
     identity_v1 = {path for path in identity_paths if path.startswith("/api/v1")}
     authority_v1 = {path for path in authority_paths if path.startswith("/api/v1")}
     assert identity_v1 & authority_v1 == set()
@@ -959,7 +1023,9 @@ def test_composed_identity_application_carries_no_tenant_authority_object():
         "/api/v1/records/{record_id}",
     }
     assert authority_v1
-    assert all("tenants" in path or path == "/api/v1/lifecycle" for path in authority_v1)
+    assert all(
+        "tenants" in path or path == "/api/v1/lifecycle" for path in authority_v1
+    )
 
 
 def test_identity_openapi_declares_no_tenant_authority_surface():
@@ -977,7 +1043,13 @@ def test_identity_openapi_declares_no_tenant_authority_surface():
         "/api/v1/records/{record_id}",
     }
     schemas = set(document.get("components", {}).get("schemas", {}))
-    for foreign in ("TenantOut", "TransitionOut", "LifecycleOut", "CreateIn", "TransitionIn"):
+    for foreign in (
+        "TenantOut",
+        "TransitionOut",
+        "LifecycleOut",
+        "CreateIn",
+        "TransitionIn",
+    ):
         assert foreign not in schemas, foreign
     # Nothing can be proxied through identity: the authority's paths are absent.
     response = client.get("/api/v1/tenants/ten_a")
@@ -1042,18 +1114,23 @@ def test_a_broken_contract_answer_fails_closed_instead_of_granting_access():
 
     # A revoked handle is not a fallback path either.
     with pytest.raises(transport.ContractViolation, match="closed"):
-        transport.call_contract(silent_channel, "GET", "/api/v1/tenants/ten_a", (), None)
+        transport.call_contract(
+            silent_channel, "GET", "/api/v1/tenants/ten_a", (), None
+        )
     with pytest.raises(transport.ContractViolation, match="closed"):
         CLIENT(silent_channel, "svc-token-identity").lookup("ten_a")
     # And a handle that was never issued grants nothing.
     with pytest.raises(transport.ContractViolation, match="closed"):
-        transport.call_contract("tac-not-a-channel", "GET", "/api/v1/tenants/ten_a", (), None)
+        transport.call_contract(
+            "tac-not-a-channel", "GET", "/api/v1/tenants/ten_a", (), None
+        )
 
 
 def test_reader_module_reexports_no_internal_type():
     """Importing the consumer surface must not drag an internal type into scope."""
     assert not any(
-        name in vars(reader) for name in ("TenantRecord", "AuditEvent", "IdempotencyRecord")
+        name in vars(reader)
+        for name in ("TenantRecord", "AuditEvent", "IdempotencyRecord")
     )
     assert contracts.TENANT_STATE_SOURCE == "tenant_authority"
     # The decision a consumer receives is the component's own lifecycle verdict.

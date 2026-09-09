@@ -15,6 +15,8 @@ The matrix required by the Issue is covered by this module:
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from authorization_service.contracts import Decision, Reason, ResourceRef
@@ -50,14 +52,20 @@ def test_authorized_subject_with_matching_tenant_and_permission_is_allowed():
 def test_the_same_subject_is_allowed_only_for_the_operations_it_was_granted():
     instance = monolith()
     write = decision_for(
-        instance, "token-human-a", "records.write", ResourceRef("record", "rec_a1", "ten_a")
+        instance,
+        "token-human-a",
+        "records.write",
+        ResourceRef("record", "rec_a1", "ten_a"),
     )
     assert write.decision is Decision.ALLOW
 
     # `records.admin` was granted to nobody: an operation nobody holds is denied
     # for everybody, including a subject with other permissions in that Tenant.
     admin = decision_for(
-        instance, "token-human-a", "records.admin", ResourceRef("record", "rec_a1", "ten_a")
+        instance,
+        "token-human-a",
+        "records.admin",
+        ResourceRef("record", "rec_a1", "ten_a"),
     )
     assert admin.decision is Decision.DENY
     assert admin.reason is Reason.PERMISSION_NOT_GRANTED
@@ -78,7 +86,10 @@ def test_a_subject_of_one_tenant_never_reaches_a_resource_of_another():
     # The subject holds the very same permission — in its own Tenant.
     assert (
         decision_for(
-            instance, "token-human-b", "records.read", ResourceRef("record", "rec_b1", "ten_b")
+            instance,
+            "token-human-b",
+            "records.read",
+            ResourceRef("record", "rec_b1", "ten_b"),
         ).decision
         is Decision.ALLOW
     )
@@ -89,7 +100,10 @@ def test_a_resource_without_a_stated_tenant_cannot_be_authorized():
     instance = monolith()
     for tenant_id in (None, "", "   "):
         answer = decision_for(
-            instance, "token-human-a", "records.read", ResourceRef("record", "rec_a1", tenant_id)
+            instance,
+            "token-human-a",
+            "records.read",
+            ResourceRef("record", "rec_a1", tenant_id),
         )
         assert answer.decision is Decision.DENY, tenant_id
         assert answer.reason is Reason.RESOURCE_TENANT_UNKNOWN, tenant_id
@@ -100,12 +114,18 @@ def test_an_authenticated_subject_without_permission_is_denied():
     """A-005 and A-006: a verified subject in the right Tenant still needs a grant."""
     instance = monolith()
     read = decision_for(
-        instance, "token-human-c", "records.read", ResourceRef("record", "rec_a1", "ten_a")
+        instance,
+        "token-human-c",
+        "records.read",
+        ResourceRef("record", "rec_a1", "ten_a"),
     )
     assert read.decision is Decision.ALLOW  # this one was granted
 
     write = decision_for(
-        instance, "token-human-c", "records.write", ResourceRef("record", "rec_a1", "ten_a")
+        instance,
+        "token-human-c",
+        "records.write",
+        ResourceRef("record", "rec_a1", "ten_a"),
     )
     assert write.decision is Decision.DENY
     assert write.reason is Reason.PERMISSION_NOT_GRANTED
@@ -117,7 +137,10 @@ def test_a_verified_subject_with_no_grant_at_all_is_denied():
     # A subject verified by IS-001 whose grants were never provisioned here.
     instance.authorization.store.grants.pop(("ten_a", "idn_human_a"), None)
     answer = decision_for(
-        instance, "token-human-a", "records.read", ResourceRef("record", "rec_a1", "ten_a")
+        instance,
+        "token-human-a",
+        "records.read",
+        ResourceRef("record", "rec_a1", "ten_a"),
     )
     assert answer.decision is Decision.DENY
     assert answer.reason is Reason.PERMISSION_NOT_GRANTED
@@ -127,13 +150,19 @@ def test_a_service_subject_is_treated_exactly_like_a_human_one():
     """§6.2: a service uses its own checked identity; it is not privileged here."""
     instance = monolith()
     allowed = decision_for(
-        instance, "token-service", "records.read", ResourceRef("record", "rec_a1", "ten_a")
+        instance,
+        "token-service",
+        "records.read",
+        ResourceRef("record", "rec_a1", "ten_a"),
     )
     assert allowed.decision is Decision.ALLOW
     assert allowed.subject_id == "idn_service_jobs"
 
     denied = decision_for(
-        instance, "token-service", "records.write", ResourceRef("record", "rec_a1", "ten_a")
+        instance,
+        "token-service",
+        "records.write",
+        ResourceRef("record", "rec_a1", "ten_a"),
     )
     assert denied.decision is Decision.DENY
     assert denied.reason is Reason.PERMISSION_NOT_GRANTED
@@ -173,7 +202,9 @@ def test_a_subject_without_any_tenant_association_has_no_effective_tenant():
         for key, value in store.associations.items()
         if value.identity_id != lonely.identity_id
     }
-    token = next(token for token, ident in store.tokens.items() if ident == lonely.identity_id)
+    token = next(
+        token for token, ident in store.tokens.items() if ident == lonely.identity_id
+    )
     answer = decision_for(
         instance, token, "records.read", ResourceRef("record", "rec_a1", "ten_a")
     )
@@ -191,7 +222,9 @@ def test_a_subject_without_any_tenant_association_has_no_effective_tenant():
         (TenantState.DELETED, Reason.TENANT_DELETED),
     ],
 )
-def test_a_tenant_that_must_not_be_served_denies_every_ordinary_operation(state, reason):
+def test_a_tenant_that_must_not_be_served_denies_every_ordinary_operation(
+    state, reason
+):
     """A-007: the lifecycle verdict of IS-002 stops the decision before the grant."""
     instance = monolith()
     tenant_id = provision_tenant(instance.authority, f"authz_{state.value}", state)
@@ -201,8 +234,8 @@ def test_a_tenant_that_must_not_be_served_denies_every_ordinary_operation(state,
     identity = instance.identity.store.identities["idn_human_a"]
     from identity_service.models import TenantAssociation
 
-    instance.identity.store.associations[(identity.identity_id, tenant_id)] = TenantAssociation(
-        identity.identity_id, tenant_id, frozenset({"records.read"})
+    instance.identity.store.associations[(identity.identity_id, tenant_id)] = (
+        TenantAssociation(identity.identity_id, tenant_id, frozenset({"records.read"}))
     )
     instance.authorization.store.grant(tenant_id, identity.identity_id, "records.read")
 
@@ -230,7 +263,9 @@ def test_an_active_tenant_that_becomes_suspended_is_denied_on_the_next_decision(
     assert after.decision is Decision.DENY
     assert after.reason is Reason.TENANT_SUSPENDED
 
-    instance.authority.engine.transition_tenant("svc-token-admin", "ten_a", TenantState.ACTIVE)
+    instance.authority.engine.transition_tenant(
+        "svc-token-admin", "ten_a", TenantState.ACTIVE
+    )
     assert decision_for(instance, "token-human-a", "records.read", resource).allowed
 
 
@@ -241,9 +276,13 @@ def test_a_tenant_of_another_platform_instance_is_not_served():
     from identity_service.models import TenantAssociation
 
     instance.identity.store.associations[(identity.identity_id, "ten_foreign")] = (
-        TenantAssociation(identity.identity_id, "ten_foreign", frozenset({"records.read"}))
+        TenantAssociation(
+            identity.identity_id, "ten_foreign", frozenset({"records.read"})
+        )
     )
-    instance.authorization.store.grant("ten_foreign", identity.identity_id, "records.read")
+    instance.authorization.store.grant(
+        "ten_foreign", identity.identity_id, "records.read"
+    )
 
     answer = decision_for(
         instance,
@@ -289,9 +328,12 @@ def test_the_data_owner_enforces_the_decision_at_its_own_boundary():
 def test_a_decision_is_a_value_and_grants_nothing_by_existing():
     instance = monolith()
     answer = decision_for(
-        instance, "token-human-a", "records.read", ResourceRef("record", "rec_a1", "ten_a")
+        instance,
+        "token-human-a",
+        "records.read",
+        ResourceRef("record", "rec_a1", "ten_a"),
     )
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         answer.decision = Decision.ALLOW  # type: ignore[misc]
     # A denial cannot be turned into an allowance by rebuilding it either: what a
     # consumer forges locally is not what the authority audited.
@@ -302,5 +344,9 @@ def test_a_decision_is_a_value_and_grants_nothing_by_existing():
         resource=ResourceRef("record", "rec_b1", "ten_b"),
     )
     assert forged.request_id is None
-    audited = [event for event in instance.authorization.store.audit if event.reason is not None]
+    audited = [
+        event
+        for event in instance.authorization.store.audit
+        if event.reason is not None
+    ]
     assert all(event.operation != "records.write" for event in audited)

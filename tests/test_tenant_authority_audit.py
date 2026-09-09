@@ -80,7 +80,11 @@ def test_audit_event_carries_the_full_field_set():
         assert event.actor_id == "svc_tenant_admin"
 
     # `reason` is empty on ALLOW and names the denial on DENY.
-    assert all(event.reason is None for event in ta.store.audit if event.decision is Decision.ALLOW)
+    assert all(
+        event.reason is None
+        for event in ta.store.audit
+        if event.decision is Decision.ALLOW
+    )
 
 
 def test_rejected_transition_is_audited_as_a_deny():
@@ -162,7 +166,9 @@ def test_audit_never_records_credentials():
     ta = tenant_authority()
     provision_tenant(ta, "credentials", TenantState.ACTIVE)
     with pytest.raises(InvalidTransition):
-        ta.engine.transition_tenant("svc-token-admin", "ten_credentials", TenantState.DELETED)
+        ta.engine.transition_tenant(
+            "svc-token-admin", "ten_credentials", TenantState.DELETED
+        )
     # A forged credential is denied and never written into the journal.
     with pytest.raises(AuthenticationDenied):
         ta.engine.transition_tenant(
@@ -179,7 +185,9 @@ def test_audit_never_records_credentials():
 def test_denied_lifecycle_operations_of_another_platform_are_auditable():
     ta = tenant_authority()
     with pytest.raises(Exception) as exc:
-        ta.engine.transition_tenant("svc-token-admin", "ten_foreign", TenantState.SUSPENDED)
+        ta.engine.transition_tenant(
+            "svc-token-admin", "ten_foreign", TenantState.SUSPENDED
+        )
     assert exc.value.reason.value == "foreign_tenant"
     denial = ta.store.audit[-1]
     assert denial.decision is Decision.DENY

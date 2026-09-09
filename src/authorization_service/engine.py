@@ -21,7 +21,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from authorization_service import COMPONENT_ID, COMPONENT_VERSION
@@ -240,7 +240,9 @@ class AuthorizationEngine:
         return Reason.AUTHORITY_UNAVAILABLE
 
     @staticmethod
-    def _resource_check(context: SubjectContext, resource: ResourceRef) -> Reason | None:
+    def _resource_check(
+        context: SubjectContext, resource: ResourceRef
+    ) -> Reason | None:
         """Invariant 4: the resource of another Tenant is never accessible.
 
         A tenant-scoped resource whose owning Tenant the data owner did not

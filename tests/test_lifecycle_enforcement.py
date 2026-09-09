@@ -35,10 +35,15 @@ NOT_SERVING = {
 }
 
 
-def bind_identity(identity_engine, identity_id: str, tenant_id: str, permissions) -> None:
+def bind_identity(
+    identity_engine, identity_id: str, tenant_id: str, permissions
+) -> None:
     """IS-001 owns identity <-> Tenant association data; it does not copy Tenant state."""
     identity_engine.store.identities[identity_id] = VerifiedIdentity(
-        identity_id, IdentityKind.HUMAN, f"{identity_id}@example.test", home_tenant_id=tenant_id
+        identity_id,
+        IdentityKind.HUMAN,
+        f"{identity_id}@example.test",
+        home_tenant_id=tenant_id,
     )
     identity_engine.store.tokens[f"token-{identity_id}"] = identity_id
     identity_engine.store.associations[(identity_id, tenant_id)] = TenantAssociation(
@@ -70,18 +75,25 @@ def test_security_acceptance_scenario_of_issue_10():
     platform_p = authority.current_platform_id
 
     # 2. Tenant A and Tenant B are created by the Tenant Authority.
-    snapshot_a, _, _ = ta.create_tenant(ADMIN_TOKEN, tenant_id="ten_A", request_id="req-create")
+    snapshot_a, _, _ = ta.create_tenant(
+        ADMIN_TOKEN, tenant_id="ten_A", request_id="req-create"
+    )
     ta.create_tenant(ADMIN_TOKEN, tenant_id="ten_B", request_id="req-create")
     assert snapshot_a.state is TenantState.PROVISIONING
 
     bind_identity(
         identity_engine, "idn_scenario_a", "ten_A", {"records.read", "records.write"}
     )
-    bind_identity(identity_engine, "idn_scenario_b", "ten_B", {"records.read", "records.write"})
+    bind_identity(
+        identity_engine, "idn_scenario_b", "ten_B", {"records.read", "records.write"}
+    )
 
     # An unactivated Tenant is not served yet.
     assert write_outcome(
-        identity_engine, token="token-idn_scenario_a", record_id="rec_A", claimed="ten_A"
+        identity_engine,
+        token="token-idn_scenario_a",
+        record_id="rec_A",
+        claimed="ten_A",
     ) == ("DENY", DenyReason.TENANT_NOT_ACTIVE.value)
 
     # 3. Tenant A and Tenant B are activated.
@@ -100,12 +112,18 @@ def test_security_acceptance_scenario_of_issue_10():
 
     # 5. Operation with tenant=A -> ALLOW.
     assert write_outcome(
-        identity_engine, token="token-idn_scenario_a", record_id="rec_A", claimed="ten_A"
+        identity_engine,
+        token="token-idn_scenario_a",
+        record_id="rec_A",
+        claimed="ten_A",
     ) == ("ALLOW", None)
 
     # 6. Same identity, claimed tenant_id=B -> DENY (a rewritten id is not a context change).
     assert write_outcome(
-        identity_engine, token="token-idn_scenario_a", record_id="rec_A", claimed="ten_B"
+        identity_engine,
+        token="token-idn_scenario_a",
+        record_id="rec_A",
+        claimed="ten_B",
     ) == ("DENY", DenyReason.TENANT_MISMATCH.value)
 
     # 7. Tenant A: active -> suspended.
@@ -114,32 +132,52 @@ def test_security_acceptance_scenario_of_issue_10():
 
     # 8. Ordinary tenant-scoped write for A -> DENY; Tenant B is unaffected.
     assert write_outcome(
-        identity_engine, token="token-idn_scenario_a", record_id="rec_A", claimed="ten_A"
+        identity_engine,
+        token="token-idn_scenario_a",
+        record_id="rec_A",
+        claimed="ten_A",
     ) == ("DENY", DenyReason.TENANT_SUSPENDED.value)
     assert read_outcome(
-        identity_engine, token="token-idn_scenario_a", record_id="rec_A", claimed="ten_A"
+        identity_engine,
+        token="token-idn_scenario_a",
+        record_id="rec_A",
+        claimed="ten_A",
     ) == ("DENY", DenyReason.TENANT_SUSPENDED.value)
     assert write_outcome(
-        identity_engine, token="token-idn_scenario_b", record_id="rec_B", claimed="ten_B"
+        identity_engine,
+        token="token-idn_scenario_b",
+        record_id="rec_B",
+        claimed="ten_B",
     ) == ("ALLOW", None)
 
     # 9. Tenant A: suspended -> active. 10. The operation is allowed again.
     ta.transition_tenant(ADMIN_TOKEN, "ten_A", ACTIVE, request_id="req-reactivate")
     assert write_outcome(
-        identity_engine, token="token-idn_scenario_a", record_id="rec_A", claimed="ten_A"
+        identity_engine,
+        token="token-idn_scenario_a",
+        record_id="rec_A",
+        claimed="ten_A",
     ) == ("ALLOW", None)
 
     # 11. Tenant A: active -> deletion_requested. 12. Ordinary operation -> DENY.
-    ta.transition_tenant(ADMIN_TOKEN, "ten_A", DELETION, request_id="req-delete-request")
+    ta.transition_tenant(
+        ADMIN_TOKEN, "ten_A", DELETION, request_id="req-delete-request"
+    )
     assert write_outcome(
-        identity_engine, token="token-idn_scenario_a", record_id="rec_A", claimed="ten_A"
+        identity_engine,
+        token="token-idn_scenario_a",
+        record_id="rec_A",
+        claimed="ten_A",
     ) == ("DENY", DenyReason.TENANT_DELETION_REQUESTED.value)
 
     # 13. Tenant A: deletion_requested -> deleted. 14. Any ordinary operation -> DENY.
     ta.transition_tenant(ADMIN_TOKEN, "ten_A", DELETED, request_id="req-deleted")
     for operation in (write_outcome, read_outcome):
         assert operation(
-            identity_engine, token="token-idn_scenario_a", record_id="rec_A", claimed="ten_A"
+            identity_engine,
+            token="token-idn_scenario_a",
+            record_id="rec_A",
+            claimed="ten_A",
         ) == ("DENY", DenyReason.TENANT_DELETED.value)
 
     # 15. deleted -> active is refused: `deleted` is terminal.
@@ -148,11 +186,14 @@ def test_security_acceptance_scenario_of_issue_10():
     assert ta.lookup("ten_A").state is DELETED
 
     # 16. Every accepted transition has an audit record.
-    ten_a_transitions = [item for item in ta.store.transitions if item.tenant_id == "ten_A"]
+    ten_a_transitions = [
+        item for item in ta.store.transitions if item.tenant_id == "ten_A"
+    ]
     audited_transitions = [
         event
         for event in ta.store.audit
-        if event.action == "tenant.transition" and event.decision is AuthorityDecision.ALLOW
+        if event.action == "tenant.transition"
+        and event.decision is AuthorityDecision.ALLOW
     ]
     assert [item.previous_state for item in ten_a_transitions] == [
         TenantState.PROVISIONING,
@@ -170,7 +211,8 @@ def test_security_acceptance_scenario_of_issue_10():
 
     # 17. Security-sensitive denials are observable in both journals.
     assert any(
-        event.decision is Decision.DENY and event.reason == DenyReason.TENANT_MISMATCH.value
+        event.decision is Decision.DENY
+        and event.reason == DenyReason.TENANT_MISMATCH.value
         for event in identity_engine.store.audit
     )
     denial = ta.store.audit[-1]
@@ -181,9 +223,12 @@ def test_security_acceptance_scenario_of_issue_10():
 
 
 @pytest.mark.parametrize(
-    ("state", "expected_reason"), sorted(NOT_SERVING.items(), key=lambda kv: kv[0].value)
+    ("state", "expected_reason"),
+    sorted(NOT_SERVING.items(), key=lambda kv: kv[0].value),
 )
-def test_not_serving_states_block_ordinary_tenant_scoped_operations(state, expected_reason):
+def test_not_serving_states_block_ordinary_tenant_scoped_operations(
+    state, expected_reason
+):
     identity_engine, authority = composed()
     tenant_id = provision_tenant(authority, f"gate-{state.value}", state)
 
@@ -191,7 +236,9 @@ def test_not_serving_states_block_ordinary_tenant_scoped_operations(state, expec
     assert decision.permitted is False
     assert decision.reason != "permitted"
 
-    bind_identity(identity_engine, "idn_gate", tenant_id, {"records.read", "records.write"})
+    bind_identity(
+        identity_engine, "idn_gate", tenant_id, {"records.read", "records.write"}
+    )
     assert write_outcome(
         identity_engine, token="token-idn_gate", record_id="rec_gate", claimed=tenant_id
     ) == ("DENY", expected_reason.value)
@@ -210,19 +257,33 @@ def test_enforcement_is_live_not_a_snapshot_taken_at_context_resolution():
     the very next operation instead of being cached by the caller."""
     identity_engine, authority = composed()
     ta = authority.engine
-    bind_identity(identity_engine, "idn_live", "ten_a", {"records.read", "records.write"})
+    bind_identity(
+        identity_engine, "idn_live", "ten_a", {"records.read", "records.write"}
+    )
 
-    assert write_outcome(
-        identity_engine, token="token-idn_live", record_id="rec_live", claimed="ten_a"
-    )[0] == "ALLOW"
+    assert (
+        write_outcome(
+            identity_engine,
+            token="token-idn_live",
+            record_id="rec_live",
+            claimed="ten_a",
+        )[0]
+        == "ALLOW"
+    )
     ta.transition_tenant(ADMIN_TOKEN, "ten_a", SUSPENDED)
     assert write_outcome(
         identity_engine, token="token-idn_live", record_id="rec_live", claimed="ten_a"
     ) == ("DENY", DenyReason.TENANT_SUSPENDED.value)
     ta.transition_tenant(ADMIN_TOKEN, "ten_a", ACTIVE)
-    assert write_outcome(
-        identity_engine, token="token-idn_live", record_id="rec_live", claimed="ten_a"
-    )[0] == "ALLOW"
+    assert (
+        write_outcome(
+            identity_engine,
+            token="token-idn_live",
+            record_id="rec_live",
+            claimed="ten_a",
+        )[0]
+        == "ALLOW"
+    )
     actions = [event.action for event in authority.store.audit]
     last_transition = len(actions) - 1 - actions[::-1].index("tenant.transition")
     # Enforcement is live: the consumer's own reads at the authorization boundary
@@ -236,9 +297,14 @@ def test_enforcement_is_live_not_a_snapshot_taken_at_context_resolution():
 
 def test_suspension_blocks_reads_as_well_as_writes():
     identity_engine, _ = composed()
-    bind_identity(identity_engine, "idn_read", "ten_suspended", {"records.read", "records.write"})
+    bind_identity(
+        identity_engine, "idn_read", "ten_suspended", {"records.read", "records.write"}
+    )
     assert read_outcome(
-        identity_engine, token="token-idn_read", record_id="rec_a1", claimed="ten_suspended"
+        identity_engine,
+        token="token-idn_read",
+        record_id="rec_a1",
+        claimed="ten_suspended",
     ) == ("DENY", DenyReason.TENANT_SUSPENDED.value)
 
 

@@ -145,7 +145,8 @@ def test_published_surface_is_exactly_the_contract_operations():
         (route.path, method)
         for route in instance.records_app.routes
         for method in getattr(route, "methods", set())
-        if route.path not in framework_routes and method in {"GET", "POST", "PUT", "PATCH", "DELETE"}
+        if route.path not in framework_routes
+        and method in {"GET", "POST", "PUT", "PATCH", "DELETE"}
     }
     assert implemented == {
         ("/health", "GET"),
@@ -163,7 +164,9 @@ def test_client_state_is_a_single_opaque_value():
     instance = monolith()
     client = instance.records_client()
 
-    state = [getattr(client, name) for name in client.__slots__ if not name.startswith("__")]
+    state = [
+        getattr(client, name) for name in client.__slots__ if not name.startswith("__")
+    ]
     assert len(state) == 1
     assert isinstance(state[0], str) and state[0]
 
@@ -221,7 +224,11 @@ def _imported_modules(tree: ast.AST) -> set[str]:
             modules.add(node.module.split(".")[0])
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             # importlib.import_module("identity_service...") and friends
-            for name in ("identity_service", "tenant_authority", "authorization_service"):
+            for name in (
+                "identity_service",
+                "tenant_authority",
+                "authorization_service",
+            ):
                 if node.value == name or node.value.startswith(name + "."):
                     modules.add(name)
     return modules
@@ -267,6 +274,7 @@ def test_a_fresh_interpreter_imports_no_other_component():
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,  # the exit code is asserted below, with its stderr as context
     )
     assert result.returncode == 0, result.stderr
 
@@ -295,9 +303,7 @@ def test_the_resource_tenant_is_never_taken_from_the_request():
     deployment = records_deployment(port, store=CountingRecordsStore())
 
     with pytest.raises(AccessRefused):
-        deployment.engine.read_resource(
-            TOKEN_A, "rec_b1", claimed_tenant_id="ten_a"
-        )
+        deployment.engine.read_resource(TOKEN_A, "rec_b1", claimed_tenant_id="ten_a")
 
     question = port.calls[0]
     assert question["resource_tenant_id"] == "ten_b"  # the store's fact
@@ -312,7 +318,10 @@ def test_a_foreign_owner_resource_is_never_served():
 
     port = StubAuthorizationPort(
         DecisionAnswer(
-            decision="ALLOW", reason="permitted", subject_id="idn_human_a", tenant_id="ten_a"
+            decision="ALLOW",
+            reason="permitted",
+            subject_id="idn_human_a",
+            tenant_id="ten_a",
         )
     )
     store = CountingRecordsStore()

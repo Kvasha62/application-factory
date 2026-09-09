@@ -209,7 +209,9 @@ def create_app(engine: IdentityEngine) -> FastAPI:
                 },
             ) from exc
         request.state.obs = obs
-        return RecordOut(record_id=record.record_id, tenant_id=record.tenant_id, body=record.body)
+        return RecordOut(
+            record_id=record.record_id, tenant_id=record.tenant_id, body=record.body
+        )
 
     @app.put("/api/v1/records/{record_id}", response_model=RecordOut)
     def put_record(
@@ -237,6 +239,8 @@ def create_app(engine: IdentityEngine) -> FastAPI:
                 status_code=_status_for(exc.reason.value),
                 detail={"decision": "DENY", "reason": exc.reason.value},
             ) from exc
-        return RecordOut(record_id=record.record_id, tenant_id=record.tenant_id, body=record.body)
+        return RecordOut(
+            record_id=record.record_id, tenant_id=record.tenant_id, body=record.body
+        )
 
     return app

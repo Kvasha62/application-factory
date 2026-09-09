@@ -42,7 +42,10 @@ def test_the_context_read_returns_the_verified_subject_and_effective_tenant():
 def test_the_claimed_tenant_is_a_cross_check_only():
     instance = monolith()
     client = instance.identity_context_client
-    assert client.resolve_context("token-human-a", claimed_tenant_id="ten_a").tenant_id == "ten_a"
+    assert (
+        client.resolve_context("token-human-a", claimed_tenant_id="ten_a").tenant_id
+        == "ten_a"
+    )
     with pytest.raises(AccessDenied) as exc:
         client.resolve_context("token-human-a", claimed_tenant_id="ten_b")
     assert exc.value.reason is DenyReason.TENANT_MISMATCH
@@ -78,7 +81,9 @@ def test_the_context_read_is_audited_with_the_caller_request_context():
     assert allowed[-1].correlation_id == "cor-ctx"
 
     with pytest.raises(AccessDenied):
-        instance.identity_context_client.resolve_context(None, request_id="req-ctx-deny")
+        instance.identity_context_client.resolve_context(
+            None, request_id="req-ctx-deny"
+        )
     denied = [
         event
         for event in instance.identity.store.audit
@@ -110,8 +115,12 @@ def test_the_context_read_grants_nothing_and_states_no_tenant_state():
 def test_the_published_client_is_value_only():
     instance = monolith()
     client = instance.identity_context_client
-    assert {name for name in dir(client) if not name.startswith("_")} == {"resolve_context"}
-    state = [getattr(client, slot) for slot in client.__slots__ if not slot.startswith("__")]
+    assert {name for name in dir(client) if not name.startswith("_")} == {
+        "resolve_context"
+    }
+    state = [
+        getattr(client, slot) for slot in client.__slots__ if not slot.startswith("__")
+    ]
     assert state == [client._channel]
     assert all(isinstance(value, str) for value in state)
     for forbidden in ("store", "engine", "app", "audit", "read_record", "write_record"):
@@ -155,14 +164,21 @@ def test_the_addition_is_additive_and_versioned():
     instance = monolith()
     http = instance.identity_client()
     assert COMPONENT_VERSION == "0.3.0"
-    assert http.get("/api/v1/me", headers={"Authorization": "Bearer token-human-a"}).status_code == 200
+    assert (
+        http.get(
+            "/api/v1/me", headers={"Authorization": "Bearer token-human-a"}
+        ).status_code
+        == 200
+    )
     assert (
         http.get(
             "/api/v1/records/rec_a1", headers={"Authorization": "Bearer token-human-a"}
         ).status_code
         == 200
     )
-    context = http.get("/api/v1/context", headers={"Authorization": "Bearer token-human-a"})
+    context = http.get(
+        "/api/v1/context", headers={"Authorization": "Bearer token-human-a"}
+    )
     assert context.status_code == 200
     assert set(context.json()) == {
         "identity_id",

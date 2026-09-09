@@ -145,8 +145,12 @@ def monolith() -> Monolith:
             "environment": authority.config.environment,
         }
     )
-    client = client_for(authority, expected_platform_id=identity_config.current_platform_id)
-    identity = IdentityEngine(store=store, tenant_authority=client, config=identity_config)
+    client = client_for(
+        authority, expected_platform_id=identity_config.current_platform_id
+    )
+    identity = IdentityEngine(
+        store=store, tenant_authority=client, config=identity_config
+    )
     identity_app = create_identity_app(identity)
 
     # IS-003 consumes both published contracts and owns neither: it receives a
@@ -340,9 +344,18 @@ class StubAuthorizationPort:
         self.outcome = outcome
         self.calls: list[dict[str, Any]] = []
 
-    def decide(self, subject_credential, *, operation, resource_type, resource_id,
-               resource_tenant_id, claimed_tenant_id=None, request_id=None,
-               correlation_id=None):
+    def decide(
+        self,
+        subject_credential,
+        *,
+        operation,
+        resource_type,
+        resource_id,
+        resource_tenant_id,
+        claimed_tenant_id=None,
+        request_id=None,
+        correlation_id=None,
+    ):
         self.calls.append(
             {
                 "operation": operation,

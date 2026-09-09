@@ -15,6 +15,7 @@ import json
 import pytest
 
 from records_service.consumed import DependencyRefusal
+from records_service.errors import AccessRefused
 from tests.conftest import (
     CountingRecordsStore,
     StubAuthorizationPort,
@@ -30,11 +31,11 @@ def test_each_attempt_produces_exactly_one_record():
     client = instance.records_http()
     headers = {"authorization": f"Bearer {TOKEN_A}"}
 
-    client.get("/api/v1/resources/rec_a1", headers=headers)          # ALLOW
-    client.get("/api/v1/resources/rec_b1", headers=headers)          # DENY
-    client.get("/api/v1/resources/missing", headers=headers)         # unknown
-    client.get("/api/v1/resources/rec_a1")                           # no identity
-    client.post(                                                     # unreadable
+    client.get("/api/v1/resources/rec_a1", headers=headers)  # ALLOW
+    client.get("/api/v1/resources/rec_b1", headers=headers)  # DENY
+    client.get("/api/v1/resources/missing", headers=headers)  # unknown
+    client.get("/api/v1/resources/rec_a1")  # no identity
+    client.post(  # unreadable
         "/api/v1/resources/rec_a2/transitions",
         json={"transition": "activate", "extra": 1},
         headers=headers,
@@ -42,7 +43,13 @@ def test_each_attempt_produces_exactly_one_record():
 
     audit = instance.records.store.audit
     assert len(audit) == 5
-    assert [event.decision for event in audit] == ["ALLOW", "DENY", "DENY", "DENY", "DENY"]
+    assert [event.decision for event in audit] == [
+        "ALLOW",
+        "DENY",
+        "DENY",
+        "DENY",
+        "DENY",
+    ]
     assert [event.reason for event in audit] == [
         "permitted",
         "resource_tenant_mismatch",
@@ -77,7 +84,9 @@ def test_denial_records_carry_actor_and_tenant_context_where_known():
     client = instance.records_http()
 
     # Known subject: the decision stated it.
-    client.get("/api/v1/resources/rec_b1", headers={"authorization": f"Bearer {TOKEN_A}"})
+    client.get(
+        "/api/v1/resources/rec_b1", headers={"authorization": f"Bearer {TOKEN_A}"}
+    )
     event = instance.records.store.audit[-1]
     assert event.subject_id == "idn_human_a"
     assert event.tenant_id == "ten_a"
@@ -102,7 +111,7 @@ def test_the_caller_claim_is_audited_separately_from_the_resource_fact():
     event = instance.records.store.audit[-1]
     assert event.decision == "DENY"
     assert event.reason == "tenant_mismatch"
-    assert event.claimed_tenant_id == "ten_b"   # the caller's statement
+    assert event.claimed_tenant_id == "ten_b"  # the caller's statement
     assert event.resource_tenant_id == "ten_a"  # the store's fact
 
 
@@ -112,8 +121,10 @@ def test_fail_closed_attempts_are_audited():
     deployment = records_deployment(silent, store=store)
     consumer = deployment.publish()
 
-    with pytest.raises(Exception):
-        consumer.read_resource(TOKEN_A, "rec_a1", request_id="req-df", correlation_id="corr-df")
+    with pytest.raises(AccessRefused):
+        consumer.read_resource(
+            TOKEN_A, "rec_a1", request_id="req-df", correlation_id="corr-df"
+        )
 
     event = store.audit[-1]
     assert event.decision == "DENY"
@@ -175,7 +186,9 @@ def test_the_audit_journal_is_not_readable_through_any_published_route():
             if method not in {"get", "post"}:
                 continue
             if method == "get":
-                response = client.get(path.replace("{resource_id}", "rec_a1"), headers=headers)
+                response = client.get(
+                    path.replace("{resource_id}", "rec_a1"), headers=headers
+                )
             else:
                 response = client.post(
                     path.replace("{resource_id}", "rec_a1"),

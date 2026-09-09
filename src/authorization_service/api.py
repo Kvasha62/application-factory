@@ -149,7 +149,9 @@ def create_app(deployment: AuthorizationDeployment) -> FastAPI:
     )
 
     @app.exception_handler(RequestValidationError)
-    async def unreadable_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+    async def unreadable_request(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
         """Refuse — and audit — a request the contract schema rejected.
 
         The schema rejects a request before any handler of this component runs,
@@ -165,11 +167,16 @@ def create_app(deployment: AuthorizationDeployment) -> FastAPI:
             _token(request.headers.get("authorization")),
             request_id=request.headers.get("x-request-id"),
             correlation_id=request.headers.get("x-correlation-id"),
-            details={"schema_problems": _schema_problems(exc), "path": request.url.path},
+            details={
+                "schema_problems": _schema_problems(exc),
+                "path": request.url.path,
+            },
         )
         return JSONResponse(
             status_code=refusal.status_code,
-            content={"detail": _refusal_detail(refusal, request.headers.get("x-request-id"))},
+            content={
+                "detail": _refusal_detail(refusal, request.headers.get("x-request-id"))
+            },
         )
 
     @app.get("/health")

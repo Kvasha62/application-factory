@@ -34,14 +34,11 @@ from learning_service.contracts import (
 )
 from learning_service.deployment import LearningDeployment
 from learning_service.deployment import build_deployment as build_learning
-from learning_service.errors import AccessRefused
 from learning_service.store import LearningStore
 from tests.conftest import PLATFORM_ID, monolith
 from tests.test_learning_slice1 import (
     LEARNING_CREDENTIAL,
-    STUDENT_C,
     TEACHER_A,
-    TEACHER_B,
     envelope_of,
 )
 
@@ -130,7 +127,9 @@ def create_course(
     if claim is not None:
         headers["x-tenant-id"] = claim
     payload = body if body is not None else {"title": title, "description": description}
-    return harness.http().post("/api/v1/learning/courses", headers=headers, json=payload)
+    return harness.http().post(
+        "/api/v1/learning/courses", headers=headers, json=payload
+    )
 
 
 def create_module(
@@ -222,7 +221,9 @@ def author_hierarchy(
     }
 
 
-def read_course(harness: AuthoringHarness, course_id: str, token: str = TEACHER_A) -> Any:
+def read_course(
+    harness: AuthoringHarness, course_id: str, token: str = TEACHER_A
+) -> Any:
     return harness.http().get(
         f"/api/v1/learning/courses/{course_id}",
         headers={"authorization": f"Bearer {token}"},
@@ -284,9 +285,7 @@ def test_teacher_creates_module_lesson_and_assignment_as_draft():
     course = create_course(harness, key="ik-tree-1").json()
     module = create_module(harness, course["course_id"], key="ik-tree-2").json()
     lesson = create_lesson(harness, module["module_id"], key="ik-tree-3").json()
-    assignment = create_assignment(
-        harness, lesson["lesson_id"], key="ik-tree-4"
-    ).json()
+    assignment = create_assignment(harness, lesson["lesson_id"], key="ik-tree-4").json()
 
     assert module["status"] == "DRAFT"
     assert module["course_id"] == course["course_id"]
@@ -454,9 +453,7 @@ def test_validation_error_on_a_negative_position():
     harness = authoring_harness(store=LearningStore())
     course = create_course(harness, key="ik-val-3").json()
 
-    response = create_module(
-        harness, course["course_id"], key="ik-val-4", position=-1
-    )
+    response = create_module(harness, course["course_id"], key="ik-val-4", position=-1)
 
     assert response.status_code == 422
     assert envelope_of(response)["error"]["details"]["reason"] == "validation_error"
@@ -525,12 +522,8 @@ def test_the_hierarchy_read_order_is_deterministic():
     course_id = course["course_id"]
     first = create_module(harness, course_id, key="ik-order-m1", position=2).json()
     second = create_module(harness, course_id, key="ik-order-m2", position=1).json()
-    create_lesson(
-        harness, first["module_id"], key="ik-order-l1", title="A", position=2
-    )
-    create_lesson(
-        harness, first["module_id"], key="ik-order-l2", title="B", position=1
-    )
+    create_lesson(harness, first["module_id"], key="ik-order-l1", title="A", position=2)
+    create_lesson(harness, first["module_id"], key="ik-order-l2", title="B", position=1)
 
     body = read_course(harness, course_id).json()
 
@@ -631,7 +624,11 @@ def test_the_published_client_creates_and_reads_the_hierarchy():
         idempotency_key="ik-client-crs",
     )
     module = consumer.create_module(
-        TEACHER_A, course.course_id, title="M", position=1, idempotency_key="ik-client-mod"
+        TEACHER_A,
+        course.course_id,
+        title="M",
+        position=1,
+        idempotency_key="ik-client-mod",
     )
     lesson = consumer.create_lesson(
         TEACHER_A,

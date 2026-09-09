@@ -38,17 +38,23 @@ def test_tenant_id_identifies_exactly_one_tenant():
     assert len(ids) == len(set(ids))
     for snapshot in (first, second):
         assert ta.engine.lookup(snapshot.tenant_id).tenant_id == snapshot.tenant_id
-    assert [tid for tid in ta.store.tenants if tid == first.tenant_id] == [first.tenant_id]
+    assert [tid for tid in ta.store.tenants if tid == first.tenant_id] == [
+        first.tenant_id
+    ]
 
 
 def test_tenant_id_and_creation_time_are_immutable():
     """T-002: `tenant_id` immutable; identity row of the registry is never rewritten."""
     ta = tenant_authority()
-    snapshot, _, _ = ta.engine.create_tenant("svc-token-admin", tenant_id="ten_immutable")
+    snapshot, _, _ = ta.engine.create_tenant(
+        "svc-token-admin", tenant_id="ten_immutable"
+    )
     created_at = snapshot.created_at
 
     ta.engine.transition_tenant("svc-token-admin", "ten_immutable", TenantState.ACTIVE)
-    ta.engine.transition_tenant("svc-token-admin", "ten_immutable", TenantState.SUSPENDED)
+    ta.engine.transition_tenant(
+        "svc-token-admin", "ten_immutable", TenantState.SUSPENDED
+    )
     after = ta.engine.lookup("ten_immutable")
 
     assert after.tenant_id == "ten_immutable"
@@ -83,7 +89,9 @@ def test_unknown_tenant_is_rejected_and_audited():
     with pytest.raises(TenantNotFound) as exc:
         ta.engine.get_tenant("svc-token-admin", "ten_missing")
     assert exc.value.reason is DenyReason.TENANT_NOT_FOUND
-    denial = [ev for ev in ta.store.audit if ev.reason == DenyReason.TENANT_NOT_FOUND.value]
+    denial = [
+        ev for ev in ta.store.audit if ev.reason == DenyReason.TENANT_NOT_FOUND.value
+    ]
     assert denial and denial[-1].decision.value == "DENY"
 
 
@@ -99,7 +107,9 @@ def test_creating_an_existing_tenant_does_not_duplicate_the_registry_row():
 def test_tenant_has_exactly_one_current_state():
     """A state change replaces the single current state; no second marker exists."""
     ta = tenant_authority()
-    snapshot, _, _ = ta.engine.create_tenant("svc-token-admin", tenant_id="ten_one_state")
+    snapshot, _, _ = ta.engine.create_tenant(
+        "svc-token-admin", tenant_id="ten_one_state"
+    )
     record = ta.store.tenants["ten_one_state"]
 
     assert record.state is snapshot.state
@@ -115,9 +125,9 @@ def test_tenant_has_exactly_one_current_state():
     assert registry_state_fields == ["state"]
     # History lives in the transition log, not in a second current-state marker.
     history = ta.store.transitions
-    assert [item.previous_state for item in history if item.tenant_id == "ten_one_state"] == [
-        TenantState.PROVISIONING
-    ]
+    assert [
+        item.previous_state for item in history if item.tenant_id == "ten_one_state"
+    ] == [TenantState.PROVISIONING]
 
 
 def test_tenant_of_another_platform_is_invisible_from_this_platform_context():

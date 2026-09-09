@@ -12,9 +12,7 @@ from fastapi.testclient import TestClient
 
 from learning_service.store import LearningStore
 from tests.test_learning_authoring import (
-    STUDENT_C,
     TEACHER_A,
-    TEACHER_B,
     TEACHER_OPERATIONS,
     author_hierarchy,
     authoring_harness,
@@ -24,7 +22,7 @@ from tests.test_learning_authoring import (
     create_module,
     read_course,
 )
-from tests.test_learning_slice1 import envelope_of
+from tests.test_learning_slice1 import STUDENT_C, TEACHER_B, envelope_of
 
 PUBLISH_BODY = None
 
@@ -69,12 +67,18 @@ def test_an_invalid_credential_is_refused_on_every_authoring_command():
 
     course = http.post(
         "/api/v1/learning/courses",
-        headers={"authorization": "Bearer token-invalid", "idempotency-key": "ik-bad-1"},
+        headers={
+            "authorization": "Bearer token-invalid",
+            "idempotency-key": "ik-bad-1",
+        },
         json={"title": "t", "description": "d"},
     )
     publish_attempt = http.post(
         f"/api/v1/learning/courses/{ids['course_id']}/publish",
-        headers={"authorization": "Bearer token-invalid", "idempotency-key": "ik-bad-2"},
+        headers={
+            "authorization": "Bearer token-invalid",
+            "idempotency-key": "ik-bad-2",
+        },
     )
     read = http.get(
         f"/api/v1/learning/courses/{ids['course_id']}",
@@ -145,10 +149,7 @@ def test_a_student_is_denied_every_authoring_command():
 
 def test_a_command_grant_is_checked_individually():
     """No blanket Teacher pass: each command needs its own grant."""
-    from learning_service.contracts import (
-        OPERATION_COURSE_CREATE,
-        OPERATION_COURSE_PUBLISH,
-    )
+    from learning_service.contracts import OPERATION_COURSE_CREATE
 
     harness = authoring_harness(store=LearningStore())
     # A subject that can create but not publish.
@@ -158,7 +159,9 @@ def test_a_command_grant_is_checked_individually():
 
     created = create_course(harness, key="ik-granular-1", token=STUDENT_C)
     assert created.status_code == 201, created.text
-    refused = publish(harness, created.json()["course_id"], key="ik-granular-2", token=STUDENT_C)
+    refused = publish(
+        harness, created.json()["course_id"], key="ik-granular-2", token=STUDENT_C
+    )
 
     assert refused.status_code == 403
     assert (
@@ -241,9 +244,7 @@ def test_a_teacher_cannot_create_a_child_under_another_tenant_s_course():
 
 def test_a_teacher_cannot_publish_another_tenant_s_course():
     harness = authoring_harness()
-    ids_b = author_hierarchy(
-        harness, key_prefix="ik-xpub", token=TEACHER_B
-    )
+    ids_b = author_hierarchy(harness, key_prefix="ik-xpub", token=TEACHER_B)
     # Sanity: teacher B owns the hierarchy.
     assert harness.learning.store.courses[ids_b["course_id"]].tenant_id == "ten_b"
 
@@ -317,7 +318,9 @@ def test_the_identity_cross_check_denies_a_claimed_foreign_tenant():
     # Give the tenant A teacher every tenant B authoring grant — the refusal
     # must come from IS-001 (the identity is not bound to ten_b), not from
     # the grants.
-    harness.instance.authorization.store.grant("ten_b", "idn_human_a", *TEACHER_OPERATIONS)
+    harness.instance.authorization.store.grant(
+        "ten_b", "idn_human_a", *TEACHER_OPERATIONS
+    )
 
     response = create_course(harness, key="ik-claim", claim="ten_b")
 
@@ -333,7 +336,9 @@ def test_an_unbound_identity_cannot_become_the_effective_tenant():
     """A subject bound to no tenant is denied the whole command chain."""
     harness = authoring_harness(store=LearningStore())
     # idn_human_c is bound to ten_a only; the claim selects nothing.
-    harness.instance.authorization.store.grant("ten_a", "idn_human_c", *TEACHER_OPERATIONS)
+    harness.instance.authorization.store.grant(
+        "ten_a", "idn_human_c", *TEACHER_OPERATIONS
+    )
 
     response = harness.http().post(
         "/api/v1/learning/courses",
@@ -347,7 +352,10 @@ def test_an_unbound_identity_cannot_become_the_effective_tenant():
     # The effective tenant is the identity's own (ten_a): allowed, and the
     # course belongs to ten_a — the identity, not the claim, decides.
     assert response.status_code == 201, response.text
-    assert harness.learning.store.courses[response.json()["course_id"]].tenant_id == "ten_a"
+    assert (
+        harness.learning.store.courses[response.json()["course_id"]].tenant_id
+        == "ten_a"
+    )
 
 
 # ------------------------------------------------------- dependency failures
@@ -375,9 +383,7 @@ def test_a_silent_authorization_dependency_makes_authoring_impossible():
 def test_a_malformed_authorization_answer_fails_the_command_closed():
     from tests.test_learning_boundary import StubAuthorizationPort, learning_deployment
 
-    deployment = learning_deployment(
-        StubAuthorizationPort(object()), seed_demo=False
-    )
+    deployment = learning_deployment(StubAuthorizationPort(object()), seed_demo=False)
     http = TestClient(deployment.contract_app())
 
     response = http.post(
@@ -409,7 +415,9 @@ def test_a_failing_identity_context_refuses_create_course_closed():
             "environment": "test",
         },
         authorization=authorization_port(
-            harness.instance.authorization.publish(credential="authz-svc-token-learning")
+            harness.instance.authorization.publish(
+                credential="authz-svc-token-learning"
+            )
         ),
         tenant_context=ExplodingTenantContext(),
         store=LearningStore(),
@@ -430,9 +438,10 @@ def test_a_failing_identity_context_refuses_create_course_closed():
     body = envelope_of(response)
     assert body["error"]["code"] == "DEPENDENCY_UNAVAILABLE"
     assert body["error"]["details"]["reason"] == "authorization_unavailable"
-    assert learning.store.audit[-1].details == {
-        "stated_code": None
-    } or learning.store.audit[-1].details is not None
+    assert (
+        learning.store.audit[-1].details == {"stated_code": None}
+        or learning.store.audit[-1].details is not None
+    )
     assert learning.store.courses == {}
     assert "ik-id-down" not in learning.engine.idempotency._store
 
@@ -449,7 +458,9 @@ def test_an_unwired_tenant_context_refuses_create_course_closed():
             "environment": "test",
         },
         authorization=authorization_port(
-            harness.instance.authorization.publish(credential="authz-svc-token-learning")
+            harness.instance.authorization.publish(
+                credential="authz-svc-token-learning"
+            )
         ),
         store=LearningStore(),
         with_http=True,
@@ -468,9 +479,7 @@ def test_an_unwired_tenant_context_refuses_create_course_closed():
     assert response.status_code == 503
     body = envelope_of(response)
     assert body["error"]["code"] == "DEPENDENCY_UNAVAILABLE"
-    assert body["error"]["details"] == {
-        "reason": "authorization_unavailable"
-    }
+    assert body["error"]["details"] == {"reason": "authorization_unavailable"}
     # The precise refusal is in the audit journal, not the public envelope.
     event = deployment.store.audit[-1]
     assert event.details["refused"] == "tenant_context_port_not_wired"
@@ -495,7 +504,9 @@ def test_a_non_authoritative_tenant_context_answer_is_refused():
             "environment": "test",
         },
         authorization=authorization_port(
-            harness.instance.authorization.publish(credential="authz-svc-token-learning")
+            harness.instance.authorization.publish(
+                credential="authz-svc-token-learning"
+            )
         ),
         tenant_context=RogueTenantContext(),
         store=LearningStore(),
@@ -540,7 +551,9 @@ def test_an_identity_refusal_with_a_published_reason_is_passed_through():
             "environment": "test",
         },
         authorization=authorization_port(
-            harness.instance.authorization.publish(credential="authz-svc-token-learning")
+            harness.instance.authorization.publish(
+                credential="authz-svc-token-learning"
+            )
         ),
         tenant_context=SuspendedTenantContext(),
         store=LearningStore(),
@@ -570,16 +583,15 @@ def test_an_identity_refusal_with_a_published_reason_is_passed_through():
 def test_the_chain_runs_in_the_declared_order_on_a_command():
     """Validation → identity → tenant context → decision → effect."""
     from learning_service.contracts import OPERATION_COURSE_CREATE
-    from learning_service.errors import AccessRefused
 
     harness = authoring_harness(store=LearningStore())
     # The subject holds the grant but claims a foreign tenant: the IS-001
     # cross-check (step 3) fires although the decision (step 4) would allow.
-    harness.instance.authorization.store.grant("ten_b", "idn_human_c", OPERATION_COURSE_CREATE)
-
-    response = create_course(
-        harness, key="ik-order", token=STUDENT_C, claim="ten_b"
+    harness.instance.authorization.store.grant(
+        "ten_b", "idn_human_c", OPERATION_COURSE_CREATE
     )
+
+    response = create_course(harness, key="ik-order", token=STUDENT_C, claim="ten_b")
     assert response.status_code == 403
     assert envelope_of(response)["error"]["details"]["reason"] == "tenant_mismatch"
 

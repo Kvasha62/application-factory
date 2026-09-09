@@ -31,7 +31,9 @@ def test_provisioning_becomes_active():
 
 
 @pytest.mark.parametrize("state", ALL_STATES)
-def test_every_lifecycle_state_is_reachable_through_allowed_transitions(state: TenantState):
+def test_every_lifecycle_state_is_reachable_through_allowed_transitions(
+    state: TenantState,
+):
     ta = tenant_authority()
     tenant_id = provision_tenant(ta, "reach", state)
     assert ta.engine.lookup(tenant_id).state is state
@@ -47,7 +49,9 @@ def test_reactivation_from_suspended_is_allowed():
 def test_suspended_can_also_proceed_to_deletion():
     ta = tenant_authority()
     tenant_id = provision_tenant(ta, "susp-del", TenantState.SUSPENDED)
-    ta.engine.transition_tenant("svc-token-admin", tenant_id, TenantState.DELETION_REQUESTED)
+    ta.engine.transition_tenant(
+        "svc-token-admin", tenant_id, TenantState.DELETION_REQUESTED
+    )
     ta.engine.transition_tenant("svc-token-admin", tenant_id, TenantState.DELETED)
     assert ta.engine.lookup(tenant_id).state is TenantState.DELETED
 
@@ -144,7 +148,9 @@ def test_state_filter_accepts_the_published_vocabulary_only():
     ta = tenant_authority()
     listed, _, _ = ta.engine.list_tenants("svc-token-admin", state="deleted")
     assert [record.tenant_id for record in listed] == ["ten_deleted"]
-    listed_enum, _, _ = ta.engine.list_tenants("svc-token-admin", state=TenantState.DELETED)
+    listed_enum, _, _ = ta.engine.list_tenants(
+        "svc-token-admin", state=TenantState.DELETED
+    )
     assert [record.tenant_id for record in listed_enum] == ["ten_deleted"]
     with pytest.raises(ValueError):
         ta.engine.list_tenants("svc-token-admin", state="archived")

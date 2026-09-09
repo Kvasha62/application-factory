@@ -295,7 +295,9 @@ def test_the_slice_1_read_still_answers_alongside_the_list():
     headers = {"authorization": f"Bearer {TEACHER_A}"}
 
     read = http.get("/api/v1/learning/submissions/sub_a1_1", headers=headers)
-    listed = http.get("/api/v1/learning/assignments/asg_a1/submissions", headers=headers)
+    listed = http.get(
+        "/api/v1/learning/assignments/asg_a1/submissions", headers=headers
+    )
 
     assert read.status_code == 200
     assert listed.status_code == 200
