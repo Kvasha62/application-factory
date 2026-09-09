@@ -1,5 +1,5 @@
 {
-  "component_id": "idempotency_guard",
+  "component_id": "idempotency",
   "component_version": "0.1.0",
   "class": "platform_service",
   "maturity_level": "level_0_modular_monolith",
@@ -58,7 +58,7 @@
     "properties": {}
   },
   "data_ownership": {
-    "owner": "idempotency_guard",
+    "owner": "idempotency",
     "logical_schema": "in-memory (bounded)",
     "datasets": [
       {

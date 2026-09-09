@@ -205,7 +205,7 @@ Feedback/LearningResult в компоненте нет: review — это ров
 |---|---|---|
 | IS-001 `identity` (`>=0.3.0,<0.4.0`) | клиент над опубликованным API | `resolve_context` (только команда create-course) |
 | IS-003 `authorization` (`>=0.1.0,<0.2.0`) | клиент над опубликованным API | `decide` |
-| IS-005 `idempotency_guard` (`>=0.1.0,<0.2.0`) | внутренняя consumer surface | `execute` (все команды изменения состояния) |
+| IS-005 `idempotency` (`>=0.1.0,<0.2.0`) | внутренняя consumer surface | `execute` (все команды изменения состояния) |
 
 **Ни один модуль `learning_service` не импортирует `authorization_service`,
 `identity_service` или `tenant_authority`.** IS-005 — единственная прямая

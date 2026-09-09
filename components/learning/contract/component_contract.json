@@ -595,11 +595,11 @@
       "direction": "learning -> authorization (read-only access decision)"
     },
     {
-      "component_id": "idempotency_guard",
+      "component_id": "idempotency",
       "version_range": ">=0.1.0,<0.2.0",
       "kind": "internal-consumer-surface",
       "contract": "components/idempotency/contract/component_contract.json",
-      "direction": "learning -> idempotency_guard (exactly-once delivery of the review command)",
+      "direction": "learning -> idempotency (exactly-once delivery of the review command)",
       "note": "SCS-001 implements no second idempotency mechanism: the review command identity (operation, target, fingerprint) is delivered to IS-005, which decides between executing, replaying and refusing a conflict."
     },
     {

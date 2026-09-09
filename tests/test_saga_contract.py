@@ -177,14 +177,14 @@ def test_events_and_cdc_are_declared_only_because_no_infrastructure_exists():
 def test_dependencies_are_the_two_consumed_boundaries_only():
     dependencies = contract()["dependencies"]
     assert {item["component_id"] for item in dependencies} == {
-        "idempotency_guard",
+        "idempotency",
         "identity",
     }
     for item in dependencies:
         assert item["kind"] in {"api", "internal-consumer-surface"}
         assert Path(item["contract"]).is_file()
     guard = next(
-        item for item in dependencies if item["component_id"] == "idempotency_guard"
+        item for item in dependencies if item["component_id"] == "idempotency"
     )
     assert "no second idempotency mechanism" in guard["note"]
 

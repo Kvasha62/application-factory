@@ -183,7 +183,7 @@ def test_contract_declares_the_dependencies_on_published_contracts():
     assert authorization["kind"] == "api"
     assert authorization["version_range"] == ">=0.1.0,<0.2.0"
     assert Path(authorization["contract"]).exists()
-    idempotency = by_component["idempotency_guard"]
+    idempotency = by_component["idempotency"]
     assert idempotency["kind"] == "internal-consumer-surface"
     assert idempotency["version_range"] == ">=0.1.0,<0.2.0"
     assert Path(idempotency["contract"]).exists()
