@@ -22,8 +22,11 @@ IS-001 through the IS-003 decision, and a caller-supplied ``tenant_id``
 is forwarded as a cross-check only (LAW-16, LAW-16a).
 
 Slice 1 publishes the single-submission read
-``GET /api/v1/learning/submissions/{submission_id}``. Slice 3 adds exactly
-one state-changing command — the teacher submission review
+``GET /api/v1/learning/submissions/{submission_id}``. Slice 2 (Issue #20)
+adds exactly one business read operation — teacher submission discovery
+``GET /api/v1/learning/assignments/{assignment_id}/submissions`` — on top
+of it. Slice 3 adds exactly one state-changing command — the teacher
+submission review
 ``POST /api/v1/learning/submissions/{submission_id}/review`` — which records
 ``reviewed_by`` / ``reviewed_at``, leaves the lifecycle ``SUBMITTED`` and is
 guarded by IS-005. Errors use the approved SCS-001 envelope (``error.code``

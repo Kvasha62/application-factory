@@ -1,4 +1,4 @@
-"""Conformance of the machine-readable Component Contract of SCS-001 Slice 1.
+"""Conformance of the machine-readable Component Contract of SCS-001.
 
 Every check compares the published documents with live objects: declared
 operations against the routes the application actually serves (resolving
@@ -6,7 +6,9 @@ the `servers: /api/v1/learning` prefix plus relative OpenAPI paths),
 declared reason codes against the reasons the engine produces, the
 declared enforcement chain against the engine's chain, the approved error
 envelope against real refusals, declared configuration against the loader,
-and the declared refusal semantics against real requests.
+and the declared refusal semantics against real requests. The Slice 1
+single read and the Slice 2 teacher discovery list are the read surface;
+the Slice 3 review command is the single state-changing operation.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from learning_service.contracts import (
 )
 from learning_service.engine import ENFORCEMENT_CHAIN
 from learning_service.errors import ConfigurationError
-from learning_service.models import OwnedSubmission
+from learning_service.models import OwnedAssignment, OwnedSubmission
 from learning_service.store import ASSIGNMENT_STATES, SUBMISSION_STATES, LearningStore
 from tests.test_learning_slice1 import TEACHER_A, envelope_of, learning_harness
 
@@ -136,6 +138,7 @@ def test_contract_declares_the_required_shapes():
     assert authz["tenant_context_source"] == "identity"
     assert authz["operations_guarded"] == [
         "learning.submissions.read",
+        "learning.submissions.list",
         "learning.submissions.review",
     ]
 
@@ -182,7 +185,9 @@ def test_openapi_uses_servers_and_relative_paths():
     assert "url: /api/v1/learning" in text
     paths_section = text.split("paths:", 1)[1]
     assert "/submissions/{submission_id}:" in paths_section
+    assert "/assignments/{assignment_id}/submissions:" in paths_section
     assert "/api/v1/learning/submissions" not in paths_section
+    assert "/api/v1/learning/assignments" not in paths_section
 
 
 def test_published_api_matches_the_implementation_in_both_directions():
@@ -209,10 +214,11 @@ def test_published_api_matches_the_implementation_in_both_directions():
         for operation in data["api"]["operations"]
     }
     assert contract_operations <= declared
-    # Exactly the single business read operation and the single review command
+    # Exactly the two business read operations and the single review command
     # plus health/readiness.
     assert contract_operations == {
         ("/api/v1/learning/submissions/{submission_id}", "get"),
+        ("/api/v1/learning/assignments/{assignment_id}/submissions", "get"),
         ("/api/v1/learning/submissions/{submission_id}/review", "post"),
     }
 
@@ -223,6 +229,11 @@ def test_declared_enforcement_chain_and_model_match_the_engine():
     assert tuple(model["enforcement_chain"]) == ENFORCEMENT_CHAIN
     assert tuple(data["learning_boundary"]["enforcement_chain"]) == ENFORCEMENT_CHAIN
     assert model["default_outcome"] == "deny"
+    assert model["owned_data_operations"] == [
+        "serve_submission",
+        "list_submissions_for_assignment",
+        "apply_review",
+    ]
     assert set(model["own_deny_reasons"]) == OWN_DENY_REASONS
     assert set(model["submission_states"]) == set(SUBMISSION_STATES)
     assert set(model["assignment_states"]) == set(ASSIGNMENT_STATES)
@@ -248,6 +259,7 @@ def test_declared_refusal_vocabulary_matches_the_published_reasons():
     assert declared == PUBLISHED_DENY_REASONS
     assert "permission_not_granted" in declared
     assert "resource_tenant_mismatch" in declared
+    assert "assignment_unknown" in declared
 
 
 # ------------------------------------------------------- approved error envelope
@@ -299,6 +311,11 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
     def scenario_401():
         return learning_harness().http().get("/api/v1/learning/submissions/sub_a1_1")
 
+    def scenario_401_list():
+        return learning_harness().http().get(
+            "/api/v1/learning/assignments/asg_a1/submissions"
+        )
+
     def scenario_403():
         return (
             learning_harness()
@@ -307,6 +324,12 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
                 "/api/v1/learning/submissions/sub_b1_1",
                 headers={"authorization": f"Bearer {TEACHER_A}"},
             )
+        )
+
+    def scenario_403_list():
+        return learning_harness().http().get(
+            "/api/v1/learning/assignments/asg_b1/submissions",
+            headers={"authorization": f"Bearer {TEACHER_A}"},
         )
 
     def scenario_404():
@@ -331,6 +354,12 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
             },
         )
 
+    def scenario_404_list():
+        return learning_harness().http().get(
+            "/api/v1/learning/assignments/missing/submissions",
+            headers={"authorization": f"Bearer {TEACHER_A}"},
+        )
+
     def scenario_503():
         from tests.test_learning_boundary import (
             StubAuthorizationPort,
@@ -344,13 +373,26 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
             headers={"authorization": f"Bearer {TEACHER_A}"},
         )
 
+    def scenario_503_list():
+        from tests.test_learning_boundary import (
+            StubAuthorizationPort,
+            learning_deployment,
+        )
+
+        deployment = learning_deployment(StubAuthorizationPort(RuntimeError("boom")))
+        http = TestClient(deployment.contract_app())
+        return http.get(
+            "/api/v1/learning/assignments/asg_a1/submissions",
+            headers={"authorization": f"Bearer {TEACHER_A}"},
+        )
+
     scenarios = {
-        400: scenario_400,
-        401: scenario_401,
-        403: scenario_403,
-        404: scenario_404,
-        409: scenario_409,
-        503: scenario_503,
+        400: [scenario_400],
+        401: [scenario_401, scenario_401_list],
+        403: [scenario_403, scenario_403_list],
+        404: [scenario_404, scenario_404_list],
+        409: [scenario_409],
+        503: [scenario_503, scenario_503_list],
     }
     assert set(refused) == {str(status) for status in scenarios}
     expected_codes = {
@@ -361,16 +403,18 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
         409: "INVALID_STATE_TRANSITION",
         503: "DEPENDENCY_UNAVAILABLE",
     }
-    for status, scenario in scenarios.items():
-        response = scenario()
-        assert response.status_code == status, (status, response.text)
-        body = envelope_of(response)
-        assert body["error"]["code"] == expected_codes[status]
-        assert (
-            body["error"]["message"] == ERROR_CODES[expected_codes[status]]["message"]
-        )
-        documented = {r.strip() for r in refused[str(status)].split(",")}
-        assert body["error"]["details"]["reason"] in documented
+    for status, calls in scenarios.items():
+        for scenario in calls:
+            response = scenario()
+            assert response.status_code == status, (status, response.text)
+            body = envelope_of(response)
+            assert body["error"]["code"] == expected_codes[status]
+            assert (
+                body["error"]["message"]
+                == ERROR_CODES[expected_codes[status]]["message"]
+            )
+            documented = {r.strip() for r in refused[str(status)].split(",")}
+            assert body["error"]["details"]["reason"] in documented
 
 
 def test_owner_mismatch_is_a_documented_403():
@@ -393,6 +437,30 @@ def test_owner_mismatch_is_a_documented_403():
     deployment = learning_deployment(StubAuthorizationPort(ALLOW), store=store)
     response = TestClient(deployment.contract_app()).get(
         "/api/v1/learning/submissions/sub_foreign",
+        headers={"authorization": f"Bearer {TEACHER_A}"},
+    )
+    assert response.status_code == 403
+    body = envelope_of(response)
+    assert body["error"]["code"] == "AUTHORIZATION_DENIED"
+    assert body["error"]["details"]["reason"] == OwnDenyReason.OWNER_MISMATCH
+
+
+def test_foreign_assignment_is_a_documented_403_for_list():
+    from tests.test_learning_boundary import StubAuthorizationPort, learning_deployment
+
+    store = LearningStore()
+    store.seed_demo()
+    store.assignments["asg_foreign"] = OwnedAssignment(
+        assignment_id="asg_foreign",
+        tenant_id="ten_a",
+        owner_component="identity",
+        status="PUBLISHED",
+        created_at="2026-09-08T00:00:00+00:00",
+        updated_at="2026-09-08T00:00:00+00:00",
+    )
+    deployment = learning_deployment(StubAuthorizationPort(ALLOW), store=store)
+    response = TestClient(deployment.contract_app()).get(
+        "/api/v1/learning/assignments/asg_foreign/submissions",
         headers={"authorization": f"Bearer {TEACHER_A}"},
     )
     assert response.status_code == 403
@@ -424,6 +492,30 @@ def test_submission_response_shape_matches_openapi_schema():
     ):
         assert field in text
         assert field in item
+
+
+def test_submission_list_response_shape_matches_openapi_schema():
+    harness = learning_harness()
+    response = harness.http().get(
+        "/api/v1/learning/assignments/asg_a1/submissions",
+        headers={"authorization": f"Bearer {TEACHER_A}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"items"}
+    assert "SubmissionList" in openapi_text()
+    for item in body["items"]:
+        for field in (
+            "submission_id",
+            "assignment_id",
+            "student_identity_id",
+            "attempt",
+            "content",
+            "status",
+            "created_at",
+            "updated_at",
+        ):
+            assert field in item
 
 
 # ---------------------------------------------------------------- configuration

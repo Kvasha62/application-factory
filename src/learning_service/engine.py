@@ -7,7 +7,7 @@ decision cannot be obtained at all. The chain is fixed, published, and
 every step can only deny:
 
 ```text
-Request (subject credential, submission id, operation, [claimed tenant])
+Request (subject credential, record id, operation, [claimed tenant])
       ↓
 ownership_boundary       the record exists here and its single owner is
                          this component                  else DENY
@@ -16,7 +16,7 @@ authorization_decision   IS-003 decides through the port; the default
                          outcome is DENY; a dependency that does not answer
                          or answers outside its contract fails closed
       ↓
-owned_data_operation     only now is the submission read or reviewed
+owned_data_operation     only now is the owned data read or reviewed
 ```
 
 An ``ALLOW`` is not data access: the owned-data operation runs only here,
@@ -46,6 +46,7 @@ from learning_service import COMPONENT_ID, COMPONENT_VERSION
 from learning_service.config import LearningConfig
 from learning_service.consumed import ALLOW, DENY, DENY_REASONS, PERMITTED, DependencyRefusal
 from learning_service.contracts import (
+    OPERATION_LIST,
     OPERATION_READ,
     OPERATION_REVIEW,
     OwnDenyReason,
@@ -90,7 +91,10 @@ def _status_for(reason: str) -> int:
     fail-closed dependency, 403 everything else."""
     if reason in _AUTHENTICATION_DENIALS:
         return 401
-    if reason == OwnDenyReason.SUBMISSION_UNKNOWN:
+    if reason in {
+        OwnDenyReason.ASSIGNMENT_UNKNOWN,
+        OwnDenyReason.SUBMISSION_UNKNOWN,
+    }:
         return 404
     if reason in (
         OwnDenyReason.INVALID_STATE_TRANSITION,
@@ -248,6 +252,91 @@ class LearningEngine:
             claimed_tenant_id=claimed_tenant_id,
         )
         return (_view_of(served), obs, event)
+
+    def list_submissions(
+        self,
+        subject_credential: str | None,
+        assignment_id: str,
+        *,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> tuple[list[SubmissionView], ObservabilityContext, AccessAuditEvent]:
+        """List the submissions of one Assignment — teacher discovery.
+
+        The same enforcement chain as the single read, applied to the
+        Assignment: the record must be owned here before IS-003 is asked
+        (an unknown assignment fails closed without a decision), and the
+        grant question is ``learning.submissions.list`` against the
+        Assignment's own tenant.
+        """
+        obs = self.observability(
+            tenant_id=None, subject_id=None,
+            request_id=request_id, correlation_id=correlation_id,
+        )
+
+        # --- step 1: the ownership boundary of this component ----------------
+        assignment = self.store.ownership_of_assignment(assignment_id)
+        if assignment is None:
+            raise self._refuse(
+                OwnDenyReason.ASSIGNMENT_UNKNOWN,
+                action=OPERATION_LIST,
+                obs=obs,
+                subject_id=None,
+                tenant_id=None,
+                resource_id=assignment_id,
+                resource_tenant_id=None,
+                assignment_id=assignment_id,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+            )
+        if assignment.owner_component != COMPONENT_ID:
+            raise self._refuse(
+                OwnDenyReason.OWNER_MISMATCH,
+                action=OPERATION_LIST,
+                obs=obs,
+                subject_id=None,
+                tenant_id=None,
+                resource_id=assignment_id,
+                resource_tenant_id=assignment.tenant_id,
+                assignment_id=assignment_id,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+                details={"stated_owner": assignment.owner_component},
+            )
+
+        # --- step 2: the decision of IS-003 through the port ------------------
+        answer_obs, subject_id, tenant_id = self._decide(
+            subject_credential,
+            operation=OPERATION_LIST,
+            resource_type="assignment",
+            resource_id=assignment.assignment_id,
+            resource_tenant_id=assignment.tenant_id,
+            claimed_tenant_id=claimed_tenant_id,
+            obs=obs,
+            action=OPERATION_LIST,
+            assignment_id=assignment.assignment_id,
+            submission_id=None,
+        )
+        obs = answer_obs
+
+        # --- step 3: the owned-data operation, and only here ------------------
+        served = self.store.list_submissions_for_assignment(assignment.assignment_id)
+
+        event = self.audit(
+            action=OPERATION_LIST,
+            decision=ALLOW,
+            reason=PERMITTED,
+            obs=obs,
+            subject_id=subject_id,
+            tenant_id=tenant_id,
+            resource_id=assignment_id,
+            resource_tenant_id=assignment.tenant_id,
+            assignment_id=assignment.assignment_id,
+            submission_id=None,
+            claimed_tenant_id=claimed_tenant_id,
+        )
+        return ([_view_of(item) for item in served], obs, event)
 
     def review_submission(
         self,

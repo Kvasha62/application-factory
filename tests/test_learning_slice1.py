@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from authorization_service.models import ServiceAccess
 from authorization_service.store import CONSUMER_PERMISSIONS
 from learning_service.adapters import authorization_port
-from learning_service.contracts import OPERATION_READ
+from learning_service.contracts import OPERATION_LIST, OPERATION_READ
 from learning_service.deployment import LearningDeployment, build_deployment as build_learning
 from learning_service.store import LearningStore
 from tests.conftest import PLATFORM_ID, monolith
@@ -44,6 +44,8 @@ def learning_harness(store: LearningStore | None = None) -> LearningHarness:
     """Compose IS-001/IS-002/IS-003 plus Learning for one test.
 
     Grants are the composition root's job (IS-003 publishes no grant API).
+    Teachers hold both read grants; the student holds the single-read grant
+    only, so the Slice 2 list denial is exercisable.
     """
     instance = monolith()
     # Learning's own service identity for asking IS-003.
@@ -54,6 +56,8 @@ def learning_harness(store: LearningStore | None = None) -> LearningHarness:
     instance.authorization.store.grant("ten_a", "idn_human_a", OPERATION_READ)
     instance.authorization.store.grant("ten_b", "idn_human_b", OPERATION_READ)
     instance.authorization.store.grant("ten_a", "idn_human_c", OPERATION_READ)
+    instance.authorization.store.grant("ten_a", "idn_human_a", OPERATION_LIST)
+    instance.authorization.store.grant("ten_b", "idn_human_b", OPERATION_LIST)
     learning = build_learning(
         {"platform_id": instance.authority.current_platform_id, "environment": "test"},
         authorization=authorization_port(

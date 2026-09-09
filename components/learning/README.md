@@ -1,19 +1,22 @@
-# SCS-001 Learning — Teacher Submission Review (Slice 3)
+# SCS-001 Learning — Submission Read, Teacher Submission Discovery и Review (Slices 1–3)
 
 **Класс:** A — Business System / SCS
 **Уровень:** Level 0 — Modular Monolith
 **Версия компонента:** 0.1.0
 **Владелец данных:** `learning` (логическая схема `learning`)
-**Задача:** SCS-001 Slice 3 — Issue #24 (на prerequisite среза 1)
+**Задача:** SCS-001 Slice 1 (prerequisite) + Slice 2 — Issue #20 + Slice 3 — Issue #24
 **Архитектурная основа:** `docs/ARCHITECTURE.md` v1.2.0 §5.3, §5.4, §6.1, §6.2,
 §6.5, §26, §27, LAW-03, LAW-04, LAW-16, LAW-16a
 
-SCS-001 — бизнес-компонент, владелец учебных данных. Срез 3 добавляет к
-чтению отдельной работы из среза 1 ровно одну команду изменения состояния —
-review работы учителем:
+SCS-001 — бизнес-компонент, владелец учебных данных. Срез 1 публикует чтение
+отдельной работы, срез 2 добавляет teacher discovery — список работ задания,
+срез 3 добавляет ровно одну команду изменения состояния — review работы
+учителем:
 
 ```text
-Teacher → Record review of one Submission (this slice)
+Subject → Submission read (срез 1)
+Teacher → List one Assignment's submissions (срез 2)
+Teacher → Record review of one Submission (срез 3)
 ```
 
 Это не grading-платформа, не analytics и не progress-трекинг: компонент
@@ -57,8 +60,10 @@ reviewed_by / reviewed_at записываются один раз; lifecycle о
 
 Порядок шагов опубликован (`api.enforcement_model.enforcement_chain`) и
 является частью поведения: каждый шаг может только отказать. Операция над
-данными (`serve_submission` / `apply_review`) вызывается ровно один раз и
-только после полного прохождения цепочки.
+данными (`serve_submission` / `list_submissions_for_assignment` /
+`apply_review`) вызывается ровно один раз и только после полного прохождения
+цепочки. Вопрос списку называет задание и его тенант из собственного
+хранилища — никогда из заявления вызывающей стороны.
 
 ## Модель данных
 
@@ -75,20 +80,25 @@ reviewed_by / reviewed_at записываются один раз; lifecycle о
 | `reviewed_at` | timestamp успешного review; `null` до review; неизменяем после первого review |
 
 Работа принадлежит тому же тенанту, что и её задание — это инвариант
-хранилища, а не заявление вызывающей стороны. Оценок, комментариев,
+хранилища, а не заявление вызывающей стороны. Ответ списка содержит только
+работы запрошенного задания в детерминированном порядке `submission_id`;
+пустое задание отвечает `{"items": []}`. Пагинации, сортировки, поиска и
+частичных наборов нет. Оценок, комментариев,
 review-состояний, прогресса, Enrollment, сущностей Review/Evaluation/Grade/
 Feedback/LearningResult в срезе нет: review — это ровно два nullable поля.
 
 ## Публичный контракт
 
 - HTTP: `GET /api/v1/learning/submissions/{submission_id}` (операция
-  `learning.submissions.read`, срез 1) и
+  `learning.submissions.read`, срез 1),
+  `GET /api/v1/learning/assignments/{assignment_id}/submissions` (операция
+  `learning.submissions.list`, срез 2) и
   `POST /api/v1/learning/submissions/{submission_id}/review` (операция
-  `learning.submissions.review`, этот срез) — см. `contract/openapi.yaml`
+  `learning.submissions.review`, срез 3) — см. `contract/openapi.yaml`
   (servers: `/api/v1/learning`, относительные пути) и
   `contract/component_contract.json`;
 - уровень 0 (in-process): `learning_service.reader.LearningClient` — две
-  операции, значения туда и обратно.
+  операции чтения и одна команда, значения туда и обратно.
 
 `Authorization` несёт credential субъекта: компонент сам не проверяет
 никаких credentials. `X-Tenant-Id` — только cross-check (LAW-16a).
@@ -115,7 +125,7 @@ Feedback/LearningResult в срезе нет: review — это ровно дв�
 | `400` | `IDEMPOTENCY_KEY_REQUIRED` | `idempotency_key_required` — команда без ключа |
 | `401` | `AUTHENTICATION_REQUIRED` | `missing_identity`, `invalid_identity`, `unknown_identity` |
 | `403` | `AUTHORIZATION_DENIED` | опубликованные `DENY`-причины IS-003 без изменений; `owner_mismatch` |
-| `404` | `NOT_FOUND` | `submission_unknown` — решение не запрашивается |
+| `404` | `NOT_FOUND` | `assignment_unknown`, `submission_unknown` — решение не запрашивается |
 | `409` | `INVALID_STATE_TRANSITION` | `invalid_state_transition` — review только для `SUBMITTED` |
 | `409` | `ALREADY_REVIEWED` | `already_reviewed` — факт review неизменяем; другой ключ не перезаписывает первый review |
 | `409` | `IDEMPOTENCY_CONFLICT` | `idempotency_conflict` — ключ уже использован с другим binding |
@@ -152,6 +162,7 @@ Feedback/LearningResult в срезе нет: review — это ровно дв�
 | Файл | Что доказывает |
 |---|---|
 | `tests/test_learning_slice1.py` | чтение работы: успех, изоляция, отказы, аудит (prerequisite) |
+| `tests/test_learning_slice2.py` | teacher discovery: успех, фильтрация, пустой список, изоляция, отказы, аудит |
 | `tests/test_learning_slice3.py` | review: успех, replay, conflict, состояние, изоляция, отказы, аудит |
 | `tests/test_learning_contract.py` | conformance контракта к живой реализации |
 | `tests/test_learning_boundary.py` | отсутствие обходов и второго механизма авторизации/тенанта/идемпотентности |
