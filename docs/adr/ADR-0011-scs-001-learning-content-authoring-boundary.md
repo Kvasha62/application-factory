@@ -6,47 +6,85 @@
 
 ## Context
 
-SCS-001 currently provides the canonical Submission capability slices: individual Submission read, Teacher Submission Discovery, and immutable Teacher Review. The current implementation/contract owns `assignments` and `submissions` for these slices.
+SCS-001 currently has three accepted capability slices: Submission read, Teacher Submission Discovery, and immutable Teacher Review. The canonical component therefore proves the downstream part of the Learning flow, but the content hierarchy that originates an Assignment is not yet established as an implemented business capability.
 
-The capability review identified a real business gap: the current Learning implementation cannot itself establish the upstream learning-content chain required to originate an Assignment inside the SCS boundary. This is a domain capability gap, not an API-completeness gap.
+This is a domain-capability gap, not a request for generic CRUD or API completeness.
 
 ## Decision under review
 
-The next Learning capability should be **Learning Content Authoring**, beginning with the smallest coherent content hierarchy:
+The next business capability of SCS-001 is **Learning Content Authoring**.
+
+The minimal coherent business chain is:
+
+`Course → Module → Lesson → Assignment → Submission → Teacher Review`
+
+The first authoring slice establishes the upstream four entities and their business invariants without changing the accepted Submission/Review semantics.
+
+## Proposed first authoring slice
+
+### Teacher commands
+
+1. Create Course.
+2. Create Module inside a Course.
+3. Create Lesson inside a Module.
+4. Create Assignment inside a Lesson.
+5. Publish Course.
+6. Archive Course.
+
+Child content is created in `DRAFT` state. Course publication is the single publication command in the first slice and publishes the complete valid child hierarchy together with the Course.
+
+A Course is publishable only when its hierarchy is structurally valid for the slice. Publication is atomic: either the Course and its complete child hierarchy become `PUBLISHED`, or no publication effect is applied.
+
+After publication, Course/Module/Lesson/Assignment structure is immutable in this first slice. There is no unpublish or editing of published content.
+
+### Student reads
+
+Students may read published learning content sufficient to consume the hierarchy:
 
 `Course → Module → Lesson → Assignment`
 
-The purpose is to establish and maintain the learning content that later produces student enrollments and submissions.
+Reads expose only content belonging to the caller's effective tenant and only content that is published. No student authoring capability is introduced.
 
-## Proposed boundary
+### Lifecycle
 
-SCS-001 Learning owns:
-- Course
-- Module
-- Lesson
-- Assignment
-- Enrollment
-- Submission
+Course, Module, Lesson, Assignment:
 
-External identity/profile/payment/media/analytics/etc. remain outside Learning.
-
-All Learning business data is tenant-scoped and owned by `learning`.
-
-## Proposed lifecycle vocabulary
-
-Course:
-`DRAFT → PUBLISHED → ARCHIVED`
-
-Module/Lesson/Assignment:
 `DRAFT → PUBLISHED → ARCHIVED`
 
 No `UNPUBLISH` transition.
 
-After Course publication, the first implementation slice should treat course structure as immutable unless a later decision explicitly introduces revision semantics.
+Archive is a teacher command. Archiving a Course archives its child content as one atomic business operation. Archived content is not available through published-content student reads.
 
-## Explicit exclusions
+Submission remains exactly `DRAFT → SUBMITTED`.
 
-This ADR does not authorize implementation of:
+Teacher Review remains an immutable fact represented by `reviewed_by` and `reviewed_at`; this ADR does not change its semantics.
+
+## Authorization
+
+Teacher authoring/publication/archive requires:
+
+`Identity → effective tenant → Authorization → Learning ownership boundary`
+
+Student content reads require verified identity, effective tenant context, authorization, and Learning ownership/publication checks.
+
+No second identity, tenant, authorization, or idempotency mechanism is introduced.
+
+## Idempotency
+
+All state-changing authoring commands use IS-005 `Idempotency-Key`.
+
+Publication and archive are atomic business commands and must not partially apply on replay, binding conflict, authorization denial, or dependency failure.
+
+## Data ownership
+
+Learning owns Course, Module, Lesson, Assignment, Enrollment, and Submission. All business records are tenant-scoped and owned by `learning`.
+
+External identity/profile, credentials, payment, media, analytics, and other platform concerns remain outside Learning.
+
+## Explicit non-goals
+
+This ADR does not authorize:
+
 - grading;
 - score;
 - feedback/comments;
@@ -60,27 +98,20 @@ This ADR does not authorize implementation of:
 - new foundation services;
 - Component Catalog/Composer/Golden Bundles;
 - microservices;
-- generic CRUD as a replacement for business commands.
+- generic CRUD replacing business commands;
+- content revision/versioning;
+- reordering/moving published content;
+- bulk authoring;
+- search, pagination, or advanced filtering.
 
-## Architectural constraints
+## Architectural authority
 
 `docs/ARCHITECTURE.md` v1.2.0 RATIFIED remains the sole architectural law.
 
-Use the existing chain:
+Existing IS-001, IS-003, IS-004, IS-005 and IS-006 boundaries remain authoritative and unchanged.
 
-`Identity → effective tenant → Authorization → Learning ownership boundary`
+No architecture version bump is proposed unless implementation review identifies a genuine conflict with the ratified architecture.
 
-State-changing commands use IS-005 idempotency.
+## Consequence
 
-No second identity, tenant, authorization, or idempotency mechanism may be introduced.
-
-## Open questions before ratification
-
-1. What is the minimum authoring/read capability required to establish the content hierarchy without prematurely implementing the full authoring UI?
-2. Which operations are required for Teacher and which content reads are required for Student?
-3. Which lifecycle transitions belong in the first content-authoring slice?
-4. What exact relationship between Course publication and child publication is required?
-
-## Expected outcome
-
-Ratify a minimal, implementation-ready Learning Content Authoring slice only after the above semantics are decided. The resulting implementation Issue must remain narrow and self-contained.
+If ratified, an implementation Issue can be created as a narrow SCS-001 content-authoring slice. The implementation must extend the existing Learning boundary rather than redesigning the foundation or absorbing unrelated deferred capabilities.
