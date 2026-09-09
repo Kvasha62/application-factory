@@ -1360,10 +1360,18 @@ class LearningEngine:
         fingerprint = _payload_fingerprint(action, {})
 
         def run_effect() -> CourseView:
-            updated = effect(course_id, self.clock())
-            # The recorded result of the command is the published hierarchy
-            # view at transition time: an exact replay returns exactly it.
-            _, modules, lessons, assignments = self.store.course_hierarchy(course_id)
+            # The whole critical sequence — validation, the transition of the
+            # Course and of every descendant, and the recorded snapshot —
+            # inside the Course's domain critical section: no child creation
+            # and no archive can interleave between the publication's
+            # validation and its writes, and the recorded result describes
+            # exactly the tree as this command transitioned it (Issue #31).
+            # The section is reentrant: the store re-acquires it inside.
+            with self.store.hierarchy_section(course_id):
+                updated = effect(course_id, self.clock())
+                _, modules, lessons, assignments = self.store.course_hierarchy(
+                    course_id
+                )
             return _course_view_of(updated, modules, lessons, assignments)
 
         try:
