@@ -183,9 +183,7 @@ def test_dependencies_are_the_two_consumed_boundaries_only():
     for item in dependencies:
         assert item["kind"] in {"api", "internal-consumer-surface"}
         assert Path(item["contract"]).is_file()
-    guard = next(
-        item for item in dependencies if item["component_id"] == "idempotency"
-    )
+    guard = next(item for item in dependencies if item["component_id"] == "idempotency")
     assert "no second idempotency mechanism" in guard["note"]
 
 

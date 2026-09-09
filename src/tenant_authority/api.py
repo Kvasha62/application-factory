@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tenant_authority import COMPONENT_ID, COMPONENT_VERSION
 from tenant_authority.contracts import LifecycleDecision, TenantSnapshot, TenantState
-from tenant_authority.deployment import TenantAuthorityDeployment, build_deployment
+from tenant_authority.deployment import TenantAuthorityDeployment
 from tenant_authority.errors import DenyReason, TenantAuthorityError
 from tenant_authority.lifecycle import ALLOWED_TRANSITIONS
 from tenant_authority.models import LifecycleTransition
@@ -300,11 +300,3 @@ def create_app(deployment: TenantAuthorityDeployment) -> FastAPI:
         return _transition_out(transition)
 
     return app
-
-
-_deployment = build_deployment(
-    {"platform_id": "plt_demo"}, seed_demo=True, with_http=True
-)
-
-#: ASGI application of the standalone demo deployment (`tenant_authority.api:app`).
-app = _deployment.http_app
