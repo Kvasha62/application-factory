@@ -86,9 +86,7 @@ def walk_state(root: object, *, depth: int = 5) -> set[int]:
         if level > depth or id(value) in seen:
             continue
         seen.add(id(value))
-        if isinstance(value, types.ModuleType) or isinstance(
-            value, (str, bytes, int, float, complex, bool, type(None))
-        ):
+        if isinstance(value, (types.ModuleType, str, bytes, int, float, complex, bool, type(None))):
             continue
         members: list[object] = []
         if hasattr(value, "__dict__"):

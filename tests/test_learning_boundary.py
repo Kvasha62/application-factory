@@ -18,6 +18,7 @@ from __future__ import annotations
 import ast
 import importlib
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -169,7 +170,7 @@ def walk_state(root: object, *, depth: int = 5) -> list[object]:
                 members.append(cell.cell_contents)
             except ValueError:
                 continue
-        if isinstance(value, Mapping) or isinstance(value, (list, tuple, set, frozenset)):
+        if isinstance(value, (Mapping, list, tuple, set, frozenset)):
             if isinstance(value, Mapping):
                 members.extend(list(value.keys()) + list(value.values()))
             else:
@@ -444,7 +445,7 @@ def test_a_fresh_interpreter_imports_no_other_component():
     result = subprocess.run(
         [sys.executable, "-c", code],
         cwd=Path(__file__).resolve().parents[1],
-        env={"PYTHONPATH": "src", "PATH": "/usr/bin:/bin"},
+        env={**os.environ, "PYTHONPATH": "src"},
         capture_output=True,
         text=True,
         timeout=60,

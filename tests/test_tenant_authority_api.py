@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from tests.conftest import tenant_authority
 from tenant_authority import COMPONENT_ID, COMPONENT_VERSION
 from tenant_authority.api import create_app
+from tests.conftest import tenant_authority
 
 ADMIN = {"Authorization": "Bearer svc-token-admin"}
 READ_ONLY = {"Authorization": "Bearer svc-token-identity"}
@@ -60,7 +60,7 @@ def test_write_operations_require_a_verified_service_identity():
 
 
 def test_transition_through_the_api_writes_an_auditable_record():
-    client, authority = client_with_authority()
+    client, _authority = client_with_authority()
     response = client.post(
         "/api/v1/tenants/ten_a/transitions",
         json={"to_state": "suspended", "reason": "abuse desk"},

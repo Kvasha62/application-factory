@@ -18,8 +18,9 @@ one is the job of a composition root, never of a component.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 from learning_service.config import LearningConfig
 from learning_service.engine import LearningEngine

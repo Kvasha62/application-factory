@@ -30,7 +30,8 @@ shape — is a contract violation and fails closed.
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from urllib.parse import quote
 
 from learning_service.contracts import (
@@ -94,7 +95,7 @@ class LearningClient:
     issued them.
     """
 
-    __slots__ = ("_channel", "__weakref__")
+    __slots__ = ("__weakref__", "_channel")
 
     def __init__(self, channel: str) -> None:
         if not isinstance(channel, str) or not channel:

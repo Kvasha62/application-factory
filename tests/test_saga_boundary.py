@@ -293,16 +293,14 @@ def _reachable_objects(
                 continue
             try:
                 members.append(getattr(value, name))
-            except Exception:  # noqa: BLE001 - a broken attribute is no door
+            except Exception:
                 continue
         for cell in getattr(value, "__closure__", None) or ():
             try:
                 members.append(cell.cell_contents)
             except ValueError:
                 continue
-        if isinstance(value, Mapping) or isinstance(
-            value, (list, tuple, set, frozenset)
-        ):
+        if isinstance(value, (Mapping, list, tuple, set, frozenset)):
             if isinstance(value, Mapping):
                 members.extend(list(value.keys()) + list(value.values()))
             else:

@@ -15,11 +15,15 @@ import gc
 import pytest
 
 from identity_service import COMPONENT_VERSION
-from identity_service.contracts import TENANT_CONTEXT_SOURCE, IdentityKind, VerifiedContext
+from identity_service import transport as identity_transport
+from identity_service.contracts import (
+    TENANT_CONTEXT_SOURCE,
+    IdentityKind,
+    VerifiedContext,
+)
 from identity_service.errors import AccessDenied, ContractViolation
 from identity_service.models import Decision, DenyReason
 from identity_service.reader import IdentityContextClient, build_client
-from identity_service import transport as identity_transport
 from tenant_authority.contracts import TenantState
 from tests.conftest import PLATFORM_ID, monolith
 

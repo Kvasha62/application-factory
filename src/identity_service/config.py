@@ -6,8 +6,9 @@ rejects anything it does not declare instead of silently ignoring it.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, fields
-from typing import Any, Mapping
+from typing import Any
 
 
 class ConfigurationError(Exception):
@@ -21,7 +22,7 @@ class IdentityConfig:
     token_prefix: str = "token-"
 
     @classmethod
-    def from_mapping(cls, data: Mapping[str, Any] | None) -> "IdentityConfig":
+    def from_mapping(cls, data: Mapping[str, Any] | None) -> IdentityConfig:
         payload = dict(data or {})
         declared = {f.name for f in fields(cls)}
         unknown = sorted(set(payload) - declared)

@@ -33,7 +33,11 @@ import pytest
 
 import authorization_service
 from authorization_service.adapters import identity_port, tenant_authority_port
-from authorization_service.consumed import DependencyRefusal, SubjectContext, TenantVerdict
+from authorization_service.consumed import (
+    DependencyRefusal,
+    SubjectContext,
+    TenantVerdict,
+)
 from authorization_service.contracts import Decision, Reason, ResourceRef
 from authorization_service.deployment import build_deployment
 from authorization_service.ports import IdentityContextPort, TenantAuthorityPort

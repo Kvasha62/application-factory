@@ -71,8 +71,8 @@ class VerifiedContext:
 
 
 __all__ = [
+    "TENANT_CONTEXT_SOURCE",
     "DenyReason",
     "IdentityKind",
-    "TENANT_CONTEXT_SOURCE",
     "VerifiedContext",
 ]

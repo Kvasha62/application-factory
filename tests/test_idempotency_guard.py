@@ -79,7 +79,7 @@ def test_concurrency_only_one_effect_executes():
                 effect=effect,
             )
             results[index] = res
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             results[index] = e
 
     results = [None] * 5

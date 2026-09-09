@@ -19,13 +19,18 @@ Both are audited with ``request_id`` and ``correlation_id`` (invariant 9).
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Mapping
+from datetime import UTC, datetime, timezone
+from typing import Any
 
 from authorization_service import COMPONENT_ID, COMPONENT_VERSION
 from authorization_service.config import AuthorizationConfig
+from authorization_service.consumed import (
+    DependencyRefusal,
+    SubjectContext,
+    TenantVerdict,
+)
 from authorization_service.contracts import (
     AuthorizationDecision,
     Decision,
@@ -38,11 +43,6 @@ from authorization_service.errors import (
     CallerNotAuthenticated,
     CallerNotAuthorized,
     MalformedDecisionRequest,
-)
-from authorization_service.consumed import (
-    DependencyRefusal,
-    SubjectContext,
-    TenantVerdict,
 )
 from authorization_service.models import AuditEvent, ObservabilityContext, ServiceAccess
 from authorization_service.policy import (
@@ -61,7 +61,7 @@ def _new_id(prefix: str) -> str:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 @dataclass
@@ -535,4 +535,4 @@ class AuthorizationEngine:
         return event
 
 
-__all__ = ["AuthorizationEngine", "DECISION_ACTION"]
+__all__ = ["DECISION_ACTION", "AuthorizationEngine"]

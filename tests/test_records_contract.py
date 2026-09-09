@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from records_service import COMPONENT_ID, COMPONENT_VERSION
+from records_service.config import RecordsConfig
 from records_service.consumed import DecisionAnswer
 from records_service.contracts import (
     OWN_DENY_REASONS,
@@ -25,7 +26,6 @@ from records_service.contracts import (
 )
 from records_service.engine import ENFORCEMENT_CHAIN
 from records_service.errors import ConfigurationError
-from records_service.config import RecordsConfig
 from records_service.models import OwnedResource
 from records_service.store import STATES, TRANSITIONS
 from tests.conftest import (

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from tests.conftest import composed, monolith, tenant_authority
 from tenant_authority import COMPONENT_ID, COMPONENT_VERSION
 from tenant_authority.contracts import TenantState
+from tests.conftest import composed, monolith, tenant_authority
 
 STANDARD_CONTEXT = (
     "timestamp",

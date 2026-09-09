@@ -29,12 +29,18 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from typing import Any
 
 from records_service import COMPONENT_ID, COMPONENT_VERSION
 from records_service.config import RecordsConfig
-from records_service.consumed import ALLOW, DENY, DENY_REASONS, PERMITTED, DependencyRefusal
+from records_service.consumed import (
+    ALLOW,
+    DENY,
+    DENY_REASONS,
+    PERMITTED,
+    DependencyRefusal,
+)
 from records_service.contracts import (
     OPERATION_READ,
     OPERATION_WRITE,
@@ -71,7 +77,7 @@ def _new_id(prefix: str) -> str:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def _status_for(reason: str) -> int:

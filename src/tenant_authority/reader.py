@@ -16,7 +16,8 @@ contract inside the component.
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from urllib.parse import quote
 
 from tenant_authority.contracts import LifecycleDecision, TenantSnapshot, TenantState
@@ -31,6 +32,7 @@ from tenant_authority.errors import (
     TenantConflict,
     TenantNotFound,
 )
+
 # BLOCKER-06: nothing of `tenant_authority.transport` is bound in this module —
 # not even privately. The transport owns the channel table and, through it, the
 # component's ASGI application, and it is declared internal by the contract
@@ -93,7 +95,7 @@ class TenantAuthorityClient:
     them into the object graph of the component that issued them.
     """
 
-    __slots__ = ("_channel", "_credential", "_expected_platform_id", "__weakref__")
+    __slots__ = ("__weakref__", "_channel", "_credential", "_expected_platform_id")
 
     def __init__(
         self,

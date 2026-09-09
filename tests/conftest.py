@@ -20,11 +20,15 @@ from fastapi.testclient import TestClient
 from authorization_service.adapters import identity_port, tenant_authority_port
 from authorization_service.contracts import (
     AuthorizationDecision,
-    ContractViolation as AuthorizationContractViolation,
     ResourceRef,
+)
+from authorization_service.contracts import (
+    ContractViolation as AuthorizationContractViolation,
 )
 from authorization_service.deployment import (
     AuthorizationDeployment,
+)
+from authorization_service.deployment import (
     build_deployment as build_authorization,
 )
 from authorization_service.reader import AuthorizationClient
@@ -33,10 +37,12 @@ from identity_service.config import IdentityConfig
 from identity_service.engine import IdentityEngine
 from identity_service.errors import AccessDenied as IdentityAccessDenied
 from identity_service.errors import ContractViolation as IdentityContractViolation
-from identity_service.reader import IdentityContextClient, build_client as build_identity_client
+from identity_service.reader import IdentityContextClient
+from identity_service.reader import build_client as build_identity_client
 from identity_service.store import IdentityStore
 from records_service.adapters import authorization_port as records_authorization_port
-from records_service.deployment import RecordsDeployment, build_deployment as build_records
+from records_service.deployment import RecordsDeployment
+from records_service.deployment import build_deployment as build_records
 from records_service.errors import AccessRefused as RecordsAccessRefused
 from records_service.errors import ContractViolation as RecordsContractViolation
 from records_service.reader import RecordsClient
@@ -114,7 +120,7 @@ class Monolith:
         """The published consumer surface of the data owner (Level 0 client)."""
         return self.records.publish()
 
-    def data_owner(self, records: dict[str, str] | None = None) -> "RecordsBoundary":
+    def data_owner(self, records: dict[str, str] | None = None) -> RecordsBoundary:
         """A demo data owner enforcing IS-003 decisions at its own boundary."""
         return RecordsBoundary(
             authorization=self.authorization_client,

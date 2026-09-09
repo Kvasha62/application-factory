@@ -19,8 +19,8 @@ from tests.test_learning_authoring import (
     STUDENT_C,
     TEACHER_A,
     TEACHER_B,
-    authoring_harness,
     author_hierarchy,
+    authoring_harness,
     create_assignment,
     create_course,
     create_lesson,
@@ -28,6 +28,7 @@ from tests.test_learning_authoring import (
     read_course,
 )
 from tests.test_learning_slice1 import envelope_of
+
 
 # ---------------------------------------------------------------- publication
 def test_a_teacher_publishes_a_valid_draft_hierarchy():
@@ -686,7 +687,7 @@ def test_a_failing_authorization_dependency_fails_the_command_closed():
 
 # ----------------------------------------------------------------- regression
 def test_the_submission_flow_keeps_working_alongside_authoring():
-    from tests.test_learning_authoring import TEACHER_A as TEACHER  # noqa: F401
+    from tests.test_learning_authoring import TEACHER_A as TEACHER
 
     harness = authoring_harness()
     ids = author_hierarchy(harness, key_prefix="ik-regression")
@@ -725,12 +726,22 @@ def test_the_submission_flow_keeps_working_alongside_authoring():
 
 
 # --------------------------------------------------------------------- helpers
-from learning_service.contracts import (  # noqa: E402
+from learning_service.contracts import (
     OPERATION_ASSIGNMENT_CREATE as _A_CREATE,
+)
+from learning_service.contracts import (
     OPERATION_COURSE_ARCHIVE as _C_ARCHIVE,
+)
+from learning_service.contracts import (
     OPERATION_COURSE_CREATE as _C_CREATE,
+)
+from learning_service.contracts import (
     OPERATION_COURSE_PUBLISH as _C_PUBLISH,
+)
+from learning_service.contracts import (
     OPERATION_LESSON_CREATE as _L_CREATE,
+)
+from learning_service.contracts import (
     OPERATION_MODULE_CREATE as _M_CREATE,
 )
 

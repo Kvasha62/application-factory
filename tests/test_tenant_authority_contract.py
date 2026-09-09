@@ -9,13 +9,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import DEMO_CONFIG, tenant_authority
 from tenant_authority.api import create_app
 from tenant_authority.contracts import TenantState
 from tenant_authority.deployment import build_deployment
 from tenant_authority.errors import AuthorizationDenied, DenyReason
 from tenant_authority.lifecycle import ALLOWED_TRANSITIONS, OPERATION_POLICY
 from tenant_authority.models import AuditEvent, LifecycleTransition
+from tests.conftest import DEMO_CONFIG, tenant_authority
 
 REQUIRED = {
     "api",

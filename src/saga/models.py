@@ -184,8 +184,8 @@ class StepDefinition:
 
     step_id: str
     operation: str
-    execute: Callable[["StepContext"], Any]
-    compensate: Callable[["StepContext"], Any]
+    execute: Callable[[StepContext], Any]
+    compensate: Callable[[StepContext], Any]
     payload: Mapping[str, Any] = field(default_factory=dict)
     retry: RetryPolicy = field(default_factory=RetryPolicy)
     timeout_seconds: float | None = None

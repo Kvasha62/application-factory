@@ -1,5 +1,5 @@
-from tests.conftest import engine
 from identity_service.models import Decision, IdentityKind
+from tests.conftest import engine
 
 
 def test_verified_human_identity():
@@ -49,7 +49,7 @@ def test_observability_has_tenant_context():
 
 def test_idempotent_write():
     e = engine()
-    r1, _, a1 = e.write_record(
+    r1, _, _a1 = e.write_record(
         "token-human-a", "rec_new", "once", "ten_a", idempotency_key="ik-1"
     )
     r2, _, a2 = e.write_record(

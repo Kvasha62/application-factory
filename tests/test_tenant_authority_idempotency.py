@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import tenant_authority
 from tenant_authority.contracts import TenantState
 from tenant_authority.errors import (
     AuthorizationDenied,
@@ -18,6 +17,7 @@ from tenant_authority.errors import (
     TenantConflict,
 )
 from tenant_authority.models import Decision, ServiceAccess
+from tests.conftest import tenant_authority
 
 
 def test_replayed_transition_does_not_create_a_second_effect():

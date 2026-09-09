@@ -23,7 +23,8 @@ import json
 import secrets
 import threading
 import weakref
-from typing import Any, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 from tenant_authority.errors import ContractViolation
 
@@ -42,7 +43,7 @@ class ASGIContractTransport:
     loop; the ordinary synchronous path runs the exchange on the current thread.
     """
 
-    __slots__ = ("_app", "_portal_loop", "_lock")
+    __slots__ = ("_app", "_lock", "_portal_loop")
 
     def __init__(self, app: Any) -> None:
         self._app = app
@@ -179,7 +180,7 @@ def call_contract(
     method: str,
     path: str,
     headers: Sequence[tuple[str, str]] = (),
-    body: "Mapping[str, Any] | None" = None,
+    body: Mapping[str, Any] | None = None,
 ) -> tuple[int, Mapping[str, Any]]:
     """Execute one contract request over a handle; data in, data out.
 
@@ -238,7 +239,7 @@ def asgi_transport(app: Any) -> ContractTransport:
         method: str,
         path: str,
         headers: Sequence[tuple[str, str]],
-        body: "Mapping[str, Any] | None",
+        body: Mapping[str, Any] | None,
     ) -> tuple[int, Mapping[str, Any]]:
         return transport(method, path, headers, body)
 

@@ -6,8 +6,9 @@ loader rejects anything it does not declare instead of ignoring it.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, fields
-from typing import Any, Mapping
+from typing import Any
 
 from authorization_service.errors import ConfigurationError
 
@@ -19,7 +20,7 @@ class AuthorizationConfig:
     service_token_prefix: str = "authz-svc-token-"
 
     @classmethod
-    def from_mapping(cls, data: Mapping[str, Any] | None) -> "AuthorizationConfig":
+    def from_mapping(cls, data: Mapping[str, Any] | None) -> AuthorizationConfig:
         payload = dict(data or {})
         declared = {f.name for f in fields(cls)}
         unknown = sorted(set(payload) - declared)

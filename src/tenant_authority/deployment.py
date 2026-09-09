@@ -10,8 +10,9 @@ the engine or the store from another component is a boundary violation
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 from tenant_authority.config import TenantAuthorityConfig
 from tenant_authority.engine import TenantAuthorityEngine

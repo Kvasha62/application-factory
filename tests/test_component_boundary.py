@@ -20,8 +20,8 @@ import importlib
 import importlib.util
 import inspect
 import types
-from pathlib import Path
 from collections.abc import Mapping
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -33,7 +33,6 @@ from tenant_authority.engine import TenantAuthorityEngine
 from tenant_authority.models import AuditEvent, Decision, TenantRecord
 from tenant_authority.reader import TenantAuthorityClient
 from tenant_authority.store import TenantAuthorityStore
-
 from tests.conftest import DEMO_CONFIG, PLATFORM_ID, monolith
 
 CLIENT = TenantAuthorityClient
@@ -135,7 +134,7 @@ def walk_state(root: object, *, depth: int = 5) -> set[int]:
                 members.append(cell.cell_contents)
             except ValueError:  # an empty cell carries nothing
                 continue
-        if isinstance(value, Mapping) or isinstance(value, (list, tuple, set, frozenset)):
+        if isinstance(value, (Mapping, list, tuple, set, frozenset)):
             if isinstance(value, Mapping):
                 members.extend(list(value.keys()) + list(value.values()))
             else:
@@ -911,9 +910,7 @@ def test_composed_identity_application_carries_no_tenant_authority_object():
             assert not hasattr(child, "transition_tenant"), path + (name,)
             if name.startswith("__") and name not in STATE_DUNDERS:
                 continue
-            if isinstance(child, type) or isinstance(
-                child, (str, bytes, int, float, complex, type(None))
-            ):
+            if isinstance(child, (type, str, bytes, int, float, complex, type(None))):
                 continue
             frontier.append((path + (name,), child))
         for index, cell in enumerate(getattr(value, "__closure__", None) or ()):

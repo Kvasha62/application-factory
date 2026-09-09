@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 
 from identity_service.errors import AccessDenied
 from identity_service.models import DenyReason as DenyIdentity
-from tests.conftest import composed, provision_tenant, tenant_authority
 from tenant_authority.api import create_app
 from tenant_authority.contracts import TenantState
 from tenant_authority.errors import (
@@ -17,6 +16,7 @@ from tenant_authority.errors import (
     OwnershipDenied,
     TenantNotFound,
 )
+from tests.conftest import composed, provision_tenant, tenant_authority
 
 
 @pytest.mark.parametrize("token", [None, "", "   ", "not-a-service-token", "svc-token-nope"])

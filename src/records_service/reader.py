@@ -23,7 +23,8 @@ say, without going through the enforcement chain (invariant 6).
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from urllib.parse import quote
 
 from records_service.contracts import PUBLISHED_DENY_REASONS, ResourceView
@@ -66,7 +67,7 @@ class RecordsClient:
     them.
     """
 
-    __slots__ = ("_channel", "__weakref__")
+    __slots__ = ("__weakref__", "_channel")
 
     def __init__(self, channel: str) -> None:
         if not isinstance(channel, str) or not channel:

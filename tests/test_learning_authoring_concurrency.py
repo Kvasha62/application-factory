@@ -17,7 +17,8 @@ serialization of the business operation across different keys.
 from __future__ import annotations
 
 import threading
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from fastapi.testclient import TestClient
 
@@ -530,7 +531,7 @@ def test_publication_records_the_hierarchy_it_transitioned():
             "idempotency-key": f"ik-snap-A-{i}",
         }
 
-        publish_response, archive_response = race(
+        publish_response, _archive_response = race(
             harness,
             [
                 lambda: http.post(

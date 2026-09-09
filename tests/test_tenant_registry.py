@@ -6,7 +6,6 @@ from dataclasses import fields
 
 import pytest
 
-from tests.conftest import tenant_authority
 from tenant_authority.contracts import TENANT_STATE_SOURCE, TenantState
 from tenant_authority.errors import (
     DenyReason,
@@ -14,6 +13,7 @@ from tenant_authority.errors import (
     TenantConflict,
     TenantNotFound,
 )
+from tests.conftest import tenant_authority
 
 
 def test_created_tenant_has_the_minimal_registry_model():

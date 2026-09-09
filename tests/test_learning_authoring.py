@@ -37,8 +37,13 @@ from learning_service.deployment import build_deployment as build_learning
 from learning_service.errors import AccessRefused
 from learning_service.store import LearningStore
 from tests.conftest import PLATFORM_ID, monolith
-from tests.test_learning_slice1 import LEARNING_CREDENTIAL, STUDENT_C, TEACHER_A, TEACHER_B
-from tests.test_learning_slice1 import envelope_of
+from tests.test_learning_slice1 import (
+    LEARNING_CREDENTIAL,
+    STUDENT_C,
+    TEACHER_A,
+    TEACHER_B,
+    envelope_of,
+)
 
 #: The Teacher grant vocabulary of the authoring capability: the subject that
 #: holds these grants IS the Teacher — no role logic exists inside Learning.

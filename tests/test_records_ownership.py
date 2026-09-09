@@ -12,11 +12,16 @@ from __future__ import annotations
 import pytest
 
 from records_service.consumed import DecisionAnswer
-from records_service.contracts import OwnDenyReason, OWNER_COMPONENT
+from records_service.contracts import OWNER_COMPONENT, OwnDenyReason
 from records_service.errors import AccessRefused
 from records_service.models import OwnedResource
 from records_service.store import RecordsStore
-from tests.conftest import CountingRecordsStore, StubAuthorizationPort, monolith, records_deployment
+from tests.conftest import (
+    CountingRecordsStore,
+    StubAuthorizationPort,
+    monolith,
+    records_deployment,
+)
 
 TOKEN_A = "token-human-a"
 

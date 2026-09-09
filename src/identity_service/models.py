@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from identity_service.contracts import DenyReason, IdentityKind, TENANT_CONTEXT_SOURCE
+from identity_service.contracts import TENANT_CONTEXT_SOURCE, DenyReason, IdentityKind
 from tenant_authority.contracts import TenantState
 
 # `IdentityKind` and `DenyReason` are defined by the published contract of this

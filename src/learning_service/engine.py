@@ -38,7 +38,7 @@ import json
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from typing import Any
 
 from idempotency.errors import IdempotencyConflict
@@ -54,9 +54,6 @@ from learning_service.consumed import (
     TenantContextRefusal,
 )
 from learning_service.contracts import (
-    OPERATION_LIST,
-    OPERATION_READ,
-    OPERATION_REVIEW,
     OPERATION_ASSIGNMENT_CREATE,
     OPERATION_COURSE_ARCHIVE,
     OPERATION_COURSE_CREATE,
@@ -64,12 +61,15 @@ from learning_service.contracts import (
     OPERATION_COURSE_READ,
     OPERATION_COURSE_READ_UNPUBLISHED,
     OPERATION_LESSON_CREATE,
+    OPERATION_LIST,
     OPERATION_MODULE_CREATE,
-    OwnDenyReason,
+    OPERATION_READ,
+    OPERATION_REVIEW,
     AssignmentView,
     CourseView,
     LessonView,
     ModuleView,
+    OwnDenyReason,
     SubmissionView,
 )
 from learning_service.errors import AccessRefused
@@ -132,7 +132,7 @@ def _new_id(prefix: str) -> str:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def _status_for(reason: str) -> int:

@@ -53,7 +53,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -117,7 +117,7 @@ ACTION_STEP_COMPENSATION_FAILED = "saga.step.compensation_failed"
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 @dataclass(frozen=True, slots=True)

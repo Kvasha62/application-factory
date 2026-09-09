@@ -152,7 +152,7 @@ def test_scenario_c_concurrent_delivery_of_one_step_applies_one_effect():
             outcomes[index] = harness.executor.deliver_step(
                 "sag_cc", "A", subject_credential=SAGA_CREDENTIAL_A
             )
-        except Exception as exc:  # noqa: BLE001 - the outcome is asserted below
+        except Exception as exc:
             outcomes[index] = exc
 
     threads = [threading.Thread(target=deliver, args=(i,)) for i in range(4)]
@@ -454,7 +454,7 @@ def test_scenario_h_interrupted_workflow_resumes_without_a_duplicate_effect():
 
 def test_scenario_h_step_interrupted_before_its_effect_is_applied_once_on_retry():
     harness = saga_harness()
-    interrupted = lambda ctx: (  # noqa: E731 - fails before the business call
+    interrupted = lambda ctx: (
         StepFailure("dependency_unavailable", retryable=True)
         if ctx.attempt == 1
         else None

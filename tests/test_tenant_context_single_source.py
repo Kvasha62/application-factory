@@ -17,20 +17,25 @@ from pathlib import Path
 import pytest
 
 from identity_service import models as identity_models
-from identity_service.engine import IdentityEngine
 from identity_service.config import IdentityConfig
+from identity_service.engine import IdentityEngine
 from identity_service.errors import AccessDenied
-from identity_service.models import Decision, DenyReason, TenantAssociation, TenantContext
+from identity_service.models import (
+    Decision,
+    DenyReason,
+    TenantAssociation,
+    TenantContext,
+)
 from identity_service.ports import TenantAuthorityPort
 from identity_service.store import IdentityStore
-from tests.conftest import composed, monolith, tenant_authority
-from tenant_authority.errors import ContractViolation
 from tenant_authority.contracts import (
     TENANT_STATE_SOURCE,
     LifecycleDecision,
     TenantSnapshot,
     TenantState,
 )
+from tenant_authority.errors import ContractViolation
+from tests.conftest import composed, monolith, tenant_authority
 
 IDENTITY_CONTRACT = Path("components/identity/contract/component_contract.json")
 

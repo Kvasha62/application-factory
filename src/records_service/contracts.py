@@ -100,14 +100,14 @@ class ResourceView:
 __all__ = [
     "OPERATION_READ",
     "OPERATION_WRITE",
-    "OWN_DENY_REASONS",
-    "OwnDenyReason",
     "OWNER_COMPONENT",
+    "OWN_DENY_REASONS",
     "PASSED_THROUGH_DENIALS",
     "PUBLISHED_DENY_REASONS",
     "RESOURCE_TYPE",
     "AccessRefused",
     "ConfigurationError",
     "ContractViolation",
+    "OwnDenyReason",
     "ResourceView",
 ]

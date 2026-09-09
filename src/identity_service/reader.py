@@ -21,7 +21,8 @@ a data owner enforces at its own boundary (ARCHITECTURE.md §6.2).
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from identity_service.contracts import (
     DenyReason,
@@ -55,7 +56,7 @@ class IdentityContextClient:
     them.
     """
 
-    __slots__ = ("_channel", "__weakref__")
+    __slots__ = ("__weakref__", "_channel")
 
     def __init__(self, channel: str) -> None:
         if not isinstance(channel, str) or not channel:

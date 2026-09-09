@@ -15,8 +15,8 @@ from saga.errors import (
     SagaDefinitionError,
     SagaNotFound,
     SagaStoreExhausted,
-    StepUnknown,
     StepFailure,
+    StepUnknown,
 )
 from saga.models import (
     SAGA_TRANSITIONS,
@@ -33,7 +33,7 @@ from saga.store import SagaStore
 from tests.conftest import SAGA_CREDENTIAL_A, saga_harness
 
 
-def noop(ctx):  # noqa: ANN001, ANN201 - the smallest possible declared behaviour
+def noop(ctx):
     return None
 
 

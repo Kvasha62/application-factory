@@ -10,8 +10,8 @@ when the same command identity is delivered with another context or payload.
 from __future__ import annotations
 
 import pytest
-from idempotency.guard import IdempotencyGuard
 
+from idempotency.guard import IdempotencyGuard
 from saga.errors import StepFailure
 from saga.models import SagaState, StepState, step_idempotency_key
 from saga.store import SagaStore
@@ -23,7 +23,7 @@ def test_the_executor_delivers_through_the_is_005_guard_it_was_given():
     calls: list[str] = []
     original = guard.execute
 
-    def observing(key, **kwargs):  # noqa: ANN001, ANN003, ANN201
+    def observing(key, **kwargs):
         calls.append(key)
         return original(key, **kwargs)
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 from identity_service import COMPONENT_ID, COMPONENT_VERSION
 from identity_service.config import IdentityConfig
@@ -13,8 +13,8 @@ from identity_service.models import (
     AuthorizationContext,
     Decision,
     DenyReason,
-    IdentityKind,
     IdempotencyRecord,
+    IdentityKind,
     ObservabilityContext,
     ProtectedRecord,
     TenantContext,
@@ -23,9 +23,8 @@ from identity_service.models import (
 from identity_service.ports import TenantAuthorityPort
 from identity_service.store import IdentityStore
 from tenant_authority.contracts import TenantSnapshot
-from tenant_authority.errors import ContractViolation
+from tenant_authority.errors import ContractViolation, TenantAuthorityError
 from tenant_authority.errors import DenyReason as TenantAuthorityDenial
-from tenant_authority.errors import TenantAuthorityError
 
 # Lifecycle state -> identity deny reason. The decision itself is made by
 # Tenant Authority (IS-002); identity only names the outcome at its own
@@ -54,7 +53,7 @@ def _new_id(prefix: str) -> str:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def _fingerprint(operation: str, record_id: str, body: str) -> str:

@@ -246,9 +246,8 @@ __all__ = [
     "OPERATION_MODULE_CREATE",
     "OPERATION_READ",
     "OPERATION_REVIEW",
-    "OWN_DENY_REASONS",
-    "OwnDenyReason",
     "OWNER_COMPONENT",
+    "OWN_DENY_REASONS",
     "PASSED_THROUGH_DENIALS",
     "PUBLISHED_DENY_REASONS",
     "RESOURCE_TYPE_ASSIGNMENT",
@@ -263,5 +262,6 @@ __all__ = [
     "CourseView",
     "LessonView",
     "ModuleView",
+    "OwnDenyReason",
     "SubmissionView",
 ]

@@ -22,7 +22,8 @@ and refusing to serve the request is that component's own act (invariant 8).
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from authorization_service.contracts import (
     AuthorizationDecision,
@@ -81,7 +82,7 @@ class AuthorizationClient:
     them.
     """
 
-    __slots__ = ("_channel", "_credential", "__weakref__")
+    __slots__ = ("__weakref__", "_channel", "_credential")
 
     def __init__(self, channel: str, credential: str) -> None:
         if not credential:

@@ -16,10 +16,10 @@ from identity_service.models import (
     TenantAssociation,
     VerifiedIdentity,
 )
-from tests.conftest import composed, provision_tenant, tenant_authority
 from tenant_authority.contracts import TenantState
 from tenant_authority.errors import InvalidTransition
 from tenant_authority.models import Decision as AuthorityDecision
+from tests.conftest import composed, provision_tenant, tenant_authority
 
 ADMIN_TOKEN = "svc-token-admin"
 ACTIVE = TenantState.ACTIVE

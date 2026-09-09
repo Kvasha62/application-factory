@@ -79,13 +79,13 @@ class LifecycleDecision:
 
 
 __all__ = [
+    "TENANT_STATE_SOURCE",
     "AuthenticationDenied",
     "AuthorizationDenied",
     "DenyReason",
     "InvalidTransition",
     "LifecycleDecision",
     "OwnershipDenied",
-    "TENANT_STATE_SOURCE",
     "TenantAuthorityError",
     "TenantConflict",
     "TenantNotFound",

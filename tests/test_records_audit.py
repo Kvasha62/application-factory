@@ -15,7 +15,12 @@ import json
 import pytest
 
 from records_service.consumed import DependencyRefusal
-from tests.conftest import CountingRecordsStore, StubAuthorizationPort, monolith, records_deployment
+from tests.conftest import (
+    CountingRecordsStore,
+    StubAuthorizationPort,
+    monolith,
+    records_deployment,
+)
 
 TOKEN_A = "token-human-a"
 

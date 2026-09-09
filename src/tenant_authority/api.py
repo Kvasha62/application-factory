@@ -14,10 +14,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tenant_authority import COMPONENT_ID, COMPONENT_VERSION
 from tenant_authority.contracts import LifecycleDecision, TenantSnapshot, TenantState
+from tenant_authority.deployment import TenantAuthorityDeployment, build_deployment
 from tenant_authority.errors import DenyReason, TenantAuthorityError
 from tenant_authority.lifecycle import ALLOWED_TRANSITIONS
 from tenant_authority.models import LifecycleTransition
-from tenant_authority.deployment import TenantAuthorityDeployment, build_deployment
 
 
 class TenantOut(BaseModel):

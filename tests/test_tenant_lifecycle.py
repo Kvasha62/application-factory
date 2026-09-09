@@ -11,10 +11,10 @@ import itertools
 
 import pytest
 
-from tests.conftest import provision_tenant, tenant_authority
 from tenant_authority.contracts import TenantState
 from tenant_authority.errors import DenyReason, InvalidTransition
 from tenant_authority.lifecycle import ALLOWED_TRANSITIONS, is_allowed_transition
+from tests.conftest import provision_tenant, tenant_authority
 
 ALL_STATES = list(TenantState)
 

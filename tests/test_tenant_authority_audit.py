@@ -11,10 +11,10 @@ from dataclasses import fields
 
 import pytest
 
-from tests.conftest import provision_tenant, tenant_authority
 from tenant_authority.contracts import TenantState
 from tenant_authority.errors import AuthenticationDenied, InvalidTransition
 from tenant_authority.models import Decision
+from tests.conftest import provision_tenant, tenant_authority
 
 REQUIRED_AUDIT_FIELDS = (
     "event_id",

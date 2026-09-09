@@ -22,16 +22,17 @@ from identity_service.models import (
 from identity_service.store import IdentityStore
 from tenant_authority.api import create_app
 from tenant_authority.contracts import TenantState
-from tenant_authority.models import Decision as AuthorityDecision
+from tenant_authority.deployment import build_deployment
 from tenant_authority.errors import (
     AuthorizationDenied,
-    DenyReason as AuthorityDeny,
     OwnershipDenied,
     TenantNotFound,
 )
-from tenant_authority.deployment import build_deployment
+from tenant_authority.errors import (
+    DenyReason as AuthorityDeny,
+)
+from tenant_authority.models import Decision as AuthorityDecision
 from tests.conftest import DEMO_CONFIG, PLATFORM_ID
-
 
 OTHER_PLATFORM_CONFIG = {"platform_id": "plt_other", "environment": "test"}
 

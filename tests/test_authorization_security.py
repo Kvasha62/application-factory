@@ -13,7 +13,12 @@ import dataclasses
 
 import pytest
 
-from authorization_service.contracts import AuthorizationDecision, Decision, Reason, ResourceRef
+from authorization_service.contracts import (
+    AuthorizationDecision,
+    Decision,
+    Reason,
+    ResourceRef,
+)
 from authorization_service.errors import (
     CallerDenyReason,
     CallerNotAuthenticated,

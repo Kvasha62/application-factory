@@ -37,10 +37,10 @@ from dataclasses import dataclass
 __all__ = [
     "ALLOW",
     "DENY",
-    "PERMITTED",
+    "DENY_REASONS",
     "KNOWN_DECISIONS",
     "KNOWN_REASONS",
-    "DENY_REASONS",
+    "PERMITTED",
     "DecisionAnswer",
     "DecisionOutcome",
     "DependencyRefusal",

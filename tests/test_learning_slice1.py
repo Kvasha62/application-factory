@@ -17,7 +17,8 @@ from authorization_service.models import ServiceAccess
 from authorization_service.store import CONSUMER_PERMISSIONS
 from learning_service.adapters import authorization_port
 from learning_service.contracts import OPERATION_LIST, OPERATION_READ
-from learning_service.deployment import LearningDeployment, build_deployment as build_learning
+from learning_service.deployment import LearningDeployment
+from learning_service.deployment import build_deployment as build_learning
 from learning_service.store import LearningStore
 from tests.conftest import PLATFORM_ID, monolith
 

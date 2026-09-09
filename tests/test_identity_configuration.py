@@ -26,7 +26,7 @@ def test_platform_binding_is_required():
 
 def test_declared_token_prefix_is_the_configured_one():
     _, authority = composed()
-    identity_engine, _ = composed()
+    _identity_engine, _ = composed()
     config = IdentityConfig.from_mapping(
         {
             "current_platform_id": authority.current_platform_id,

@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from typing import Any
 
 from tenant_authority import COMPONENT_ID, COMPONENT_VERSION
@@ -60,7 +60,7 @@ def _new_id(prefix: str) -> str:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def _fingerprint(operation: str, **fields: Any) -> str:

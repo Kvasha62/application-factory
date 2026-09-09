@@ -39,11 +39,11 @@ from learning_service.deployment import LearningDeployment
 from learning_service.errors import AccessRefused
 
 __all__ = [
+    "ERROR_CODES",
     "AssignmentCreateIn",
     "AssignmentOut",
     "CourseCreateIn",
     "CourseOut",
-    "ERROR_CODES",
     "ErrorBody",
     "ErrorEnvelope",
     "LessonCreateIn",
