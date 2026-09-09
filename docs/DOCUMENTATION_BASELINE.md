@@ -35,7 +35,7 @@
 | Реализация компонентов | код соответствующего компонента (`src/`) | существует: 7 компонентов, Level 0 modular monolith, standalone-режим |
 | Component Contracts | `components/*/contract/` (component_contract.json + openapi.yaml) | существует: 7/7, machine-readable |
 | Contract-test suite | `tests/` (contract/boundary/conformance наборы) | существует: 730 тестов |
-| Quality Gate | `scripts/quality-gate.ps1` + `.github/workflows/quality-gate.yml` | GREEN (закреплённые ruff 0.16.6 / black 26.5.1) |
+| Quality Gate | `scripts/quality-gate.ps1` (локальный) + `.github/workflows/quality-gate.yml` (CI) | GREEN (закреплённые ruff 0.16.6 / black 26.5.1); CI-файл подготовлен и ожидает применения владельцем (sandbox не имеет права `workflows`) |
 | Маршрутизация ответственности | `.github/CODEOWNERS` | существует |
 
 `docs/OPERATING_MODEL.md` — канонический операционный источник: он определяет, как команда (ChatGPT / Arena) работает через GitHub, и не создаёт архитектурных законов (Level A, §34.1 ARCHITECTURE.md; ADR не требуется). Архитектурным источником истины остаётся только `docs/ARCHITECTURE.md`, поэтому Operating Model не формирует второй архитектурный контур: при конфликте приоритет у ARCHITECTURE.md (см. §13 OPERATING_MODEL.md).
@@ -85,7 +85,7 @@ README синхронизирован с архитектурой 1.2.0 и бо�
 - `.github/CODEOWNERS` — существует;
 - Component Contracts — существуют (7/7);
 - contract-test suite — существует;
-- CI/conformance automation — существует (`.github/workflows/quality-gate.yml`).
+- CI/conformance automation — подготовлена (`.github/workflows/quality-gate.yml`, готовый файл); применение в репозиторий ожидает действия владельца (sandbox-приложение не имеет права `workflows`).
 
 Отсутствие необязательного артефакта не делает baseline `DIRTY`.
 
@@ -96,7 +96,7 @@ README синхронизирован с архитектурой 1.2.0 и бо�
 - 7 реализованных компонентов Level 0 (in-memory, standalone): `authorization`, `identity`, `tenant_authority`, `records`, `learning` (SCS-001, Slices 1–4), `saga`, `idempotency`;
 - Component Contracts (7/7) с OpenAPI-документами;
 - contract-test suite и поведенческие тесты (730 тестов: границы, tenant isolation, fail closed, idempotency, saga, audit, observability);
-- Quality Gate (локальный скрипт + CI) с закреплёнными версиями инструментов.
+- Quality Gate (локальный скрипт; CI-файл подготовлен) с закреплёнными версиями инструментов.
 
 **По-прежнему не существует** (фабричные механизмы не введены, что допустимо в standalone/foundation-режиме §4.1):
 

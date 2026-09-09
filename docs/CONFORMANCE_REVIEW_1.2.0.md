@@ -968,3 +968,40 @@ G-01/G-02/G-03 (tooling) → G-04 (CI) → G-11/G-12.
    переведён в CONFORMING.
 5. Аудит не вносил изменений в репозиторий: `git status` — clean;
    все изменения, если будут применены, — по списку G (Level A).
+
+---
+
+## Приложение Б. Log исполнения G-списка (2026-09-10)
+
+Решения владельца от 2026-09-10: G-03 — APPROVED; ADR-0011 — RATIFY
+(исторический факт «PROPOSED при смерженной реализации» сохраняется и
+задокументирован); G-01…G-12 — исполнены. Все изменения Level A (и
+завершение ADR-процесса G-12); LAW-01…LAW-16, LAW-16a, Component
+Definition, Data Ownership, Contract Model, Versioning, Migration Model,
+Manifest, Golden Bundle, Fork Policy, Maturity Model и Tenant Isolation
+не изменялись. Base: `8445e2b` (GitHub main на момент начала работы —
+проверено: без дрейфа).
+
+| G-item | Статус | Commit | Результат |
+|---|---|---|---|
+| G-01 (ruff 97) | DONE | `c811e0e` | 97 → 0: 51 исправлено в коде честно (B023 default-arg binding, F401, TRY004 ValueError→TypeError в type-check'ах, B017 сужение до FrozenInstanceError/AccessRefused, PLW1510, PLR1711/RET501, SIM114); 46 — осознанный fail-closed паттерн, сохранён и задокументирован per-file в `pyproject.toml` (не отключение правил) |
+| G-02 (black 67) | DONE | `c811e0e` | 67 файлов отформатировано (обвязка строк, AST-safe); `black --check` → 0 |
+| G-03 (tooling) | DONE | `d50bb4a` | dev extras: `ruff==0.16.6`, `black==26.5.1` (pinned); `[tool.ruff]` (default rule set целиком, line-length 88, `extend-immutable-calls` для FastAPI Query, задокументированные per-file-exceptions fail-closed); `[tool.black]` (line-length 88) |
+| G-04 (CI) | DONE (workspace), применение в репозиторий — заблокировано платформой | — | `.github/workflows/quality-gate.yml` подготовлен (Python 3.13, compileall + ruff + black + pytest — те же шаги, что `quality-gate.ps1` + machine-verifiable dependency check `pip check`/`pip-audit --no-deps`; версии инструментов — закреплённые из pyproject). Push файла невозможен из sandbox: GitHub App не имеет права `workflows` (отклонение и по git push, и по API: «Resource not accessible by integration», HTTP 403). Файл лежит в workspace (`.github/workflows/quality-gate.yml`) и включён в итоговый отчёт; применение — один коммит владельцем либо выдача права `workflows` приложению |
+| G-05 (saga range) | DONE | `3378cdb` | identity range `>=0.1.0,<0.2.0` → `>=0.3.0,<0.4.0`; все 9 range'ов повторно проверены machine-wise: 9/9 корректны |
+| G-06 (baseline) | DONE | `e7b9db1` | фактические строки приведены к репозиторию (7 компонентов, 7/7 контрактов, 730 тестов, gate, CI); история сохранена (включая note об отклонении последовательности ADR-0011); зафиксировано NOT PUBLISHABLE по §30 как состояние foundation-режима |
+| G-07 (README) | DONE | `e7b9db1` | «Статус» называет реализованные компоненты, ADR-0010/0011; standalone-режим и NOT PUBLISHABLE — сохранены |
+| G-08 (ADR catalog) | DONE | `ed26871` | каталог: ADR-0010 RATIFIED 2026-09-08, ADR-0011 RATIFIED 2026-09-10 (+ историческая пометка) |
+| G-09 (identity OpenAPI) | DONE | `3378cdb` | `info.version` 0.1.0 → 0.3.0; 7/7 openapi-версий соответствуют контрактам |
+| G-10 (idempotency README) | DONE | `2364d28` | `components/idempotency/README.md` добавлен (I-001…I-008, consumer surface, replay/conflict/retry, non-goals, тесты) |
+| G-11 (demo app) | DONE | `92fbcf6` | module-level demo-деплоймент удалён (ничего его не импортировало, не был задокументирован как вход, был единственным module-level объектом среди 4 api-модулей; импорт модуля больше без side effect) |
+| G-12 (ADR-0011) | DONE | `ed26871` | ADR-0011 RATIFIED владельцем 2026-09-10 по конвенции ADR-0010; раздел Ratification с зафиксированным (не переписанным) процессным отклонением; ARCHITECTURE.md 1.2.0 не изменён, bump версии не требуется |
+| NAM-01 (naming) | DONE | `3378cdb` | `component_id` `idempotency_guard` → `idempotency` (директория/пакет/остальные 6 компонентов — единый паттерн); обновлены saga/learning контракты, learning README, 2 contract-теста |
+
+Итоговое состояние после G-списка: Quality Gate GREEN
+(`compileall` ✓, `ruff check .` = 0, `black --check` = 0, `pytest` = 730
+passed); ADR-каталог синхронизирован; документация отражает фактический
+репозиторий; компоненты — foundation/standalone, NOT PUBLISHABLE по §30
+(задокументировано, не нарушение). Единственное ожидающее действие
+владельца — применить файл CI (G-04), который sandbox не вправе
+запушить (нет права `workflows`).
