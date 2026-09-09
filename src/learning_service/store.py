@@ -32,6 +32,7 @@ is the enforcement story of the component:
 
 from __future__ import annotations
 
+import threading
 import uuid
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -91,6 +92,18 @@ class LearningStore:
     The hierarchy invariants (Issue #31) are facts of this store, not claims
     of a caller: every child is registered under an existing parent of the
     same Tenant, or the registration is refused outright.
+
+    The hierarchy-changing operations — child creation (module, lesson,
+    assignment), Course publication and Course archive — run inside one
+    Level-0 critical section (:attr:`_lock`), each covering its whole
+    validation-plus-effect sequence. Publication and archive therefore
+    validate and flip the complete hierarchy atomically with respect to a
+    concurrent child creation that carries a different ``Idempotency-Key``
+    (IS-005 serializes only a single key, so it cannot provide this
+    guarantee): a child can never be inserted between the validation of a
+    publication and its writes, and the store can never hold a ``PUBLISHED``
+    Course with a ``DRAFT`` descendant. The lock is a leaf lock — it is
+    never held across a port call — so no lock ordering exists to invert.
     """
 
     assignments: dict[str, OwnedAssignment] = field(default_factory=dict)
@@ -99,6 +112,9 @@ class LearningStore:
     modules: dict[str, OwnedModule] = field(default_factory=dict)
     lessons: dict[str, OwnedLesson] = field(default_factory=dict)
     audit: list[AccessAuditEvent] = field(default_factory=list)
+    _lock: threading.RLock = field(
+        default_factory=threading.RLock, repr=False, compare=False
+    )
 
     # ------------------------------------------------------------------ static
     @staticmethod
@@ -365,24 +381,28 @@ class LearningStore:
         The state rule of the command lives here, inside the effect: only a
         ``DRAFT`` Course accepts new modules — a published or archived
         hierarchy is immutable. The module belongs to the Course's Tenant by
-        construction and is created in ``DRAFT``.
+        construction and is created in ``DRAFT``. The parent lookup, the
+        state rule, the registration checks and the write run inside the
+        hierarchy critical section, so no publication or archive of the
+        Course can interleave them.
         """
-        course = self.courses[course_id]
-        if course.status != "DRAFT":
-            raise DomainRefusal("invalid_state_transition")
-        return self.register_module(
-            OwnedModule(
-                module_id=_new_id("mod"),
-                course_id=course_id,
-                tenant_id=course.tenant_id,
-                owner_component=OWNER_COMPONENT,
-                title=title,
-                position=position,
-                status="DRAFT",
-                created_at=now,
-                updated_at=now,
+        with self._lock:
+            course = self.courses[course_id]
+            if course.status != "DRAFT":
+                raise DomainRefusal("invalid_state_transition")
+            return self.register_module(
+                OwnedModule(
+                    module_id=_new_id("mod"),
+                    course_id=course_id,
+                    tenant_id=course.tenant_id,
+                    owner_component=OWNER_COMPONENT,
+                    title=title,
+                    position=position,
+                    status="DRAFT",
+                    created_at=now,
+                    updated_at=now,
+                )
             )
-        )
 
     def create_lesson(
         self, module_id: str, *, title: str, content: str, position: int, now: str
@@ -391,24 +411,28 @@ class LearningStore:
 
         Only a ``DRAFT`` Module accepts new lessons; the lesson belongs to
         the Module's Tenant by construction and is created in ``DRAFT``.
+        The parent lookup, the state rule, the registration checks and the
+        write run inside the hierarchy critical section (see
+        :meth:`create_module`).
         """
-        module = self.modules[module_id]
-        if module.status != "DRAFT":
-            raise DomainRefusal("invalid_state_transition")
-        return self.register_lesson(
-            OwnedLesson(
-                lesson_id=_new_id("les"),
-                module_id=module_id,
-                tenant_id=module.tenant_id,
-                owner_component=OWNER_COMPONENT,
-                title=title,
-                content=content,
-                position=position,
-                status="DRAFT",
-                created_at=now,
-                updated_at=now,
+        with self._lock:
+            module = self.modules[module_id]
+            if module.status != "DRAFT":
+                raise DomainRefusal("invalid_state_transition")
+            return self.register_lesson(
+                OwnedLesson(
+                    lesson_id=_new_id("les"),
+                    module_id=module_id,
+                    tenant_id=module.tenant_id,
+                    owner_component=OWNER_COMPONENT,
+                    title=title,
+                    content=content,
+                    position=position,
+                    status="DRAFT",
+                    created_at=now,
+                    updated_at=now,
+                )
             )
-        )
 
     def create_assignment(
         self, lesson_id: str, *, title: str, instructions: str, now: str
@@ -418,24 +442,27 @@ class LearningStore:
         The existing Assignment model is extended, not replaced: the new
         assignment carries the parent Lesson, the lesson's Tenant, the
         title/instructions content and the ``DRAFT`` status. Only a ``DRAFT``
-        Lesson accepts new assignments.
+        Lesson accepts new assignments. The parent lookup, the state rule,
+        the registration checks and the write run inside the hierarchy
+        critical section (see :meth:`create_module`).
         """
-        lesson = self.lessons[lesson_id]
-        if lesson.status != "DRAFT":
-            raise DomainRefusal("invalid_state_transition")
-        return self.register_assignment(
-            OwnedAssignment(
-                assignment_id=_new_id("asg"),
-                tenant_id=lesson.tenant_id,
-                owner_component=OWNER_COMPONENT,
-                status="DRAFT",
-                created_at=now,
-                updated_at=now,
-                lesson_id=lesson_id,
-                title=title,
-                instructions=instructions,
+        with self._lock:
+            lesson = self.lessons[lesson_id]
+            if lesson.status != "DRAFT":
+                raise DomainRefusal("invalid_state_transition")
+            return self.register_assignment(
+                OwnedAssignment(
+                    assignment_id=_new_id("asg"),
+                    tenant_id=lesson.tenant_id,
+                    owner_component=OWNER_COMPONENT,
+                    status="DRAFT",
+                    created_at=now,
+                    updated_at=now,
+                    lesson_id=lesson_id,
+                    title=title,
+                    instructions=instructions,
+                )
             )
-        )
 
     # ------------------------------------------------ publication and archive
     def _hierarchy_of_course(
@@ -479,40 +506,45 @@ class LearningStore:
         depth: the registrations already refuse orphans and cross-tenant
         children, so a violation here means store data outside the published
         invariants — exactly what publication must refuse to certify.
+
+        Validation and writes run inside the hierarchy critical section as
+        one serialized operation: no child creation, publication or archive
+        of the hierarchy can insert itself between them.
         """
-        course = self.courses[course_id]
-        if course.status != "DRAFT":
-            raise DomainRefusal("invalid_state_transition")
-        modules, lessons, assignments = self._hierarchy_of_course(course)
-        for module in modules:
-            if module.tenant_id != course.tenant_id or module.status != "DRAFT":
+        with self._lock:
+            course = self.courses[course_id]
+            if course.status != "DRAFT":
                 raise DomainRefusal("invalid_state_transition")
-        for lesson in lessons:
-            if lesson.tenant_id != course.tenant_id or lesson.status != "DRAFT":
-                raise DomainRefusal("invalid_state_transition")
-        for assignment in assignments:
-            if (
-                assignment.tenant_id != course.tenant_id
-                or assignment.status != "DRAFT"
-            ):
-                raise DomainRefusal("invalid_state_transition")
-        # Validation passed — apply every transition, or none has happened:
-        # nothing below can refuse, so no partial publication exists.
-        published = replace(course, status="PUBLISHED", updated_at=now)
-        self.courses[course_id] = published
-        for module in modules:
-            self.modules[module.module_id] = replace(
-                module, status="PUBLISHED", updated_at=now
-            )
-        for lesson in lessons:
-            self.lessons[lesson.lesson_id] = replace(
-                lesson, status="PUBLISHED", updated_at=now
-            )
-        for assignment in assignments:
-            self.assignments[assignment.assignment_id] = replace(
-                assignment, status="PUBLISHED", updated_at=now
-            )
-        return published
+            modules, lessons, assignments = self._hierarchy_of_course(course)
+            for module in modules:
+                if module.tenant_id != course.tenant_id or module.status != "DRAFT":
+                    raise DomainRefusal("invalid_state_transition")
+            for lesson in lessons:
+                if lesson.tenant_id != course.tenant_id or lesson.status != "DRAFT":
+                    raise DomainRefusal("invalid_state_transition")
+            for assignment in assignments:
+                if (
+                    assignment.tenant_id != course.tenant_id
+                    or assignment.status != "DRAFT"
+                ):
+                    raise DomainRefusal("invalid_state_transition")
+            # Validation passed — apply every transition, or none has happened:
+            # nothing below can refuse, so no partial publication exists.
+            published = replace(course, status="PUBLISHED", updated_at=now)
+            self.courses[course_id] = published
+            for module in modules:
+                self.modules[module.module_id] = replace(
+                    module, status="PUBLISHED", updated_at=now
+                )
+            for lesson in lessons:
+                self.lessons[lesson.lesson_id] = replace(
+                    lesson, status="PUBLISHED", updated_at=now
+                )
+            for assignment in assignments:
+                self.assignments[assignment.assignment_id] = replace(
+                    assignment, status="PUBLISHED", updated_at=now
+                )
+            return published
 
     def archive_course(self, course_id: str, now: str) -> OwnedCourse:
         """The owned-data archive effect: one atomic business command.
@@ -520,38 +552,42 @@ class LearningStore:
         Only a ``PUBLISHED`` Course can be archived, and the whole hierarchy
         flips ``PUBLISHED → ARCHIVED`` or nothing does. There is no
         unarchive: archived content is terminal in this slice.
+
+        Validation and writes run inside the hierarchy critical section as
+        one serialized operation (see :meth:`publish_course`).
         """
-        course = self.courses[course_id]
-        if course.status != "PUBLISHED":
-            raise DomainRefusal("invalid_state_transition")
-        modules, lessons, assignments = self._hierarchy_of_course(course)
-        for module in modules:
-            if module.tenant_id != course.tenant_id or module.status != "PUBLISHED":
+        with self._lock:
+            course = self.courses[course_id]
+            if course.status != "PUBLISHED":
                 raise DomainRefusal("invalid_state_transition")
-        for lesson in lessons:
-            if lesson.tenant_id != course.tenant_id or lesson.status != "PUBLISHED":
-                raise DomainRefusal("invalid_state_transition")
-        for assignment in assignments:
-            if (
-                assignment.tenant_id != course.tenant_id
-                or assignment.status != "PUBLISHED"
-            ):
-                raise DomainRefusal("invalid_state_transition")
-        archived = replace(course, status="ARCHIVED", updated_at=now)
-        self.courses[course_id] = archived
-        for module in modules:
-            self.modules[module.module_id] = replace(
-                module, status="ARCHIVED", updated_at=now
-            )
-        for lesson in lessons:
-            self.lessons[lesson.lesson_id] = replace(
-                lesson, status="ARCHIVED", updated_at=now
-            )
-        for assignment in assignments:
-            self.assignments[assignment.assignment_id] = replace(
-                assignment, status="ARCHIVED", updated_at=now
-            )
-        return archived
+            modules, lessons, assignments = self._hierarchy_of_course(course)
+            for module in modules:
+                if module.tenant_id != course.tenant_id or module.status != "PUBLISHED":
+                    raise DomainRefusal("invalid_state_transition")
+            for lesson in lessons:
+                if lesson.tenant_id != course.tenant_id or lesson.status != "PUBLISHED":
+                    raise DomainRefusal("invalid_state_transition")
+            for assignment in assignments:
+                if (
+                    assignment.tenant_id != course.tenant_id
+                    or assignment.status != "PUBLISHED"
+                ):
+                    raise DomainRefusal("invalid_state_transition")
+            archived = replace(course, status="ARCHIVED", updated_at=now)
+            self.courses[course_id] = archived
+            for module in modules:
+                self.modules[module.module_id] = replace(
+                    module, status="ARCHIVED", updated_at=now
+                )
+            for lesson in lessons:
+                self.lessons[lesson.lesson_id] = replace(
+                    lesson, status="ARCHIVED", updated_at=now
+                )
+            for assignment in assignments:
+                self.assignments[assignment.assignment_id] = replace(
+                    assignment, status="ARCHIVED", updated_at=now
+                )
+            return archived
 
     def course_hierarchy(
         self, course_id: str
@@ -560,11 +596,14 @@ class LearningStore:
 
         Returns the Course and its complete descendant chain in deterministic
         order (position, then id): enough for a consumer to navigate
-        ``Course → Module → Lesson → Assignment``.
+        ``Course → Module → Lesson → Assignment``. The snapshot is taken
+        inside the hierarchy critical section, so a concurrent publication
+        or archive cannot tear it.
         """
-        course = self.courses[course_id]
-        modules, lessons, assignments = self._hierarchy_of_course(course)
-        return course, modules, lessons, assignments
+        with self._lock:
+            course = self.courses[course_id]
+            modules, lessons, assignments = self._hierarchy_of_course(course)
+            return course, modules, lessons, assignments
 
     # ------------------------------------------------------------ owned data
     def serve_submission(self, submission_id: str) -> OwnedSubmission:
