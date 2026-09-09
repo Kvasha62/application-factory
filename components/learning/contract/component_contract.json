@@ -1,0 +1,344 @@
+{
+  "component_id": "learning",
+  "scs_id": "SCS-001",
+  "component_version": "0.1.0",
+  "class": "business_system",
+  "maturity_level": "level_0_modular_monolith",
+  "task": "SCS-001 Slice 1 — Submission Read (prerequisite for Slice 2 / Issue #20)",
+  "learning_boundary": {
+    "role": "Data Ownership / Learning Boundary",
+    "invariants": [
+      "L-001 every assignment and submission has exactly one data owner",
+      "L-002 a subject of Tenant A never reaches Learning data of Tenant B, including by changing submission_id or a caller-supplied tenant_id",
+      "L-003 a request with an IS-003 DENY never reaches the owned-data operation",
+      "L-004 an authorization dependency failure or a malformed/non-authoritative dependency answer fails closed to DENY",
+      "L-005 the effective tenant comes from IS-001; this component creates no second tenant-context mechanism",
+      "L-006 the public surface provides no access path that bypasses the Learning enforcement boundary",
+      "L-007 security-sensitive refusals are auditable and observable with request/correlation and actor/tenant context where applicable",
+      "L-008 the internals of this component are not a consumer contract: a consumer receives the published client and values only"
+    ],
+    "enforcement_chain": [
+      "ownership_boundary",
+      "authorization_decision",
+      "owned_data_operation"
+    ],
+    "resource_model": [
+      "submission_id",
+      "assignment_id",
+      "student_identity_id",
+      "attempt",
+      "content",
+      "status",
+      "created_at",
+      "updated_at"
+    ]
+  },
+  "api": {
+    "openapi": "components/learning/contract/openapi.yaml",
+    "servers": "/api/v1/learning",
+    "base_path": "/api/v1/learning",
+    "supported_majors": [
+      "v1"
+    ],
+    "operations": [
+      {
+        "method": "GET",
+        "path": "/api/v1/learning/submissions/{submission_id}",
+        "openapi_path": "/submissions/{submission_id}",
+        "purpose": "serve one owned submission after the enforcement chain allowed the access",
+        "authorization_operation": "learning.submissions.read",
+        "idempotency": "natural",
+        "idempotency_note": "A read changes no state beyond the append-only audit journal."
+      }
+    ],
+    "enforcement_model": {
+      "default_outcome": "deny",
+      "enforcement_chain": [
+        "ownership_boundary",
+        "authorization_decision",
+        "owned_data_operation"
+      ],
+      "owned_data_operations": [
+        "serve_submission"
+      ],
+      "own_deny_reasons": [
+        "submission_unknown",
+        "owner_mismatch",
+        "authorization_unavailable"
+      ],
+      "passed_through_denials": "the published deny reasons of IS-003, unchanged",
+      "nonauthoritative_answers": "an answer outside the published decision model of IS-003 — including an ALLOW with a reason other than permitted and a DENY with an unknown reason — fails closed as authorization_unavailable",
+      "submission_states": [
+        "DRAFT",
+        "SUBMITTED"
+      ],
+      "assignment_states": [
+        "DRAFT",
+        "PUBLISHED",
+        "ARCHIVED"
+      ],
+      "transitions": {}
+    },
+    "refusal_semantics": {
+      "principle": "a refusal is data with a stable machine-readable code and reason, audited with request_id and correlation_id; nothing about this surface can be mistaken for a served submission",
+      "envelope": {
+        "shape": {
+          "error": {
+            "code": "one of the published codes",
+            "message": "the stable message of the code",
+            "details": {
+              "reason": "the stable internal refusal reason"
+            }
+          },
+          "request_id": "the request_id the refusal was audited with",
+          "correlation_id": "the correlation_id the refusal was audited with"
+        },
+        "codes": {
+          "AUTHENTICATION_REQUIRED": {
+            "status": 401,
+            "message": "Subject authentication is required.",
+            "reasons": "missing_identity, invalid_identity, unknown_identity"
+          },
+          "AUTHORIZATION_DENIED": {
+            "status": 403,
+            "message": "Operation is not permitted.",
+            "reasons": "tenant_mismatch, tenant_unknown, platform_ownership_mismatch, resource_tenant_unknown, resource_tenant_mismatch, tenant_not_active, tenant_suspended, tenant_deletion_requested, tenant_deleted, permission_not_granted, authority_unavailable, missing_tenant_context, owner_mismatch"
+          },
+          "NOT_FOUND": {
+            "status": 404,
+            "message": "Requested resource was not found.",
+            "reasons": "submission_unknown"
+          },
+          "INVALID_REQUEST": {
+            "status": 422,
+            "message": "Request does not match the published contract.",
+            "reasons": "malformed_request",
+            "note": "defence in depth: the schema handler exists, but the read surface carries no body, so no live 422 scenario exists in this slice"
+          },
+          "DEPENDENCY_UNAVAILABLE": {
+            "status": 503,
+            "message": "Authorization dependency is unavailable.",
+            "reasons": "authorization_unavailable"
+          }
+        },
+        "note": "The HTTP status selects the code; the stable internal reason is preserved in error.details.reason; request_id and correlation_id match the audit record of the refusal."
+      },
+      "refused": {
+        "401": "missing_identity, invalid_identity, unknown_identity",
+        "403": "tenant_mismatch, tenant_unknown, platform_ownership_mismatch, resource_tenant_unknown, resource_tenant_mismatch, tenant_not_active, tenant_suspended, tenant_deletion_requested, tenant_deleted, permission_not_granted, authority_unavailable, missing_tenant_context, owner_mismatch",
+        "404": "submission_unknown",
+        "503": "authorization_unavailable"
+      },
+      "served": "HTTP 200 with the eight-field submission representation, produced only by the owned-data operation at the end of the enforcement chain"
+    },
+    "consumer_surface": {
+      "module": "learning_service.reader",
+      "published_as": "LearningClient",
+      "published_by": "learning_service.deployment.LearningDeployment.publish",
+      "transport": "learning_service.transport.open_channel + learning_service.transport.call_contract — the published HTTP contract executed in process over an opaque channel handle (ARCHITECTURE.md §1.1 interaction mode API, Level 0)",
+      "transport_handles": {
+        "open": "learning_service.transport.open_channel",
+        "call": "learning_service.transport.call_contract",
+        "close": "learning_service.transport.close_channel"
+      },
+      "consumer_state": [
+        "opaque contract channel handle (str)"
+      ],
+      "operations": [
+        "read_submission"
+      ],
+      "returns": [
+        "learning_service.contracts.SubmissionView"
+      ],
+      "errors": [
+        "learning_service.errors.AccessRefused — the access did not happen; the reason is one of the published refusal reasons (401/403/404/503), carried in error.details.reason, with the request_id/correlation_id of the refusal",
+        "learning_service.errors.ContractViolation — the contract transport failed or answered outside its published shape (including any non-envelope shape); a consumer must fail closed"
+      ],
+      "guarantees": [
+        "values only: no learning store, audit journal, engine reference or deployment is reachable through the published surface",
+        "the published client holds no callable and no credential: its state is one channel handle, so walking the client and its class reaches neither the component's ASGI application nor its internals",
+        "the subject credential is supplied per access and verified by IS-001 inside the IS-003 decision: a consumer cannot assert who the subject is",
+        "the ASGI application is never handed out: it stays behind the provider-side channel table, and a channel is revoked when the consumer drops the client",
+        "importing the published module binds no reference to learning_service.transport — its namespace holds no module object, no channel table and no transport type",
+        "an unknown or revoked channel handle raises ContractViolation, so there is no permissive fallback and a handle cannot be guessed",
+        "every access runs through the same routing, enforcement chain and audit code that serves an HTTP request",
+        "there is no listing, bulk export, search, pagination or raw-store operation: the published read operation is the only access path, and it is enforced"
+      ],
+      "composition_root_only": [
+        "learning_service.deployment (LearningDeployment: engine, store, configuration)",
+        "the contract application itself (the ASGI application) — a consumer component must not own or re-export it",
+        "the contract channel table learning_service.transport._CHANNELS — a handle-to-application mapping owned by the component"
+      ],
+      "internal_modules": [
+        "learning_service.engine",
+        "learning_service.store",
+        "learning_service.models",
+        "learning_service.config",
+        "learning_service.api",
+        "learning_service.deployment",
+        "learning_service.transport",
+        "learning_service.ports",
+        "learning_service.adapters"
+      ],
+      "note": "The deployment object is composition-internal: it assembles engine, store and contract application for the composition root and for this component's own tests and is never handed to a consumer. This component composes no other component and publishes no module-level demo application: a demo of a data owner needs a composed Platform Instance with a live decision dependency, and composing one is the job of a composition root."
+    },
+    "consumes": [
+      {
+        "component_id": "authorization",
+        "contract": "components/authorization/contract/component_contract.json",
+        "mechanism": "contract client over the published API of authorization, executed in process at Level 0",
+        "consumer_surface": "authorization_service.reader.AuthorizationClient",
+        "local_port": "learning_service.ports.AuthorizationPort",
+        "local_adapter": "learning_service.adapters.AuthorizationDecisionAdapter",
+        "local_answer_type": "learning_service.consumed.DecisionAnswer",
+        "credential_source": "deployment secret resolved by the composition root: the service identity of this component",
+        "demo_credential": "authz-svc-token-learning",
+        "operations": [
+          "decide"
+        ],
+        "note": "The access decision is read per access and never cached. The resource's owning Tenant stated in the question comes from this component's own store, never from a caller claim (LAW-16a).",
+        "dependency_isolation": "No module of learning imports authorization_service, identity_service or tenant_authority: the published client is adapted at the composition boundary and only values owned by this component reach the enforcement logic (ARCHITECTURE.md 1.1, 6.1, LAW-04)."
+      }
+    ]
+  },
+  "events": {
+    "envelope": "CloudEvents",
+    "status": "declared_only",
+    "published": [],
+    "consumed": [],
+    "note": "SCS-001 Slice 1 publishes no inter-component events and does not simulate a broker. The access audit journal is owned data, not a public event contract."
+  },
+  "data_export_cdc": {
+    "status": "declared_only",
+    "version": null,
+    "compatibility_policy": null,
+    "streams": [],
+    "note": "No CDC or bulk export stream is implemented in Slice 1. A bulk path would be a bypass risk for the enforcement boundary and is deliberately out of this slice."
+  },
+  "ui": {
+    "kind": "declared_only",
+    "embedding": "not_applicable",
+    "note": "Class A Business System / SCS; UI is out of this Level 0 slice. The submission read is proven at the API boundary."
+  },
+  "configuration_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "platform_id"
+    ],
+    "properties": {
+      "platform_id": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Identifier of the Platform Instance this data owner serves."
+      },
+      "environment": {
+        "type": "string",
+        "default": "standalone"
+      }
+    }
+  },
+  "data_ownership": {
+    "owner": "learning",
+    "logical_schema": "learning",
+    "datasets": [
+      {
+        "name": "assignments",
+        "scope": "tenant-scoped",
+        "note": "Every assignment has exactly one data owner (owner_component) and belongs to exactly one Tenant; ownership is registered explicitly and cannot be redefined."
+      },
+      {
+        "name": "submissions",
+        "scope": "tenant-scoped",
+        "note": "Every submission belongs to exactly one assignment and to the same Tenant; student_identity_id is an opaque reference — no student profile/account data is stored here."
+      },
+      {
+        "name": "access_audit",
+        "scope": "platform-scoped",
+        "note": "Append-only journal of every access attempt — served or refused — with request/correlation and actor/tenant context where known."
+      }
+    ],
+    "notes": [
+      "This component owns no identity, no permission grant, no tenant registry and no tenant state: those belong to identity, authorization and tenant_authority and are read through their published contracts.",
+      "The submission model is the business model of Slice 1 (submission_id, assignment_id, student_identity_id, attempt, content, status, created_at, updated_at) with lifecycle DRAFT → SUBMITTED; no grading, comments, review states, progress or enrollment exist in this slice."
+    ]
+  },
+  "audit": {
+    "journal": "internal append-only journal owned by learning",
+    "access_fields": [
+      "action",
+      "decision",
+      "reason",
+      "subject_id",
+      "tenant_id",
+      "resource_id",
+      "resource_tenant_id",
+      "assignment_id",
+      "submission_id",
+      "claimed_tenant_id",
+      "platform_id",
+      "request_id",
+      "correlation_id",
+      "timestamp"
+    ],
+    "denials_audited": true,
+    "allowed_accesses_audited": true,
+    "refusal_audit_scope": "every refusal of the published contract, including a request rejected by the contract schema before any handler runs and a refusal produced because the decision dependency did not answer; the record carries request_id and correlation_id of the caller",
+    "note": "Audit is owned data, not a public event contract, and is not readable through the published surface."
+  },
+  "observability": {
+    "context": [
+      "timestamp",
+      "environment",
+      "platform_id",
+      "component_id",
+      "component_version",
+      "tenant_id",
+      "subject_id",
+      "request_id",
+      "trace_id",
+      "correlation_id"
+    ],
+    "saga_id": "absent — this component runs no inter-component sagas",
+    "health": "/health",
+    "readiness": "/ready"
+  },
+  "authn": {
+    "service": "not_applicable_on_public_surface",
+    "human": "delegated_to_identity",
+    "note": "The subject credential presented on the public surface is verified by IS-001 inside the IS-003 decision; this component verifies no credential itself. When asking IS-003, this component authenticates with its own service identity (demo: authz-svc-token-learning)."
+  },
+  "authz": {
+    "enforcement_boundary": "resource_owner",
+    "decision_source": "authorization",
+    "decision_source_component": "IS-003 Authorization Boundary / Permission Authority",
+    "default_decision": "DENY",
+    "enforcement_point": "learning",
+    "tenant_context_source": "identity",
+    "operations_guarded": [
+      "learning.submissions.read"
+    ],
+    "authentication_does_not_imply_authorization": true,
+    "note": "ALLOW from IS-003 is not direct data access: the data owner remains the final enforcement boundary (ARCHITECTURE.md §6.2). A decision that cannot be obtained is a denial."
+  },
+  "compatibility_policy": {
+    "api": "additive-minor-breaking-major",
+    "events": "tolerant-reader",
+    "supported_api_majors": 1,
+    "reason_codes": "adding a refusal reason is a minor change; removing or redefining one is a breaking change",
+    "enforcement_chain": "reordering or removing a step is a breaking change: the order is part of the published behaviour",
+    "resource_model": "adding a field to the submission representation is a minor change; changing the eight published fields is a breaking change",
+    "error_envelope": "the approved envelope shape is part of the contract; changing error/code/message/details/request_id/correlation_id is a breaking change",
+    "lifecycle": "submission lifecycle is exactly DRAFT → SUBMITTED; adding grading/review states is a breaking change"
+  },
+  "dependencies": [
+    {
+      "component_id": "authorization",
+      "version_range": ">=0.1.0,<0.2.0",
+      "kind": "api",
+      "contract": "components/authorization/contract/component_contract.json",
+      "direction": "learning -> authorization (read-only access decision)"
+    }
+  ]
+}

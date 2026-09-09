@@ -1,0 +1,183 @@
+openapi: 3.1.0
+info:
+  title: SCS-001 Learning — Submission Read (Slice 1)
+  version: 0.1.0
+  description: >-
+    Граница владельца учебных данных одной Platform Instance. Компонент владеет
+    tenant-scoped заданиями (Assignments) и работами (Submissions) и доказывает,
+    что ALLOW от IS-003 не является прямым доступом к данным: финальный контроль
+    остаётся на границе владельца. Каждый доступ проходит фиксированную цепочку
+    `ownership_boundary → authorization_decision → owned_data_operation`;
+    решение по умолчанию — DENY, отказ зависимости закрывает доступ.
+    Срез 1 публикует чтение отдельной работы. Отказы используют утверждённый
+    конверт SCS-001: `error.code` / `error.message` / `error.details` плюс
+    `request_id` / `correlation_id` верхнего уровня; стабильная внутренняя
+    причина сохраняется в `error.details.reason`.
+servers:
+  - url: /api/v1/learning
+    description: Learning API base path of one Platform Instance
+paths:
+  /submissions/{submission_id}:
+    get:
+      summary: Read one owned submission (learning.submissions.read)
+      description: >-
+        `Authorization` несёт credential субъекта; он проверяется в IS-001
+        внутри решения IS-003 — сам компонент credentials не проверяет.
+        `X-Tenant-Id` — только cross-check, передаётся как есть и никогда не
+        выбирает эффективный тенант (LAW-16a). Работа возвращается только
+        после полной цепочки контроля; любой иной исход — отказ в утверждённом
+        конверте со стабильным кодом, записанный в аудит с request_id и
+        correlation_id.
+      operationId: readSubmission
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: submission_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            доступ разрешён цепочкой контроля; возвращаются ровно восемь полей
+            работы
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Submission"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`) либо запись принадлежит другому компоненту
+            (owner_mismatch); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            работа неизвестна этому владельцу (код NOT_FOUND,
+            submission_unknown); решение у власти не запрашивается; отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /health:
+    servers:
+      - url: /
+        description: Instance root for health and readiness
+    get:
+      responses:
+        "200":
+          description: liveness
+  /ready:
+    servers:
+      - url: /
+        description: Instance root for health and readiness
+    get:
+      responses:
+        "200":
+          description: readiness
+components:
+  securitySchemes:
+    subjectAuth:
+      type: http
+      scheme: bearer
+      description: >-
+        credential субъекта; проверяется в IS-001 внутри решения IS-003, а не
+        этим компонентом
+  schemas:
+    Submission:
+      type: object
+      additionalProperties: false
+      required: [submission_id, assignment_id, student_identity_id, attempt, content, status, created_at, updated_at]
+      properties:
+        submission_id:
+          type: string
+          description: непрозрачный идентификатор работы
+        assignment_id:
+          type: string
+          description: задание, к которому относится работа
+        student_identity_id:
+          type: string
+          description: непрозрачная ссылка на идентичность студента; профиль вне Learning
+        attempt:
+          type: integer
+          minimum: 1
+        content:
+          type: object
+          additionalProperties: true
+        status:
+          type: string
+          enum: [DRAFT, SUBMITTED]
+          description: жизненный цикл работы этого среза — ровно эти два состояния
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error, request_id, correlation_id]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              type: string
+              enum: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, NOT_FOUND, INVALID_REQUEST, DEPENDENCY_UNAVAILABLE]
+              description: минимальный опубликованный код отказа SCS-001
+            message:
+              type: string
+              description: стабильное человекочитаемое сообщение кода
+            details:
+              type: object
+              additionalProperties: true
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  description: стабильная внутренняя причина отказа
+        request_id:
+          type: string
+          description: идентификатор запроса записи аудита
+        correlation_id:
+          type: string
+          description: идентификатор корреляции записи аудита
