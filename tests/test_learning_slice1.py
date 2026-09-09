@@ -100,6 +100,8 @@ def test_identity_a_reads_its_own_tenant_submission():
         "status": "SUBMITTED",
         "created_at": "2026-09-08T00:00:00+00:00",
         "updated_at": "2026-09-08T00:00:00+00:00",
+        "reviewed_by": None,
+        "reviewed_at": None,
     }
 
 

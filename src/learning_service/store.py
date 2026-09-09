@@ -20,7 +20,7 @@ is the enforcement story of the component:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from learning_service.models import AccessAuditEvent, OwnedAssignment, OwnedSubmission
@@ -31,6 +31,21 @@ SUBMISSION_STATES: tuple[str, ...] = ("DRAFT", "SUBMITTED")
 
 #: Minimal Assignment lifecycle vocabulary of this slice.
 ASSIGNMENT_STATES: tuple[str, ...] = ("DRAFT", "PUBLISHED", "ARCHIVED")
+
+
+class DomainRefusal(Exception):
+    """A domain-level refusal of an otherwise allowed operation.
+
+    Two cases: the review command does not apply to the submission's
+    current state (only ``SUBMITTED`` may be reviewed), and the review fact
+    is immutable (an already reviewed submission cannot be reviewed again).
+    It is raised only inside the owned-data step of the chain and is
+    audited like every refusal.
+    """
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
 
 
 @dataclass
@@ -114,6 +129,48 @@ class LearningStore:
     def serve_submission(self, submission_id: str) -> OwnedSubmission:
         """The owned-data single-read operation. Called only after an ALLOW."""
         return self.submissions[submission_id]
+
+    def assert_reviewable(self, submission_id: str) -> OwnedSubmission:
+        """The state rule of the review command, enforced before idempotency.
+
+        Only a ``SUBMITTED`` submission may be reviewed; review never changes
+        the lifecycle state. Raises ``KeyError`` when the submission vanished
+        after the decision and :class:`DomainRefusal` when its state is not
+        ``SUBMITTED``.
+        """
+        submission = self.submissions[submission_id]
+        if submission.status != "SUBMITTED":
+            raise DomainRefusal("invalid_state_transition")
+        return submission
+
+    def apply_review(
+        self, submission_id: str, reviewed_by: str, reviewed_at: str
+    ) -> OwnedSubmission:
+        """The owned-data review effect. Called only after an ALLOW and an IS-005
+        decision to execute.
+
+        Records the review fact — the verified Teacher identity and the
+        timestamp — and leaves the submission ``SUBMITTED``. The state rule
+        and the immutability of the review fact are re-checked here as well
+        (defence in depth): the store never applies a review to a
+        non-``SUBMITTED`` submission and never overwrites an existing review
+        fact, whatever the calling command's binding is.
+        """
+        submission = self.submissions[submission_id]
+        if submission.status != "SUBMITTED":
+            raise DomainRefusal("invalid_state_transition")
+        if submission.reviewed_by is not None or submission.reviewed_at is not None:
+            # The review fact is a one-time immutable fact: a second review
+            # command with a different Idempotency-Key is a new command that
+            # must not overwrite the first review. (An exact replay of the
+            # first command never reaches this method — IS-005 returns the
+            # recorded result.)
+            raise DomainRefusal("already_reviewed")
+        updated = replace(
+            submission, reviewed_by=reviewed_by, reviewed_at=reviewed_at
+        )
+        self.submissions[submission_id] = updated
+        return updated
 
     # -------------------------------------------------------------- demo data
     def seed_demo(self) -> None:

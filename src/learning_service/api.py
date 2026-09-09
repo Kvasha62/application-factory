@@ -6,10 +6,11 @@ directly (ARCHITECTURE.md §1.1, LAW-04). Level 0 consumers talk to this
 contract in-process through ``learning_service.transport`` and receive the
 value-only client from ``learning_service.reader``.
 
-The surface is deliberately narrow: the single-submission read behind the
-enforcement chain, plus health and readiness. There is no bulk export, no
-search, no pagination, no grading and no direct store path — no access
-path that bypasses the enforcement boundary exists to bypass with.
+The surface is deliberately narrow: the single-submission read and the
+single-submission review behind the same enforcement chain, plus health and
+readiness. There is no bulk export, no search, no pagination, no grading,
+no feedback, no comments and no direct store path — no access path that
+bypasses the enforcement boundary exists to bypass with.
 
 ``Authorization`` carries the credential presented by the subject; this
 component verifies no credential itself — the decision dependency has it
@@ -47,7 +48,11 @@ __all__ = [
 
 
 class SubmissionOut(BaseModel):
-    """The published submission representation: the eight fields, nothing else."""
+    """The published submission representation: the ten fields, nothing else.
+
+    ``reviewed_by`` / ``reviewed_at`` are ``None`` until the first successful
+    review and are the only review fact published.
+    """
 
     submission_id: str
     assignment_id: str
@@ -57,6 +62,8 @@ class SubmissionOut(BaseModel):
     status: str
     created_at: str
     updated_at: str
+    reviewed_by: str | None = None
+    reviewed_at: str | None = None
 
 
 class ErrorBody(BaseModel):
@@ -99,6 +106,22 @@ ERROR_CODES: dict[str, dict[str, Any]] = {
         "status": 422,
         "message": "Request does not match the published contract.",
     },
+    "INVALID_STATE_TRANSITION": {
+        "status": 409,
+        "message": "Operation is not valid for the current submission state.",
+    },
+    "ALREADY_REVIEWED": {
+        "status": 409,
+        "message": "The submission has already been reviewed.",
+    },
+    "IDEMPOTENCY_KEY_REQUIRED": {
+        "status": 400,
+        "message": "An Idempotency-Key header is required for this operation.",
+    },
+    "IDEMPOTENCY_CONFLICT": {
+        "status": 409,
+        "message": "The Idempotency-Key was already used with a different request.",
+    },
     "DEPENDENCY_UNAVAILABLE": {
         "status": 503,
         "message": "Authorization dependency is unavailable.",
@@ -125,6 +148,14 @@ def error_code_for(reason: str) -> str:
         return "NOT_FOUND"
     if reason == "malformed_request":
         return "INVALID_REQUEST"
+    if reason == "invalid_state_transition":
+        return "INVALID_STATE_TRANSITION"
+    if reason == "already_reviewed":
+        return "ALREADY_REVIEWED"
+    if reason == "idempotency_key_required":
+        return "IDEMPOTENCY_KEY_REQUIRED"
+    if reason == "idempotency_conflict":
+        return "IDEMPOTENCY_CONFLICT"
     if reason == "authorization_unavailable":
         return "DEPENDENCY_UNAVAILABLE"
     return "AUTHORIZATION_DENIED"
@@ -225,6 +256,51 @@ def create_app(deployment: LearningDeployment) -> FastAPI:
             status=view.status,
             created_at=view.created_at,
             updated_at=view.updated_at,
+            reviewed_by=view.reviewed_by,
+            reviewed_at=view.reviewed_at,
+        )
+
+    @app.post(
+        "/api/v1/learning/submissions/{submission_id}/review",
+        response_model=SubmissionOut,
+    )
+    def review_submission(
+        submission_id: str,
+        authorization: str | None = Header(default=None),
+        x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
+    ) -> Any:
+        """Record the review of one owned submission — the state-changing command
+        ``learning.submissions.review``.
+
+        ``Idempotency-Key`` is mandatory: the review is a state-changing
+        command delivered through IS-005, so an exact replay returns the same
+        result without a second effect and a changed binding is refused.
+        """
+        try:
+            view, _, _ = engine.review_submission(
+                _token(authorization),
+                submission_id,
+                claimed_tenant_id=x_tenant_id,
+                idempotency_key=idempotency_key,
+                request_id=x_request_id,
+                correlation_id=x_correlation_id,
+            )
+        except AccessRefused as exc:
+            return _refused(exc)
+        return SubmissionOut(
+            submission_id=view.submission_id,
+            assignment_id=view.assignment_id,
+            student_identity_id=view.student_identity_id,
+            attempt=view.attempt,
+            content=dict(view.content),
+            status=view.status,
+            created_at=view.created_at,
+            updated_at=view.updated_at,
+            reviewed_by=view.reviewed_by,
+            reviewed_at=view.reviewed_at,
         )
 
     return app

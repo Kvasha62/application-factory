@@ -193,7 +193,7 @@ def test_every_published_route_refuses_without_an_allow():
 
     for method, path in resource_routes:
         concrete = path.replace("{submission_id}", "sub_a1_1")
-        response = client.get(concrete)
+        response = getattr(client, method.lower())(concrete)
         assert response.status_code in {401, 403, 404, 422}, (method, path)
         body = envelope_of(response)
         assert body["error"]["code"] == "AUTHENTICATION_REQUIRED"
@@ -215,6 +215,7 @@ def test_published_surface_is_exactly_the_contract_operations():
         ("/health", "GET"),
         ("/ready", "GET"),
         ("/api/v1/learning/submissions/{submission_id}", "GET"),
+        ("/api/v1/learning/submissions/{submission_id}/review", "POST"),
     }
 
 
@@ -229,7 +230,7 @@ def test_client_state_is_a_single_opaque_value():
     assert isinstance(state[0], str) and state[0]
 
     published = {name for name in dir(client) if not name.startswith("_")}
-    assert published == {"read_submission"}
+    assert published == {"read_submission", "review_submission"}
 
 
 def test_client_object_graph_reaches_nothing_internal():

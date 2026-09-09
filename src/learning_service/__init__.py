@@ -22,9 +22,13 @@ IS-001 through the IS-003 decision, and a caller-supplied ``tenant_id``
 is forwarded as a cross-check only (LAW-16, LAW-16a).
 
 Slice 1 publishes the single-submission read
-``GET /api/v1/learning/submissions/{submission_id}``. Errors use the
-approved SCS-001 envelope (``error.code`` / ``error.message`` /
-``error.details`` plus top-level ``request_id`` / ``correlation_id``).
+``GET /api/v1/learning/submissions/{submission_id}``. Slice 3 adds exactly
+one state-changing command — the teacher submission review
+``POST /api/v1/learning/submissions/{submission_id}/review`` — which records
+``reviewed_by`` / ``reviewed_at``, leaves the lifecycle ``SUBMITTED`` and is
+guarded by IS-005. Errors use the approved SCS-001 envelope (``error.code``
+/ ``error.message`` / ``error.details`` plus top-level ``request_id`` /
+``correlation_id``).
 """
 
 COMPONENT_ID = "learning"

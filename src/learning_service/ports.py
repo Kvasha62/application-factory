@@ -10,6 +10,11 @@ and on nothing else:
   lookup, no identity verification and no tenant derivation of its own:
   there is no second authorization or tenant-context mechanism, because
   there is no mechanism here at all.
+* :class:`CommandSafetyPort` — the exactly-once execution of one
+  state-changing command, answered by IS-005. This is why Learning owns no
+  second idempotency mechanism: the review command is delivered to the
+  IS-005 guard, which decides between executing, replaying and refusing a
+  conflict.
 
 The port declares what this component *needs*, not what IS-003 happens to
 offer: nothing here can grant a permission, read a grant, enumerate
@@ -27,9 +32,12 @@ component — imports that component.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from collections.abc import Callable
+from typing import Protocol, TypeVar, runtime_checkable
 
 from learning_service.consumed import DecisionOutcome
+
+T = TypeVar("T")
 
 
 @runtime_checkable
@@ -56,7 +64,37 @@ class AuthorizationPort(Protocol):
     ) -> DecisionOutcome: ...
 
 
+@runtime_checkable
+class CommandSafetyPort(Protocol):
+    """The IS-005 command-safety boundary, as this component consumes it.
+
+    The shape is exactly the published surface of IS-005
+    (``idempotency.guard.IdempotencyGuard.execute``): one logical command
+    identity executes at most once, an exact replay returns the recorded
+    result without executing the effect again, and a differing context or
+    command for the same key raises ``IdempotencyConflict``. Learning
+    supplies the command identity of a review (operation, target,
+    fingerprint) and nothing else — no second key scheme, no second store,
+    no second replay rule.
+    """
+
+    def execute(
+        self,
+        key: str | None,
+        *,
+        identity: str | None,
+        tenant_id: str | None,
+        operation: str,
+        resource: str | None,
+        fingerprint: str,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        effect: Callable[[], T],
+    ) -> T: ...
+
+
 __all__ = [
     "AuthorizationPort",
+    "CommandSafetyPort",
     "DecisionOutcome",
 ]
