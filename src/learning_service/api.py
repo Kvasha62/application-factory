@@ -39,9 +39,17 @@ from learning_service.deployment import LearningDeployment
 from learning_service.errors import AccessRefused
 
 __all__ = [
+    "AssignmentCreateIn",
+    "AssignmentOut",
+    "CourseCreateIn",
+    "CourseOut",
     "ERROR_CODES",
     "ErrorBody",
     "ErrorEnvelope",
+    "LessonCreateIn",
+    "LessonOut",
+    "ModuleCreateIn",
+    "ModuleOut",
     "SubmissionListOut",
     "SubmissionOut",
     "create_app",
@@ -72,6 +80,93 @@ class SubmissionListOut(BaseModel):
     """The published teacher-discovery representation: exactly ``{items: [...]}``."""
 
     items: list[SubmissionOut]
+
+
+class AssignmentOut(BaseModel):
+    """The published representation of one authored Assignment."""
+
+    assignment_id: str
+    lesson_id: str
+    title: str
+    instructions: str
+    status: str
+
+
+class LessonOut(BaseModel):
+    """The published representation of one authored Lesson and its assignments."""
+
+    lesson_id: str
+    module_id: str
+    title: str
+    content: str
+    position: int
+    status: str
+    assignments: list[AssignmentOut]
+
+
+class ModuleOut(BaseModel):
+    """The published representation of one authored Module and its lessons."""
+
+    module_id: str
+    course_id: str
+    title: str
+    position: int
+    status: str
+    lessons: list[LessonOut]
+
+
+class CourseOut(BaseModel):
+    """The published representation of one Course hierarchy.
+
+    ``modules`` nests the full navigation chain
+    ``Course → Module → Lesson → Assignment`` in deterministic order.
+    """
+
+    course_id: str
+    title: str
+    description: str
+    status: str
+    created_by: str
+    created_at: str
+    updated_at: str
+    modules: list[ModuleOut]
+
+
+class CourseCreateIn(BaseModel):
+    """The create-course command payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    description: str
+
+
+class ModuleCreateIn(BaseModel):
+    """The create-module command payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    position: int
+
+
+class LessonCreateIn(BaseModel):
+    """The create-lesson command payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    content: str
+    position: int
+
+
+class AssignmentCreateIn(BaseModel):
+    """The create-assignment command payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    instructions: str
 
 
 class ErrorBody(BaseModel):
@@ -114,6 +209,10 @@ ERROR_CODES: dict[str, dict[str, Any]] = {
         "status": 422,
         "message": "Request does not match the published contract.",
     },
+    "VALIDATION_ERROR": {
+        "status": 422,
+        "message": "Request payload is not valid.",
+    },
     "INVALID_STATE_TRANSITION": {
         "status": 409,
         "message": "Operation is not valid for the current submission state.",
@@ -140,7 +239,15 @@ _AUTHENTICATION_DENIALS = frozenset(
     {"missing_identity", "invalid_identity", "unknown_identity"}
 )
 
-_NOT_FOUND_REASONS = frozenset({"assignment_unknown", "submission_unknown"})
+_NOT_FOUND_REASONS = frozenset(
+    {
+        "assignment_unknown",
+        "submission_unknown",
+        "course_unknown",
+        "module_unknown",
+        "lesson_unknown",
+    }
+)
 
 
 def error_code_for(reason: str) -> str:
@@ -156,6 +263,8 @@ def error_code_for(reason: str) -> str:
         return "NOT_FOUND"
     if reason == "malformed_request":
         return "INVALID_REQUEST"
+    if reason == "validation_error":
+        return "VALIDATION_ERROR"
     if reason == "invalid_state_transition":
         return "INVALID_STATE_TRANSITION"
     if reason == "already_reviewed":
@@ -352,5 +461,272 @@ def create_app(deployment: LearningDeployment) -> FastAPI:
                 for view in views
             ]
         )
+
+    # ------------------------------------------------- content authoring API
+    def _assignment_out(view: Any) -> AssignmentOut:
+        return AssignmentOut(
+            assignment_id=view.assignment_id,
+            lesson_id=view.lesson_id,
+            title=view.title,
+            instructions=view.instructions,
+            status=view.status,
+        )
+
+    def _lesson_out(view: Any) -> LessonOut:
+        return LessonOut(
+            lesson_id=view.lesson_id,
+            module_id=view.module_id,
+            title=view.title,
+            content=view.content,
+            position=view.position,
+            status=view.status,
+            assignments=[_assignment_out(a) for a in view.assignments],
+        )
+
+    def _module_out(view: Any) -> ModuleOut:
+        return ModuleOut(
+            module_id=view.module_id,
+            course_id=view.course_id,
+            title=view.title,
+            position=view.position,
+            status=view.status,
+            lessons=[_lesson_out(l) for l in view.lessons],
+        )
+
+    def _course_out(view: Any) -> CourseOut:
+        return CourseOut(
+            course_id=view.course_id,
+            title=view.title,
+            description=view.description,
+            status=view.status,
+            created_by=view.created_by,
+            created_at=view.created_at,
+            updated_at=view.updated_at,
+            modules=[_module_out(m) for m in view.modules],
+        )
+
+    @app.post(
+        "/api/v1/learning/courses",
+        response_model=CourseOut,
+        status_code=201,
+    )
+    def create_course(
+        payload: CourseCreateIn,
+        authorization: str | None = Header(default=None),
+        x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
+    ) -> Any:
+        """Create one owned Course — the command ``learning.courses.create``.
+
+        ``Idempotency-Key`` is mandatory: the command is a state-changing
+        command delivered through IS-005. The effective tenant comes from the
+        verified identity through the published chain — never from the
+        payload and never from ``X-Tenant-Id``, which is a cross-check only
+        (LAW-16a). A new Course is created in ``DRAFT``.
+        """
+        try:
+            view, _, _ = engine.create_course(
+                _token(authorization),
+                title=payload.title,
+                description=payload.description,
+                claimed_tenant_id=x_tenant_id,
+                idempotency_key=idempotency_key,
+                request_id=x_request_id,
+                correlation_id=x_correlation_id,
+            )
+        except AccessRefused as exc:
+            return _refused(exc)
+        return _course_out(view)
+
+    @app.get(
+        "/api/v1/learning/courses/{course_id}",
+        response_model=CourseOut,
+    )
+    def read_course(
+        course_id: str,
+        authorization: str | None = Header(default=None),
+        x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+        x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
+    ) -> Any:
+        """Serve one owned Course hierarchy — the read operation
+        ``learning.courses.read`` for a published Course (Teachers and
+        Students) or ``learning.courses.read_unpublished`` otherwise
+        (Teachers). The question asked depends on the Course's own stored
+        state; the answer nests the full navigation chain."""
+        try:
+            view, _, _ = engine.read_course(
+                _token(authorization),
+                course_id,
+                claimed_tenant_id=x_tenant_id,
+                request_id=x_request_id,
+                correlation_id=x_correlation_id,
+            )
+        except AccessRefused as exc:
+            return _refused(exc)
+        return _course_out(view)
+
+    @app.post(
+        "/api/v1/learning/courses/{course_id}/modules",
+        response_model=ModuleOut,
+        status_code=201,
+    )
+    def create_module(
+        course_id: str,
+        payload: ModuleCreateIn,
+        authorization: str | None = Header(default=None),
+        x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
+    ) -> Any:
+        """Create one Module inside a Course — the command
+        ``learning.modules.create``. Only a ``DRAFT`` Course accepts modules;
+        the Module belongs to the Course's Tenant and is created in
+        ``DRAFT``."""
+        try:
+            view, _, _ = engine.create_module(
+                _token(authorization),
+                course_id,
+                title=payload.title,
+                position=payload.position,
+                claimed_tenant_id=x_tenant_id,
+                idempotency_key=idempotency_key,
+                request_id=x_request_id,
+                correlation_id=x_correlation_id,
+            )
+        except AccessRefused as exc:
+            return _refused(exc)
+        return _module_out(view)
+
+    @app.post(
+        "/api/v1/learning/modules/{module_id}/lessons",
+        response_model=LessonOut,
+        status_code=201,
+    )
+    def create_lesson(
+        module_id: str,
+        payload: LessonCreateIn,
+        authorization: str | None = Header(default=None),
+        x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
+    ) -> Any:
+        """Create one Lesson inside a Module — the command
+        ``learning.lessons.create``. Only a ``DRAFT`` Module accepts lessons;
+        the Lesson belongs to the Module's Tenant and is created in
+        ``DRAFT``."""
+        try:
+            view, _, _ = engine.create_lesson(
+                _token(authorization),
+                module_id,
+                title=payload.title,
+                content=payload.content,
+                position=payload.position,
+                claimed_tenant_id=x_tenant_id,
+                idempotency_key=idempotency_key,
+                request_id=x_request_id,
+                correlation_id=x_correlation_id,
+            )
+        except AccessRefused as exc:
+            return _refused(exc)
+        return _lesson_out(view)
+
+    @app.post(
+        "/api/v1/learning/lessons/{lesson_id}/assignments",
+        response_model=AssignmentOut,
+        status_code=201,
+    )
+    def create_assignment(
+        lesson_id: str,
+        payload: AssignmentCreateIn,
+        authorization: str | None = Header(default=None),
+        x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
+    ) -> Any:
+        """Create one Assignment inside a Lesson — the command
+        ``learning.assignments.create``. The existing Assignment model is
+        extended, not replaced: the created record carries its parent Lesson,
+        the Lesson's Tenant, title/instructions and the ``DRAFT`` status, and
+        stays the Assignment identity the submission flow serves."""
+        try:
+            view, _, _ = engine.create_assignment(
+                _token(authorization),
+                lesson_id,
+                title=payload.title,
+                instructions=payload.instructions,
+                claimed_tenant_id=x_tenant_id,
+                idempotency_key=idempotency_key,
+                request_id=x_request_id,
+                correlation_id=x_correlation_id,
+            )
+        except AccessRefused as exc:
+            return _refused(exc)
+        return _assignment_out(view)
+
+    @app.post(
+        "/api/v1/learning/courses/{course_id}/publish",
+        response_model=CourseOut,
+    )
+    def publish_course(
+        course_id: str,
+        authorization: str | None = Header(default=None),
+        x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
+    ) -> Any:
+        """Publish one owned Course and its whole hierarchy atomically — the
+        command ``learning.courses.publish``.
+
+        The structurally valid ``DRAFT`` hierarchy flips to ``PUBLISHED`` or
+        nothing does: a validation or dependency failure leaves every
+        descendant unpublished. There is no unpublish; the published
+        hierarchy is immutable."""
+        try:
+            view, _, _ = engine.publish_course(
+                _token(authorization),
+                course_id,
+                claimed_tenant_id=x_tenant_id,
+                idempotency_key=idempotency_key,
+                request_id=x_request_id,
+                correlation_id=x_correlation_id,
+            )
+        except AccessRefused as exc:
+            return _refused(exc)
+        return _course_out(view)
+
+    @app.post(
+        "/api/v1/learning/courses/{course_id}/archive",
+        response_model=CourseOut,
+    )
+    def archive_course(
+        course_id: str,
+        authorization: str | None = Header(default=None),
+        x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
+    ) -> Any:
+        """Archive one owned Course and its whole hierarchy atomically — the
+        command ``learning.courses.archive``. Only a ``PUBLISHED`` Course can
+        be archived; no unarchive exists."""
+        try:
+            view, _, _ = engine.archive_course(
+                _token(authorization),
+                course_id,
+                claimed_tenant_id=x_tenant_id,
+                idempotency_key=idempotency_key,
+                request_id=x_request_id,
+                correlation_id=x_correlation_id,
+            )
+        except AccessRefused as exc:
+            return _refused(exc)
+        return _course_out(view)
 
     return app

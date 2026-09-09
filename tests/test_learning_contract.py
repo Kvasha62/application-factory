@@ -140,12 +140,23 @@ def test_contract_declares_the_required_shapes():
         "learning.submissions.read",
         "learning.submissions.list",
         "learning.submissions.review",
+        "learning.courses.create",
+        "learning.modules.create",
+        "learning.lessons.create",
+        "learning.assignments.create",
+        "learning.courses.publish",
+        "learning.courses.archive",
+        "learning.courses.read",
+        "learning.courses.read_unpublished",
     ]
 
     ownership = data["data_ownership"]
     assert ownership["owner"] == "learning"
     assert ownership["logical_schema"] == "learning"
     scopes = {dataset["name"]: dataset["scope"] for dataset in ownership["datasets"]}
+    assert scopes["courses"] == "tenant-scoped"
+    assert scopes["modules"] == "tenant-scoped"
+    assert scopes["lessons"] == "tenant-scoped"
     assert scopes["assignments"] == "tenant-scoped"
     assert scopes["submissions"] == "tenant-scoped"
     assert scopes["access_audit"] == "platform-scoped"
@@ -161,10 +172,10 @@ def test_contract_declares_the_required_shapes():
     assert "v2" not in json.dumps(data)
 
 
-def test_contract_declares_the_two_dependencies_on_published_contracts():
+def test_contract_declares_the_dependencies_on_published_contracts():
     data = contract()
     dependencies = data["dependencies"]
-    assert len(dependencies) == 2
+    assert len(dependencies) == 3
     by_component = {
         dependency["component_id"]: dependency for dependency in dependencies
     }
@@ -176,6 +187,10 @@ def test_contract_declares_the_two_dependencies_on_published_contracts():
     assert idempotency["kind"] == "internal-consumer-surface"
     assert idempotency["version_range"] == ">=0.1.0,<0.2.0"
     assert Path(idempotency["contract"]).exists()
+    identity = by_component["identity"]
+    assert identity["kind"] == "api"
+    assert identity["version_range"] == ">=0.3.0,<0.4.0"
+    assert Path(identity["contract"]).exists()
 
 
 # --------------------------------------------------------------- surface match
@@ -214,12 +229,19 @@ def test_published_api_matches_the_implementation_in_both_directions():
         for operation in data["api"]["operations"]
     }
     assert contract_operations <= declared
-    # Exactly the two business read operations and the single review command
-    # plus health/readiness.
+    # Exactly the two submission reads, the review command, the seven
+    # content-authoring operations plus health/readiness.
     assert contract_operations == {
         ("/api/v1/learning/submissions/{submission_id}", "get"),
         ("/api/v1/learning/assignments/{assignment_id}/submissions", "get"),
         ("/api/v1/learning/submissions/{submission_id}/review", "post"),
+        ("/api/v1/learning/courses", "post"),
+        ("/api/v1/learning/courses/{course_id}", "get"),
+        ("/api/v1/learning/courses/{course_id}/modules", "post"),
+        ("/api/v1/learning/modules/{module_id}/lessons", "post"),
+        ("/api/v1/learning/lessons/{lesson_id}/assignments", "post"),
+        ("/api/v1/learning/courses/{course_id}/publish", "post"),
+        ("/api/v1/learning/courses/{course_id}/archive", "post"),
     }
 
 
@@ -233,6 +255,13 @@ def test_declared_enforcement_chain_and_model_match_the_engine():
         "serve_submission",
         "list_submissions_for_assignment",
         "apply_review",
+        "create_course",
+        "create_module",
+        "create_lesson",
+        "create_assignment",
+        "publish_course",
+        "archive_course",
+        "course_hierarchy",
     ]
     assert set(model["own_deny_reasons"]) == OWN_DENY_REASONS
     assert set(model["submission_states"]) == set(SUBMISSION_STATES)
@@ -386,12 +415,26 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
             headers={"authorization": f"Bearer {TEACHER_A}"},
         )
 
+    def scenario_422():
+        from tests.test_learning_authoring import authoring_harness
+
+        harness = authoring_harness()
+        return harness.http().post(
+            "/api/v1/learning/courses",
+            headers={
+                "authorization": f"Bearer {TEACHER_A}",
+                "idempotency-key": "contract-422",
+            },
+            json={"title": "   ", "description": ""},
+        )
+
     scenarios = {
         400: [scenario_400],
         401: [scenario_401, scenario_401_list],
         403: [scenario_403, scenario_403_list],
         404: [scenario_404, scenario_404_list],
         409: [scenario_409],
+        422: [scenario_422],
         503: [scenario_503, scenario_503_list],
     }
     assert set(refused) == {str(status) for status in scenarios}
@@ -401,6 +444,7 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
         403: "AUTHORIZATION_DENIED",
         404: "NOT_FOUND",
         409: "INVALID_STATE_TRANSITION",
+        422: "VALIDATION_ERROR",
         503: "DEPENDENCY_UNAVAILABLE",
     }
     for status, calls in scenarios.items():
@@ -533,9 +577,9 @@ def test_declared_configuration_schema_matches_the_loader():
 
 def test_dependency_isolation_is_declared_with_the_real_module_names():
     consumes = contract()["api"]["consumes"]
-    assert len(consumes) == 1
-    consumed = consumes[0]
-    assert consumed["component_id"] == "authorization"
+    assert len(consumes) == 2
+    by_component = {c["component_id"]: c for c in consumes}
+    consumed = by_component["authorization"]
     assert consumed["local_port"] == "learning_service.ports.AuthorizationPort"
     assert (
         consumed["local_adapter"]
@@ -543,6 +587,13 @@ def test_dependency_isolation_is_declared_with_the_real_module_names():
     )
     assert consumed["local_answer_type"] == "learning_service.consumed.DecisionAnswer"
     assert consumed["operations"] == ["decide"]
+    identity = by_component["identity"]
+    assert identity["local_port"] == "learning_service.ports.TenantContextPort"
+    assert (
+        identity["local_adapter"] == "learning_service.adapters.TenantContextAdapter"
+    )
+    assert identity["local_answer_type"] == "learning_service.consumed.TenantContextAnswer"
+    assert identity["operations"] == ["resolve_context"]
 
 
 # ------------------------------------------------------------ review contract

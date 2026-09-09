@@ -44,6 +44,9 @@ __all__ = [
     "DecisionAnswer",
     "DecisionOutcome",
     "DependencyRefusal",
+    "TenantContextAnswer",
+    "TenantContextOutcome",
+    "TenantContextRefusal",
 ]
 
 #: Decision values published by IS-003.
@@ -106,6 +109,41 @@ class DependencyRefusal:
     """
 
     reason_code: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TenantContextAnswer:
+    """The effective tenant context of one verified subject (IS-001).
+
+    Consumed for exactly one purpose: the create-course command has no
+    parent resource, so the resource Tenant of its authorization question is
+    the effective tenant of the verified identity — resolved here, from the
+    published identity contract, and from nowhere else. The answer is a
+    value of this component; it never outlives the command and is never read
+    from a caller-supplied field.
+    """
+
+    identity_id: str
+    tenant_id: str
+    platform_id: str | None = None
+    kind: str | None = None
+    source: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TenantContextRefusal:
+    """The identity dependency refused, or failed, to answer.
+
+    A subject whose tenant context cannot be resolved has no effective
+    tenant, and a command without an effective tenant is denied — a missing
+    answer is never an implicit yes.
+    """
+
+    reason_code: str | None = None
+
+
+#: What the tenant-context port returns: an answer, or the reason there is none.
+TenantContextOutcome = TenantContextAnswer | TenantContextRefusal
 
 
 #: What the authorization port returns: an answer, or the reason there is none.

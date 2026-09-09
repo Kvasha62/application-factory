@@ -1,22 +1,25 @@
 {
   "component_id": "learning",
   "scs_id": "SCS-001",
-  "component_version": "0.1.0",
+  "component_version": "0.2.0",
   "class": "business_system",
   "maturity_level": "level_0_modular_monolith",
-  "task": "SCS-001 Slices 1-3 — Submission Read, Teacher Submission Discovery (Issue #20), Teacher Submission Review (Issue #24)",
+  "task": "SCS-001 Slices 1-4 — Submission Read, Teacher Submission Discovery (Issue #20), Teacher Submission Review (Issue #24), Learning Content Authoring (Issue #31)",
   "learning_boundary": {
     "role": "Data Ownership / Learning Boundary",
     "invariants": [
-      "L-001 every assignment and submission has exactly one data owner",
-      "L-002 a subject of Tenant A never reaches Learning data of Tenant B, including by changing submission_id or a caller-supplied tenant_id",
+      "L-001 every course, module, lesson, assignment and submission has exactly one data owner",
+      "L-002 a subject of Tenant A never reaches Learning data of Tenant B, including by changing an identifier or a caller-supplied tenant_id",
       "L-003 a request with an IS-003 DENY never reaches the owned-data operation",
       "L-004 an authorization dependency failure or a malformed/non-authoritative dependency answer fails closed to DENY",
       "L-005 the effective tenant comes from IS-001; this component creates no second tenant-context mechanism",
       "L-006 the public surface provides no access path that bypasses the Learning enforcement boundary",
       "L-007 security-sensitive refusals are auditable and observable with request/correlation and actor/tenant context where applicable",
       "L-008 the internals of this component are not a consumer contract: a consumer receives the published client and values only",
-      "L-009 a list answer contains only submissions of the requested Assignment, or is a refusal — there is no partial cross-assignment or cross-tenant set"
+      "L-009 a list answer contains only submissions of the requested Assignment, or is a refusal — there is no partial cross-assignment or cross-tenant set",
+      "L-010 every child of the content hierarchy belongs to exactly one parent of the same Tenant: no orphan and no cross-tenant Module, Lesson or Assignment exists (Issue #31)",
+      "L-011 publication and archive are Course-level commands that flip the whole hierarchy atomically or nothing at all; there is no UNPUBLISH and no UNARCHIVE",
+      "L-012 a published hierarchy is immutable: no editing, reordering, revisioning or child creation under a non-DRAFT parent"
     ],
     "enforcement_chain": [
       "ownership_boundary",
@@ -34,7 +37,42 @@
       "updated_at",
       "reviewed_by",
       "reviewed_at"
-    ]
+    ],
+    "content_model": {
+      "course": [
+        "course_id",
+        "tenant_id",
+        "title",
+        "description",
+        "status",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "module": [
+        "module_id",
+        "course_id",
+        "tenant_id",
+        "title",
+        "position",
+        "status"
+      ],
+      "lesson": [
+        "lesson_id",
+        "module_id",
+        "tenant_id",
+        "title",
+        "content",
+        "position",
+        "status"
+      ],
+      "assignment_extension": [
+        "lesson_id",
+        "title",
+        "instructions"
+      ],
+      "note": "The existing Assignment model is extended, not replaced: lesson_id, title and instructions anchor the same assignment identity the submission flow serves. tenant_id and owner_component are store facts of every record, never caller claims."
+    }
   },
   "api": {
     "openapi": "components/learning/contract/openapi.yaml",
@@ -70,6 +108,69 @@
         "authorization_operation": "learning.submissions.review",
         "idempotency": "required",
         "idempotency_note": "State-changing command guarded by IS-005: the Idempotency-Key header is mandatory, an exact replay returns the recorded result without a second effect, and a changed binding is refused as IDEMPOTENCY_CONFLICT."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/courses",
+        "openapi_path": "/courses",
+        "purpose": "create one owned Course in the effective tenant of the verified identity; a new Course is created in DRAFT",
+        "authorization_operation": "learning.courses.create",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: the Idempotency-Key header is mandatory, an exact replay returns the recorded result without a second effect, and a changed binding (payload, identity, tenant, operation) is refused as IDEMPOTENCY_CONFLICT. The command has no pre-existing target: the IS-005 resource binding is the collection of courses, and the tenant binding is the effective tenant of the chain."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/courses/{course_id}/modules",
+        "openapi_path": "/courses/{course_id}/modules",
+        "purpose": "create one Module inside a DRAFT Course; the module belongs to the Course's Tenant and is created in DRAFT",
+        "authorization_operation": "learning.modules.create",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: mandatory key, target binding is the parent Course, fingerprint covers the payload; a changed binding is refused as IDEMPOTENCY_CONFLICT. Only a DRAFT Course accepts modules; the state rule lives inside the effect, so an exact replay of a successful creation still replays."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/modules/{module_id}/lessons",
+        "openapi_path": "/modules/{module_id}/lessons",
+        "purpose": "create one Lesson inside a DRAFT Module; the lesson belongs to the Module's Tenant and is created in DRAFT",
+        "authorization_operation": "learning.lessons.create",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: mandatory key, target binding is the parent Module, fingerprint covers the payload."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/lessons/{lesson_id}/assignments",
+        "openapi_path": "/lessons/{lesson_id}/assignments",
+        "purpose": "create one Assignment inside a DRAFT Lesson, extending the existing Assignment model with its parent Lesson, title and instructions; created in DRAFT",
+        "authorization_operation": "learning.assignments.create",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: mandatory key, target binding is the parent Lesson, fingerprint covers the payload."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/courses/{course_id}/publish",
+        "openapi_path": "/courses/{course_id}/publish",
+        "purpose": "publish one owned Course and its whole structurally valid DRAFT hierarchy atomically; no unpublish exists",
+        "authorization_operation": "learning.courses.publish",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: mandatory key, target binding is the Course. The state rule (DRAFT only, structurally valid hierarchy) lives inside the effect, so an exact replay returns the recorded published hierarchy without a second effect and a different key against an already published Course is refused as invalid_state_transition. A validation or dependency failure leaves nothing published."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/courses/{course_id}/archive",
+        "openapi_path": "/courses/{course_id}/archive",
+        "purpose": "archive one owned PUBLISHED Course and its whole hierarchy atomically; no unarchive exists",
+        "authorization_operation": "learning.courses.archive",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: mandatory key, target binding is the Course. Only a PUBLISHED Course can be archived; the whole hierarchy flips PUBLISHED to ARCHIVED or nothing does."
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/learning/courses/{course_id}",
+        "openapi_path": "/courses/{course_id}",
+        "purpose": "read one owned Course hierarchy — the nested navigation chain Course -> Module -> Lesson -> Assignment in deterministic order",
+        "authorization_operation": "learning.courses.read for a PUBLISHED course (Teachers and Students); learning.courses.read_unpublished for a DRAFT or ARCHIVED course (Teachers) — the Course's own stored state selects the question, exactly as the resource's own Tenant does",
+        "idempotency": "natural",
+        "idempotency_note": "A read changes no state beyond the append-only audit journal."
       }
     ],
     "enforcement_model": {
@@ -82,17 +183,28 @@
       "owned_data_operations": [
         "serve_submission",
         "list_submissions_for_assignment",
-        "apply_review"
+        "apply_review",
+        "create_course",
+        "create_module",
+        "create_lesson",
+        "create_assignment",
+        "publish_course",
+        "archive_course",
+        "course_hierarchy"
       ],
       "own_deny_reasons": [
         "assignment_unknown",
         "submission_unknown",
+        "course_unknown",
+        "module_unknown",
+        "lesson_unknown",
         "owner_mismatch",
         "authorization_unavailable",
         "invalid_state_transition",
         "already_reviewed",
         "idempotency_key_required",
-        "idempotency_conflict"
+        "idempotency_conflict",
+        "validation_error"
       ],
       "passed_through_denials": "the published deny reasons of IS-003, unchanged",
       "nonauthoritative_answers": "an answer outside the published decision model of IS-003 — including an ALLOW with a reason other than permitted and a DENY with an unknown reason — fails closed as authorization_unavailable",
@@ -112,6 +224,30 @@
         "immutability": "reviewed_by and reviewed_at are set by the first successful review and are immutable thereafter: a review command with a different Idempotency-Key against an already reviewed submission is refused as already_reviewed and never overwrites the first review fact",
         "idempotency": "IS-005 guard; Idempotency-Key mandatory; exact replay returns the recorded result; changed binding is refused as idempotency_conflict. The two cases stay distinct: same key = idempotent replay, different key = a new command against an immutable review fact",
         "no_review_entity": "no Review, Evaluation, Grade, Feedback or LearningResult entity exists; the review fact is exactly the two nullable fields reviewed_by / reviewed_at on Submission"
+      },
+      "course_states": [
+        "DRAFT",
+        "PUBLISHED",
+        "ARCHIVED"
+      ],
+      "module_states": [
+        "DRAFT",
+        "PUBLISHED",
+        "ARCHIVED"
+      ],
+      "lesson_states": [
+        "DRAFT",
+        "PUBLISHED",
+        "ARCHIVED"
+      ],
+      "content_authoring": {
+        "hierarchy": "Course -> Module -> Lesson -> Assignment; every child belongs to exactly one parent, is created only under a DRAFT parent of the same Tenant, and cannot exist without it",
+        "publication": "publish is a Course-level command: the structurally valid DRAFT hierarchy flips DRAFT -> PUBLISHED atomically with the Course — a validation or dependency failure leaves nothing published; there is no unpublish",
+        "archive": "archive is a Course-level command: only a PUBLISHED Course can be archived, and the whole hierarchy flips PUBLISHED -> ARCHIVED atomically; there is no unarchive",
+        "immutability": "a published hierarchy is immutable: no generic PUT/PATCH/DELETE exists, no child creation under a non-DRAFT parent, no reordering, revisioning or moving of published content",
+        "hierarchy_read": "GET /courses/{course_id} serves the nested navigation chain in deterministic order (position, then id); the question asked of IS-003 depends on the Course's own stored state — learning.courses.read for PUBLISHED (Teachers and Students), learning.courses.read_unpublished otherwise (Teachers)",
+        "student_reads": "a Student reads published hierarchies of the own effective tenant only; archived and draft content is not available through the published-content read",
+        "assignment_extension": "the existing Assignment identity is preserved: lesson_id, title and instructions are added to anchor the hierarchy; the submission flow semantics are unchanged"
       }
     },
     "refusal_semantics": {
@@ -142,13 +278,13 @@
           "NOT_FOUND": {
             "status": 404,
             "message": "Requested resource was not found.",
-            "reasons": "assignment_unknown, submission_unknown"
+            "reasons": "course_unknown, module_unknown, lesson_unknown, assignment_unknown, submission_unknown"
           },
           "INVALID_REQUEST": {
             "status": 422,
             "message": "Request does not match the published contract.",
             "reasons": "malformed_request",
-            "note": "defence in depth: the schema handler exists, but the read surface carries no body, so no live 422 scenario exists in this slice"
+            "note": "defence in depth: the schema handler refuses a request the published contract cannot read (e.g. a command body with a missing field, a wrong type or a declared-unknown field) before any handler runs; the stable reason is malformed_request"
           },
           "INVALID_STATE_TRANSITION": {
             "status": 409,
@@ -174,6 +310,11 @@
             "status": 503,
             "message": "Authorization dependency is unavailable.",
             "reasons": "authorization_unavailable"
+          },
+          "VALIDATION_ERROR": {
+            "status": 422,
+            "message": "Request payload is not valid.",
+            "reasons": "validation_error"
           }
         },
         "note": "The HTTP status selects the code; the stable internal reason is preserved in error.details.reason; request_id and correlation_id match the audit record of the refusal."
@@ -182,11 +323,12 @@
         "400": "idempotency_key_required",
         "401": "missing_identity, invalid_identity, unknown_identity",
         "403": "tenant_mismatch, tenant_unknown, platform_ownership_mismatch, resource_tenant_unknown, resource_tenant_mismatch, tenant_not_active, tenant_suspended, tenant_deletion_requested, tenant_deleted, permission_not_granted, authority_unavailable, missing_tenant_context, owner_mismatch",
-        "404": "assignment_unknown, submission_unknown",
+        "404": "course_unknown, module_unknown, lesson_unknown, assignment_unknown, submission_unknown",
         "409": "invalid_state_transition, already_reviewed, idempotency_conflict",
-        "503": "authorization_unavailable"
+        "503": "authorization_unavailable",
+        "422": "validation_error"
       },
-      "served": "HTTP 200 with the ten-field submission representation (including reviewed_by / reviewed_at) — one submission or {items: [...]} — produced only by the owned-data operation at the end of the enforcement chain"
+      "served": "HTTP 200/201 with the published representation — one submission (including reviewed_by / reviewed_at), {items: [...]} for the discovery list, or the nested course hierarchy — produced only by the owned-data operation at the end of the enforcement chain"
     },
     "consumer_surface": {
       "module": "learning_service.reader",
@@ -204,11 +346,22 @@
       "operations": [
         "read_submission",
         "list_submissions",
-        "review_submission"
+        "review_submission",
+        "create_course",
+        "read_course",
+        "create_module",
+        "create_lesson",
+        "create_assignment",
+        "publish_course",
+        "archive_course"
       ],
       "returns": [
         "learning_service.contracts.SubmissionView",
-        "list[learning_service.contracts.SubmissionView]"
+        "list[learning_service.contracts.SubmissionView]",
+        "learning_service.contracts.CourseView",
+        "learning_service.contracts.ModuleView",
+        "learning_service.contracts.LessonView",
+        "learning_service.contracts.AssignmentView"
       ],
       "errors": [
         "learning_service.errors.AccessRefused — the access did not happen; the reason is one of the published refusal reasons (401/403/404/503), carried in error.details.reason, with the request_id/correlation_id of the refusal",
@@ -259,6 +412,20 @@
         ],
         "note": "The access decision is read per access and never cached. The resource's owning Tenant stated in the question comes from this component's own store, never from a caller claim (LAW-16a). The single-read question names the submission, the teacher-discovery question names the Assignment; both name the record's own tenant from the store.",
         "dependency_isolation": "No module of learning imports authorization_service, identity_service or tenant_authority: the published client is adapted at the composition boundary and only values owned by this component reach the enforcement logic (ARCHITECTURE.md 1.1, 6.1, LAW-04)."
+      },
+      {
+        "component_id": "identity",
+        "contract": "components/identity/contract/component_contract.json",
+        "mechanism": "contract client over the published API of identity, executed in process at Level 0",
+        "consumer_surface": "identity_service.reader.IdentityContextClient",
+        "local_port": "learning_service.ports.TenantContextPort",
+        "local_adapter": "learning_service.adapters.TenantContextAdapter",
+        "local_answer_type": "learning_service.consumed.TenantContextAnswer",
+        "credential_source": "the subject credential presented on the published surface; the adapter adds nothing",
+        "operations": [
+          "resolve_context"
+        ],
+        "note": "Consumed by exactly one command — create-course — whose target does not exist yet, so the resource Tenant of its authorization question can only be the effective tenant of the verified identity (the chain Identity -> effective tenant -> Authorization -> Learning ownership boundary). The adapter is structural over the published client, like its sibling for IS-003; the composition root wires it, and no module of learning imports identity_service. No second identity or tenant mechanism exists: the port carries the answer of IS-001 and nothing else."
       }
     ]
   },
@@ -305,9 +472,24 @@
     "logical_schema": "learning",
     "datasets": [
       {
+        "name": "courses",
+        "scope": "tenant-scoped",
+        "note": "Every course has exactly one data owner and belongs to exactly one Tenant; lifecycle DRAFT -> PUBLISHED -> ARCHIVED with no UNPUBLISH and no UNARCHIVE; the Tenant comes from the verified identity through the published chain, never from a caller claim."
+      },
+      {
+        "name": "modules",
+        "scope": "tenant-scoped",
+        "note": "Every module belongs to exactly one course and to the same Tenant; created only in DRAFT under a DRAFT course."
+      },
+      {
+        "name": "lessons",
+        "scope": "tenant-scoped",
+        "note": "Every lesson belongs to exactly one module and to the same Tenant; created only in DRAFT under a DRAFT module."
+      },
+      {
         "name": "assignments",
         "scope": "tenant-scoped",
-        "note": "Every assignment has exactly one data owner (owner_component) and belongs to exactly one Tenant; ownership is registered explicitly and cannot be redefined."
+        "note": "Every assignment has exactly one data owner (owner_component) and belongs to exactly one Tenant; ownership is registered explicitly and cannot be redefined. Content Authoring extends the same model with the parent lesson, title and instructions; an anchored assignment is created only in DRAFT under a DRAFT lesson of the same Tenant."
       },
       {
         "name": "submissions",
@@ -322,7 +504,8 @@
     ],
     "notes": [
       "This component owns no identity, no permission grant, no tenant registry and no tenant state: those belong to identity, authorization and tenant_authority and are read through their published contracts.",
-      "The submission model is the business model of Slices 1-3 (submission_id, assignment_id, student_identity_id, attempt, content, status, created_at, updated_at, reviewed_by, reviewed_at) with lifecycle DRAFT → SUBMITTED; no grading, comments, review states, progress or enrollment exist. Review is exactly the fact that a submitted submission was checked, recorded in the two nullable review fields."
+      "The submission model is the business model of Slices 1-3 (submission_id, assignment_id, student_identity_id, attempt, content, status, created_at, updated_at, reviewed_by, reviewed_at) with lifecycle DRAFT → SUBMITTED; no grading, comments, review states, progress or enrollment exist. Review is exactly the fact that a submitted submission was checked, recorded in the two nullable review fields.",
+      "The content hierarchy (Issue #31) is registered, never declared by a caller: the store refuses orphan and cross-tenant children, and publication re-validates the whole hierarchy before the first write (defence in depth)."
     ]
   },
   "audit": {
@@ -380,10 +563,18 @@
     "operations_guarded": [
       "learning.submissions.read",
       "learning.submissions.list",
-      "learning.submissions.review"
+      "learning.submissions.review",
+      "learning.courses.create",
+      "learning.modules.create",
+      "learning.lessons.create",
+      "learning.assignments.create",
+      "learning.courses.publish",
+      "learning.courses.archive",
+      "learning.courses.read",
+      "learning.courses.read_unpublished"
     ],
     "authentication_does_not_imply_authorization": true,
-    "note": "ALLOW from IS-003 is not direct data access: the data owner remains the final enforcement boundary (ARCHITECTURE.md §6.2). A decision that cannot be obtained is a denial. A Teacher must hold learning.submissions.review to review and learning.submissions.list to discover submissions of an Assignment; a Student and every other subject without an explicit grant is denied by default."
+    "note": "ALLOW from IS-003 is not direct data access: the data owner remains the final enforcement boundary (ARCHITECTURE.md §6.2). A decision that cannot be obtained is a denial. The authoring commands each carry their own grant (learning.courses.create, learning.modules.create, learning.lessons.create, learning.assignments.create, learning.courses.publish, learning.courses.archive): a Teacher is the subject that holds them, a Student the subject that holds the published-content read — no RBAC or policy logic exists inside Learning. The hierarchy read asks learning.courses.read for a published Course and learning.courses.read_unpublished otherwise; the Course's own stored state selects the question."
   },
   "compatibility_policy": {
     "api": "additive-minor-breaking-major",
@@ -410,6 +601,14 @@
       "contract": "components/idempotency/contract/component_contract.json",
       "direction": "learning -> idempotency_guard (exactly-once delivery of the review command)",
       "note": "SCS-001 implements no second idempotency mechanism: the review command identity (operation, target, fingerprint) is delivered to IS-005, which decides between executing, replaying and refusing a conflict."
+    },
+    {
+      "component_id": "identity",
+      "version_range": ">=0.3.0,<0.4.0",
+      "kind": "api",
+      "contract": "components/identity/contract/component_contract.json",
+      "direction": "learning -> identity (tenant context of the verified subject for the create-course command)",
+      "note": "Consumed only because the create-course command has no pre-existing resource whose Tenant the store could state. The effective tenant still comes from IS-001 and from nowhere else; a caller-supplied tenant_id remains a cross-check (LAW-16a)."
     }
   ]
 }

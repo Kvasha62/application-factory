@@ -26,16 +26,21 @@ Slice 1 publishes the single-submission read
 adds exactly one business read operation — teacher submission discovery
 ``GET /api/v1/learning/assignments/{assignment_id}/submissions`` — on top
 of it. Slice 3 adds exactly one state-changing command — the teacher
-submission review
-``POST /api/v1/learning/submissions/{submission_id}/review`` — which records
-``reviewed_by`` / ``reviewed_at``, leaves the lifecycle ``SUBMITTED`` and is
-guarded by IS-005. Errors use the approved SCS-001 envelope (``error.code``
-/ ``error.message`` / ``error.details`` plus top-level ``request_id`` /
-``correlation_id``).
+submission review ``POST /api/v1/learning/submissions/{submission_id}/review``
+— which records ``reviewed_by`` / ``reviewed_at``, leaves the lifecycle
+``SUBMITTED`` and is guarded by IS-005. Content Authoring (Slice 4,
+Issue #31) establishes the upstream hierarchy of the same flow —
+``Course → Module → Lesson → Assignment`` — with the teacher commands
+create course/module/lesson/assignment, the Course-level atomic commands
+publish and archive, and the hierarchy read ``GET /courses/{course_id}``;
+every state-changing command is guarded by IS-005, and a Student reads
+published hierarchies only. Errors use the approved SCS-001 envelope
+(``error.code`` / ``error.message`` / ``error.details`` plus top-level
+``request_id`` / ``correlation_id``).
 """
 
 COMPONENT_ID = "learning"
-COMPONENT_VERSION = "0.1.0"
+COMPONENT_VERSION = "0.2.0"
 COMPONENT_CLASS = "business_system"
 SCS_ID = "SCS-001"
 

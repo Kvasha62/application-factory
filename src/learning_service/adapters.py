@@ -39,12 +39,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from learning_service.consumed import DecisionAnswer, DependencyRefusal
+from learning_service.consumed import (
+    DecisionAnswer,
+    DependencyRefusal,
+    TenantContextAnswer,
+    TenantContextRefusal,
+)
 
 __all__ = [
     "AuthorizationDecisionAdapter",
     "ResourceClaim",
+    "TenantContextAdapter",
     "authorization_port",
+    "tenant_context_port",
 ]
 
 
@@ -138,3 +145,59 @@ class AuthorizationDecisionAdapter:
 def authorization_port(client: Any) -> AuthorizationDecisionAdapter:
     """Wire a published IS-003 decision reader as this component's port."""
     return AuthorizationDecisionAdapter(client)
+
+
+class TenantContextAdapter:
+    """The Identity / Tenant Context (IS-001) seen as :class:`TenantContextPort`.
+
+    ``client`` is the published context reader of the identity contract,
+    handed over by a composition root — the same wiring the Saga boundary
+    uses for the same dependency. The adapter reads from the answer only the
+    documented fields (``identity_id``, ``tenant_id``, ``platform_id``,
+    ``kind``, ``source``) and converts it immediately into a value of
+    :mod:`learning_service.consumed`; a refusal of the dependency — whatever
+    it raised — is a :class:`TenantContextRefusal`, and an answer outside the
+    documented shape is one too. Nothing here imports ``identity_service``:
+    the adapter is structural over the published client, like its sibling
+    :class:`AuthorizationDecisionAdapter`.
+    """
+
+    __slots__ = ("_client",)
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def resolve(
+        self,
+        subject_credential: str | None,
+        *,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> Any:
+        try:
+            context = self._client.resolve_context(
+                subject_credential,
+                claimed_tenant_id=claimed_tenant_id,
+                request_id=request_id,
+                correlation_id=correlation_id,
+            )
+        except Exception as exc:  # published refusal or unusable dependency
+            return TenantContextRefusal(_refusal_code(exc))
+        identity_id = _text(getattr(context, "identity_id", None))
+        tenant_id = _text(getattr(context, "tenant_id", None))
+        if identity_id is None or tenant_id is None:
+            # An answer outside the published shape is not an answer.
+            return TenantContextRefusal(None)
+        return TenantContextAnswer(
+            identity_id=identity_id,
+            tenant_id=tenant_id,
+            platform_id=_text(getattr(context, "platform_id", None)),
+            kind=_text(getattr(context, "kind", None)),
+            source=_text(getattr(context, "source", None)),
+        )
+
+
+def tenant_context_port(client: Any) -> TenantContextAdapter:
+    """Wire a published IS-001 context reader as this component's port."""
+    return TenantContextAdapter(client)
