@@ -4,7 +4,7 @@
   "component_version": "0.1.0",
   "class": "business_system",
   "maturity_level": "level_0_modular_monolith",
-  "task": "SCS-001 Slice 1 — Submission Read (prerequisite for Slice 2 / Issue #20)",
+  "task": "SCS-001 Slice 3 — Teacher Submission Review (Issue #24)",
   "learning_boundary": {
     "role": "Data Ownership / Learning Boundary",
     "invariants": [
@@ -30,7 +30,9 @@
       "content",
       "status",
       "created_at",
-      "updated_at"
+      "updated_at",
+      "reviewed_by",
+      "reviewed_at"
     ]
   },
   "api": {
@@ -49,6 +51,15 @@
         "authorization_operation": "learning.submissions.read",
         "idempotency": "natural",
         "idempotency_note": "A read changes no state beyond the append-only audit journal."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/submissions/{submission_id}/review",
+        "openapi_path": "/submissions/{submission_id}/review",
+        "purpose": "record that a teacher has checked one owned submission; sets reviewed_by and reviewed_at and leaves the lifecycle SUBMITTED",
+        "authorization_operation": "learning.submissions.review",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: the Idempotency-Key header is mandatory, an exact replay returns the recorded result without a second effect, and a changed binding is refused as IDEMPOTENCY_CONFLICT."
       }
     ],
     "enforcement_model": {
@@ -59,12 +70,16 @@
         "owned_data_operation"
       ],
       "owned_data_operations": [
-        "serve_submission"
+        "serve_submission",
+        "apply_review"
       ],
       "own_deny_reasons": [
         "submission_unknown",
         "owner_mismatch",
-        "authorization_unavailable"
+        "authorization_unavailable",
+        "invalid_state_transition",
+        "idempotency_key_required",
+        "idempotency_conflict"
       ],
       "passed_through_denials": "the published deny reasons of IS-003, unchanged",
       "nonauthoritative_answers": "an answer outside the published decision model of IS-003 — including an ALLOW with a reason other than permitted and a DENY with an unknown reason — fails closed as authorization_unavailable",
@@ -77,7 +92,13 @@
         "PUBLISHED",
         "ARCHIVED"
       ],
-      "transitions": {}
+      "transitions": {},
+      "review": {
+        "semantics": "review records the fact that a submission has been checked: reviewed_by (verified teacher identity) and reviewed_at (timestamp) are set on the first successful review and the lifecycle stays SUBMITTED. Review is not grading, scoring, feedback, commenting, evaluation or a lifecycle transition.",
+        "state_rule": "review is allowed only when status == SUBMITTED; a DRAFT submission is refused as invalid_state_transition",
+        "idempotency": "IS-005 guard; Idempotency-Key mandatory; exact replay returns the recorded result; changed binding is refused as idempotency_conflict",
+        "no_review_entity": "no Review, Evaluation, Grade, Feedback or LearningResult entity exists; the review fact is exactly the two nullable fields reviewed_by / reviewed_at on Submission"
+      }
     },
     "refusal_semantics": {
       "principle": "a refusal is data with a stable machine-readable code and reason, audited with request_id and correlation_id; nothing about this surface can be mistaken for a served submission",
@@ -115,6 +136,21 @@
             "reasons": "malformed_request",
             "note": "defence in depth: the schema handler exists, but the read surface carries no body, so no live 422 scenario exists in this slice"
           },
+          "INVALID_STATE_TRANSITION": {
+            "status": 409,
+            "message": "Operation is not valid for the current submission state.",
+            "reasons": "invalid_state_transition"
+          },
+          "IDEMPOTENCY_KEY_REQUIRED": {
+            "status": 400,
+            "message": "An Idempotency-Key header is required for this operation.",
+            "reasons": "idempotency_key_required"
+          },
+          "IDEMPOTENCY_CONFLICT": {
+            "status": 409,
+            "message": "The Idempotency-Key was already used with a different request.",
+            "reasons": "idempotency_conflict"
+          },
           "DEPENDENCY_UNAVAILABLE": {
             "status": 503,
             "message": "Authorization dependency is unavailable.",
@@ -124,12 +160,14 @@
         "note": "The HTTP status selects the code; the stable internal reason is preserved in error.details.reason; request_id and correlation_id match the audit record of the refusal."
       },
       "refused": {
+        "400": "idempotency_key_required",
         "401": "missing_identity, invalid_identity, unknown_identity",
         "403": "tenant_mismatch, tenant_unknown, platform_ownership_mismatch, resource_tenant_unknown, resource_tenant_mismatch, tenant_not_active, tenant_suspended, tenant_deletion_requested, tenant_deleted, permission_not_granted, authority_unavailable, missing_tenant_context, owner_mismatch",
         "404": "submission_unknown",
+        "409": "invalid_state_transition, idempotency_conflict",
         "503": "authorization_unavailable"
       },
-      "served": "HTTP 200 with the eight-field submission representation, produced only by the owned-data operation at the end of the enforcement chain"
+      "served": "HTTP 200 with the ten-field submission representation (including reviewed_by / reviewed_at), produced only by the owned-data operation at the end of the enforcement chain"
     },
     "consumer_surface": {
       "module": "learning_service.reader",
@@ -145,7 +183,8 @@
         "opaque contract channel handle (str)"
       ],
       "operations": [
-        "read_submission"
+        "read_submission",
+        "review_submission"
       ],
       "returns": [
         "learning_service.contracts.SubmissionView"
@@ -162,7 +201,8 @@
         "importing the published module binds no reference to learning_service.transport — its namespace holds no module object, no channel table and no transport type",
         "an unknown or revoked channel handle raises ContractViolation, so there is no permissive fallback and a handle cannot be guessed",
         "every access runs through the same routing, enforcement chain and audit code that serves an HTTP request",
-        "there is no listing, bulk export, search, pagination or raw-store operation: the published read operation is the only access path, and it is enforced"
+        "there is no listing, bulk export, search, pagination or raw-store operation: the published read and review operations are the only access paths, and they are enforced",
+        "the review command owns no second idempotency mechanism: it is delivered to the IS-005 guard, which decides between executing, replaying and refusing a conflict"
       ],
       "composition_root_only": [
         "learning_service.deployment (LearningDeployment: engine, store, configuration)",
@@ -251,7 +291,7 @@
       {
         "name": "submissions",
         "scope": "tenant-scoped",
-        "note": "Every submission belongs to exactly one assignment and to the same Tenant; student_identity_id is an opaque reference — no student profile/account data is stored here."
+        "note": "Every submission belongs to exactly one assignment and to the same Tenant; student_identity_id is an opaque reference — no student profile/account data is stored here. reviewed_by / reviewed_at are opaque review facts set by the review command; no Review/Evaluation/Grade/Feedback/LearningResult entity exists."
       },
       {
         "name": "access_audit",
@@ -261,7 +301,7 @@
     ],
     "notes": [
       "This component owns no identity, no permission grant, no tenant registry and no tenant state: those belong to identity, authorization and tenant_authority and are read through their published contracts.",
-      "The submission model is the business model of Slice 1 (submission_id, assignment_id, student_identity_id, attempt, content, status, created_at, updated_at) with lifecycle DRAFT → SUBMITTED; no grading, comments, review states, progress or enrollment exist in this slice."
+      "The submission model is the business model of Slices 1+3 (submission_id, assignment_id, student_identity_id, attempt, content, status, created_at, updated_at, reviewed_by, reviewed_at) with lifecycle DRAFT → SUBMITTED; no grading, comments, review states, progress or enrollment exist. Review is exactly the fact that a submitted submission was checked, recorded in the two nullable review fields."
     ]
   },
   "audit": {
@@ -317,10 +357,11 @@
     "enforcement_point": "learning",
     "tenant_context_source": "identity",
     "operations_guarded": [
-      "learning.submissions.read"
+      "learning.submissions.read",
+      "learning.submissions.review"
     ],
     "authentication_does_not_imply_authorization": true,
-    "note": "ALLOW from IS-003 is not direct data access: the data owner remains the final enforcement boundary (ARCHITECTURE.md §6.2). A decision that cannot be obtained is a denial."
+    "note": "ALLOW from IS-003 is not direct data access: the data owner remains the final enforcement boundary (ARCHITECTURE.md §6.2). A decision that cannot be obtained is a denial. A Teacher must hold learning.submissions.review; a Student and every other subject without an explicit grant is denied by default."
   },
   "compatibility_policy": {
     "api": "additive-minor-breaking-major",
@@ -328,9 +369,9 @@
     "supported_api_majors": 1,
     "reason_codes": "adding a refusal reason is a minor change; removing or redefining one is a breaking change",
     "enforcement_chain": "reordering or removing a step is a breaking change: the order is part of the published behaviour",
-    "resource_model": "adding a field to the submission representation is a minor change; changing the eight published fields is a breaking change",
+    "resource_model": "adding a field to the submission representation is a minor change; changing the ten published fields is a breaking change",
     "error_envelope": "the approved envelope shape is part of the contract; changing error/code/message/details/request_id/correlation_id is a breaking change",
-    "lifecycle": "submission lifecycle is exactly DRAFT → SUBMITTED; adding grading/review states is a breaking change"
+    "lifecycle": "submission lifecycle is exactly DRAFT → SUBMITTED; adding grading/review states is a breaking change; review does not add a lifecycle state"
   },
   "dependencies": [
     {
@@ -339,6 +380,14 @@
       "kind": "api",
       "contract": "components/authorization/contract/component_contract.json",
       "direction": "learning -> authorization (read-only access decision)"
+    },
+    {
+      "component_id": "idempotency_guard",
+      "version_range": ">=0.1.0,<0.2.0",
+      "kind": "internal-consumer-surface",
+      "contract": "components/idempotency/contract/component_contract.json",
+      "direction": "learning -> idempotency_guard (exactly-once delivery of the review command)",
+      "note": "SCS-001 implements no second idempotency mechanism: the review command identity (operation, target, fingerprint) is delivered to IS-005, which decides between executing, replaying and refusing a conflict."
     }
   ]
 }

@@ -23,7 +23,7 @@ from typing import Any, Mapping
 
 from learning_service.config import LearningConfig
 from learning_service.engine import LearningEngine
-from learning_service.ports import AuthorizationPort
+from learning_service.ports import AuthorizationPort, CommandSafetyPort
 from learning_service.store import LearningStore
 
 
@@ -68,14 +68,20 @@ def build_deployment(
     seed_demo: bool = False,
     store: LearningStore | None = None,
     with_http: bool = False,
+    idempotency: CommandSafetyPort | None = None,
 ) -> LearningDeployment:
-    """Assemble one Learning boundary over the published client of IS-003."""
+    """Assemble one Learning boundary over the published client of IS-003.
+
+    ``idempotency`` is the IS-005 command-safety port; when omitted the
+    engine wires the IS-005 guard itself — no second idempotency mechanism.
+    """
     config = LearningConfig.from_mapping(configuration)
     learning_store = store or LearningStore()
     engine = LearningEngine(
         store=learning_store,
         config=config,
         authorization=authorization,
+        idempotency=idempotency,
     )
     if seed_demo:
         learning_store.seed_demo()

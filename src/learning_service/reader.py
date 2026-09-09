@@ -1,9 +1,10 @@
 """Published consumer surface of the Learning component (SCS-001).
 
 A consumer receives exactly one object: :class:`LearningClient`. It offers
-the read operation of the published contract — read one submission — and
-returns an immutable :class:`learning_service.contracts.SubmissionView`
-or raises :class:`learning_service.errors.AccessRefused`.
+the read and review operations of the published contract — read one
+submission and record its review — and returns an immutable
+:class:`learning_service.contracts.SubmissionView` or raises
+:class:`learning_service.errors.AccessRefused`.
 
 Its state is one value: an opaque contract-channel handle. No credential
 is bound to the client — the subject credential is supplied per access,
@@ -47,6 +48,12 @@ def _view_from(payload: Mapping[str, Any]) -> SubmissionView:
         content = payload["content"]
         if not isinstance(content, dict):
             raise ValueError("content must be an object")
+        reviewed_by = payload.get("reviewed_by")
+        reviewed_at = payload.get("reviewed_at")
+        if reviewed_by is not None and not isinstance(reviewed_by, str):
+            raise ValueError("reviewed_by must be a string")
+        if reviewed_at is not None and not isinstance(reviewed_at, str):
+            raise ValueError("reviewed_at must be a string")
         return SubmissionView(
             submission_id=str(payload["submission_id"]),
             assignment_id=str(payload["assignment_id"]),
@@ -56,6 +63,8 @@ def _view_from(payload: Mapping[str, Any]) -> SubmissionView:
             status=str(payload["status"]),
             created_at=str(payload["created_at"]),
             updated_at=str(payload["updated_at"]),
+            reviewed_by=reviewed_by,
+            reviewed_at=reviewed_at,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ContractViolation(
@@ -66,8 +75,9 @@ def _view_from(payload: Mapping[str, Any]) -> SubmissionView:
 class LearningClient:
     """Value-only access reader over the published learning contract.
 
-    ``GET /api/v1/learning/submissions/{submission_id}`` is the only
-    operation it performs; the exact same API is available to a remote
+    ``GET /api/v1/learning/submissions/{submission_id}`` and
+    ``POST /api/v1/learning/submissions/{submission_id}/review`` are the only
+    operations it performs; the exact same API is available to a remote
     consumer.
 
     ``channel`` is the opaque handle of a contract channel opened by the
@@ -112,6 +122,36 @@ class LearningClient:
             raise self._error(status, payload)
         return _view_from(payload)
 
+    def review_submission(
+        self,
+        subject_credential: str | None,
+        submission_id: str,
+        *,
+        idempotency_key: str | None,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> SubmissionView:
+        """Record the review of one owned submission through the enforcement chain.
+
+        ``idempotency_key`` is mandatory and delivered through IS-005: an exact
+        replay returns the same result without a second effect, and a changed
+        binding is refused. ``subject_credential`` is verified by IS-001 inside
+        the IS-003 decision, so a consumer cannot assert who the subject is.
+        """
+        status, payload = self._call(
+            "POST",
+            f"/api/v1/learning/submissions/{quote(submission_id, safe='')}/review",
+            subject_credential=subject_credential,
+            claimed_tenant_id=claimed_tenant_id,
+            idempotency_key=idempotency_key,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        if not 200 <= status < 300:
+            raise self._error(status, payload)
+        return _view_from(payload)
+
     # --------------------------------------------------------------- internals
     def _call(
         self,
@@ -122,12 +162,15 @@ class LearningClient:
         claimed_tenant_id: str | None,
         request_id: str | None,
         correlation_id: str | None,
+        idempotency_key: str | None = None,
     ) -> tuple[int, Mapping[str, Any]]:
         headers: list[tuple[str, str]] = []
         if subject_credential is not None:
             headers.append(("authorization", f"Bearer {subject_credential}"))
         if claimed_tenant_id:
             headers.append(("x-tenant-id", claimed_tenant_id))
+        if idempotency_key:
+            headers.append(("idempotency-key", idempotency_key))
         if request_id:
             headers.append(("x-request-id", request_id))
         if correlation_id:

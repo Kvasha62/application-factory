@@ -42,6 +42,12 @@ class OwnedSubmission:
     reference, never profile/account data. ``status`` is exactly
     ``DRAFT`` or ``SUBMITTED`` — no grading/review states exist in this
     slice.
+
+    ``reviewed_by`` is an opaque reference to the verified Teacher identity
+    that performed the review, owned outside Learning; ``reviewed_at`` is the
+    timestamp of that successful review. Both stay ``None`` until the first
+    review and are the only review fact recorded — there is no Review entity,
+    no grade, no feedback and no comment.
     """
 
     submission_id: str
@@ -54,6 +60,8 @@ class OwnedSubmission:
     created_at: str
     updated_at: str
     owner_component: str = "learning"
+    reviewed_by: str | None = None
+    reviewed_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: SCS-001 Learning — Submission Read (Slice 1)
+  title: SCS-001 Learning — Submission Read and Review (Slice 3)
   version: 0.1.0
   description: >-
     Граница владельца учебных данных одной Platform Instance. Компонент владеет
@@ -9,7 +9,11 @@ info:
     остаётся на границе владельца. Каждый доступ проходит фиксированную цепочку
     `ownership_boundary → authorization_decision → owned_data_operation`;
     решение по умолчанию — DENY, отказ зависимости закрывает доступ.
-    Срез 1 публикует чтение отдельной работы. Отказы используют утверждённый
+    Срез 1 публикует чтение отдельной работы; срез 3 добавляет ровно одну
+    команду изменения состояния — review работы учителем. Review фиксирует факт
+    проверки (`reviewed_by` / `reviewed_at`), не меняет lifecycle `DRAFT →
+    SUBMITTED`, не содержит оценки, балла, feedback или комментариев и защищён
+    IS-005 (`Idempotency-Key` обязателен). Отказы используют утверждённый
     конверт SCS-001: `error.code` / `error.message` / `error.details` плюс
     `request_id` / `correlation_id` верхнего уровня; стабильная внутренняя
     причина сохраняется в `error.details.reason`.
@@ -56,8 +60,8 @@ paths:
       responses:
         "200":
           description: >-
-            доступ разрешён цепочкой контроля; возвращаются ровно восемь полей
-            работы
+            доступ разрешён цепочкой контроля; возвращается представление
+            работы, включая факт review (reviewed_by / reviewed_at)
           content:
             application/json:
               schema:
@@ -93,6 +97,112 @@ paths:
             зависимость принятия решения не ответила либо ответила вне
             опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
             закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /submissions/{submission_id}/review:
+    post:
+      summary: Record the review of one owned submission (learning.submissions.review)
+      description: >-
+        Единственная команда изменения состояния среза 3: учитель фиксирует,
+        что конкретная Submission проверена. `Authorization` несёт credential
+        субъекта; он проверяется в IS-001 внутри решения IS-003. `X-Tenant-Id`
+        — только cross-check. Команда применяется только если Submission
+        существует у этого владельца, решение IS-003 — ALLOW, состояние —
+        `SUBMITTED`, и пройдена защита IS-005. При первом успехе записываются
+        `reviewed_by` (verified identity учителя) и `reviewed_at` (timestamp);
+        lifecycle остаётся `SUBMITTED`. Повторный идентичный запрос с тем же
+        `Idempotency-Key` возвращает тот же результат без второго эффекта.
+      operationId: reviewSubmission
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: submission_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+          description: >-
+            обязателен для команды изменения состояния; доставляется через
+            IS-005 — повтор с тем же ключом не создаёт второго эффекта, а
+            изменение binding даёт IDEMPOTENCY_CONFLICT
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            review применён ровно один раз либо повторён идемпотентно;
+            возвращается представление работы с фактом review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Submission"
+        "400":
+          description: >-
+            отсутствует обязательный Idempotency-Key (код
+            IDEMPOTENCY_KEY_REQUIRED; причина в `error.details.reason`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED) либо запись
+            принадлежит другому компоненту (owner_mismatch)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            работа неизвестна этому владельцу (код NOT_FOUND,
+            submission_unknown)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            состояние не допускает review (код INVALID_STATE_TRANSITION,
+            invalid_state_transition) либо Idempotency-Key уже использован с
+            другим binding (код IDEMPOTENCY_CONFLICT, idempotency_conflict)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; эффект не применён
           content:
             application/json:
               schema:
@@ -150,6 +260,14 @@ components:
           type: string
         updated_at:
           type: string
+        reviewed_by:
+          type: [string, "null"]
+          description: >-
+            opaque-ссылка на verified identity учителя, выполнившего review;
+            null до первого review; профиль вне Learning
+        reviewed_at:
+          type: [string, "null"]
+          description: timestamp успешного review; null до первого review
     Error:
       type: object
       additionalProperties: false
@@ -162,7 +280,7 @@ components:
           properties:
             code:
               type: string
-              enum: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, NOT_FOUND, INVALID_REQUEST, DEPENDENCY_UNAVAILABLE]
+              enum: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, NOT_FOUND, INVALID_REQUEST, INVALID_STATE_TRANSITION, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, DEPENDENCY_UNAVAILABLE]
               description: минимальный опубликованный код отказа SCS-001
             message:
               type: string
