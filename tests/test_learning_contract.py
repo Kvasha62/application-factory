@@ -130,7 +130,10 @@ def test_contract_declares_the_required_shapes():
     assert authz["decision_source"] == "authorization"
     assert authz["default_decision"] == "DENY"
     assert authz["tenant_context_source"] == "identity"
-    assert authz["operations_guarded"] == ["learning.submissions.read"]
+    assert authz["operations_guarded"] == [
+        "learning.submissions.read",
+        "learning.submissions.review",
+    ]
 
     ownership = data["data_ownership"]
     assert ownership["owner"] == "learning"
@@ -151,15 +154,19 @@ def test_contract_declares_the_required_shapes():
     assert "v2" not in json.dumps(data)
 
 
-def test_contract_declares_exactly_one_dependency_on_the_published_contract():
+def test_contract_declares_the_two_dependencies_on_published_contracts():
     data = contract()
     dependencies = data["dependencies"]
-    assert len(dependencies) == 1
-    dependency = dependencies[0]
-    assert dependency["component_id"] == "authorization"
-    assert dependency["kind"] == "api"
-    assert dependency["version_range"] == ">=0.1.0,<0.2.0"
-    assert Path(dependency["contract"]).exists()
+    assert len(dependencies) == 2
+    by_component = {dependency["component_id"]: dependency for dependency in dependencies}
+    authorization = by_component["authorization"]
+    assert authorization["kind"] == "api"
+    assert authorization["version_range"] == ">=0.1.0,<0.2.0"
+    assert Path(authorization["contract"]).exists()
+    idempotency = by_component["idempotency_guard"]
+    assert idempotency["kind"] == "internal-consumer-surface"
+    assert idempotency["version_range"] == ">=0.1.0,<0.2.0"
+    assert Path(idempotency["contract"]).exists()
 
 
 # --------------------------------------------------------------- surface match
@@ -196,9 +203,11 @@ def test_published_api_matches_the_implementation_in_both_directions():
         for operation in data["api"]["operations"]
     }
     assert contract_operations <= declared
-    # Exactly the single business read operation plus health/readiness.
+    # Exactly the single business read operation and the single review command
+    # plus health/readiness.
     assert contract_operations == {
         ("/api/v1/learning/submissions/{submission_id}", "get"),
+        ("/api/v1/learning/submissions/{submission_id}/review", "post"),
     }
 
 
@@ -220,6 +229,8 @@ def test_declared_enforcement_chain_and_model_match_the_engine():
         "status",
         "created_at",
         "updated_at",
+        "reviewed_by",
+        "reviewed_at",
     ]
 
 
@@ -270,6 +281,15 @@ def test_openapi_declares_the_error_envelope():
 def test_every_documented_refusal_status_is_produced_with_the_envelope():
     refused = contract()["api"]["refusal_semantics"]["refused"]
 
+    def scenario_400():
+        from tests.test_learning_slice3 import review_harness
+
+        harness = review_harness()
+        return harness.http().post(
+            "/api/v1/learning/submissions/sub_a1_1/review",
+            headers={"authorization": f"Bearer {TEACHER_A}"},
+        )
+
     def scenario_401():
         return learning_harness().http().get("/api/v1/learning/submissions/sub_a1_1")
 
@@ -285,6 +305,18 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
             headers={"authorization": f"Bearer {TEACHER_A}"},
         )
 
+    def scenario_409():
+        from tests.test_learning_slice3 import review_harness
+
+        harness = review_harness()
+        return harness.http().post(
+            "/api/v1/learning/submissions/sub_a1_2/review",
+            headers={
+                "authorization": f"Bearer {TEACHER_A}",
+                "idempotency-key": "contract-409",
+            },
+        )
+
     def scenario_503():
         from tests.test_learning_boundary import StubAuthorizationPort, learning_deployment
 
@@ -295,12 +327,21 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
             headers={"authorization": f"Bearer {TEACHER_A}"},
         )
 
-    scenarios = {401: scenario_401, 403: scenario_403, 404: scenario_404, 503: scenario_503}
+    scenarios = {
+        400: scenario_400,
+        401: scenario_401,
+        403: scenario_403,
+        404: scenario_404,
+        409: scenario_409,
+        503: scenario_503,
+    }
     assert set(refused) == {str(status) for status in scenarios}
     expected_codes = {
+        400: "IDEMPOTENCY_KEY_REQUIRED",
         401: "AUTHENTICATION_REQUIRED",
         403: "AUTHORIZATION_DENIED",
         404: "NOT_FOUND",
+        409: "INVALID_STATE_TRANSITION",
         503: "DEPENDENCY_UNAVAILABLE",
     }
     for status, scenario in scenarios.items():
@@ -359,6 +400,8 @@ def test_submission_response_shape_matches_openapi_schema():
         "status",
         "created_at",
         "updated_at",
+        "reviewed_by",
+        "reviewed_at",
     ):
         assert field in text
         assert field in item
@@ -386,3 +429,68 @@ def test_dependency_isolation_is_declared_with_the_real_module_names():
     assert consumed["local_adapter"] == "learning_service.adapters.AuthorizationDecisionAdapter"
     assert consumed["local_answer_type"] == "learning_service.consumed.DecisionAnswer"
     assert consumed["operations"] == ["decide"]
+
+
+# ------------------------------------------------------------ review contract
+def test_review_operation_is_declared_in_openapi():
+    text = openapi_text()
+    assert "/submissions/{submission_id}/review:" in text
+    assert "operationId: reviewSubmission" in text
+    assert "Idempotency-Key" in text
+    # The review command must declare the idempotency requirement.
+    assert "learning.submissions.review" in text
+
+
+def test_review_operation_is_declared_in_the_component_contract():
+    data = contract()
+    operations = {
+        (operation["method"], operation["path"]): operation for operation in data["api"]["operations"]
+    }
+    review = operations[("POST", "/api/v1/learning/submissions/{submission_id}/review")]
+    assert review["authorization_operation"] == "learning.submissions.review"
+    assert review["idempotency"] == "required"
+    assert review["openapi_path"] == "/submissions/{submission_id}/review"
+
+
+def test_submission_lifecycle_remains_draft_submitted():
+    data = contract()
+    states = data["api"]["enforcement_model"]["submission_states"]
+    assert states == ["DRAFT", "SUBMITTED"]
+    for forbidden in ("REVIEWED", "EVALUATED", "REJECTED"):
+        assert forbidden not in states
+        assert forbidden not in SUBMISSION_STATES
+    # Review is not a lifecycle transition: the transitions map stays empty.
+    assert data["api"]["enforcement_model"]["transitions"] == {}
+
+
+def test_no_review_entity_and_no_grading_features_exist():
+    import ast
+    from dataclasses import fields
+
+    forbidden_classes = {"Review", "Evaluation", "Grade", "Feedback", "LearningResult", "Comment"}
+    package = Path("src/learning_service")
+    class_names: set[str] = set()
+    for path in package.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                class_names.add(node.name)
+    assert forbidden_classes.isdisjoint(class_names), class_names
+
+    forbidden_fields = {"grade", "score", "points", "feedback", "comment", "evaluation"}
+    submission_fields = {field.name for field in fields(OwnedSubmission)}
+    assert forbidden_fields.isdisjoint(submission_fields), submission_fields
+
+
+def test_no_forbidden_endpoints_exist_in_openapi():
+    text = openapi_text()
+    for forbidden in ("/unreview", "/reset-review", "/evaluate", "/grade", "/feedback", "/comments"):
+        assert forbidden not in text, forbidden
+
+
+def test_review_semantics_are_declared_as_fact_not_grading():
+    data = contract()
+    review = data["api"]["enforcement_model"]["review"]
+    assert review["no_review_entity"].startswith("no Review")
+    assert "reviewed_by" in review["semantics"]
+    assert review["state_rule"]  # SUBMITTED only
