@@ -168,9 +168,13 @@ class TenantAuthorityClient:
         correlation_id: str | None,
     ) -> Mapping[str, Any]:
         platform = (
-            self._expected_platform_id if expected_platform_id is None else expected_platform_id
+            self._expected_platform_id
+            if expected_platform_id is None
+            else expected_platform_id
         )
-        headers: list[tuple[str, str]] = [("authorization", f"Bearer {self._credential}")]
+        headers: list[tuple[str, str]] = [
+            ("authorization", f"Bearer {self._credential}")
+        ]
         if platform:
             headers.append(("x-platform-id", platform))
         if request_id:
@@ -186,7 +190,9 @@ class TenantAuthorityClient:
     @staticmethod
     def _error(status: int, payload: Mapping[str, Any]) -> BaseException:
         if status >= 500:
-            return ContractViolation(f"tenant authority contract failed with status {status}")
+            return ContractViolation(
+                f"tenant authority contract failed with status {status}"
+            )
         detail = payload.get("detail")
         detail = detail if isinstance(detail, Mapping) else {}
         reason = _as_reason(detail.get("reason")) or _DEFAULT_REASON_BY_STATUS.get(

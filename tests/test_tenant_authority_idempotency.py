@@ -60,7 +60,10 @@ def test_same_key_with_another_target_state_is_a_conflict():
     )
     with pytest.raises(TenantConflict) as exc:
         ta.engine.transition_tenant(
-            "svc-token-admin", "ten_a", TenantState.DELETION_REQUESTED, idempotency_key="ik-3"
+            "svc-token-admin",
+            "ten_a",
+            TenantState.DELETION_REQUESTED,
+            idempotency_key="ik-3",
         )
     assert exc.value.reason is DenyReason.IDEMPOTENCY_CONFLICT
     assert ta.engine.lookup("ten_a").state is TenantState.SUSPENDED
@@ -74,7 +77,10 @@ def test_same_key_for_another_tenant_is_a_conflict():
     )
     with pytest.raises(TenantConflict):
         ta.engine.transition_tenant(
-            "svc-token-admin", "ten_b", TenantState.SUSPENDED, idempotency_key="ik-shared"
+            "svc-token-admin",
+            "ten_b",
+            TenantState.SUSPENDED,
+            idempotency_key="ik-shared",
         )
     assert ta.engine.lookup("ten_b").state is TenantState.ACTIVE
     assert len(ta.store.transitions) == 1
@@ -95,11 +101,16 @@ def test_same_key_from_another_actor_does_not_replay_a_foreign_result():
     )
     with pytest.raises(TenantConflict) as exc:
         ta.engine.transition_tenant(
-            "svc-token-other-admin", "ten_a", TenantState.SUSPENDED, idempotency_key="ik-actor"
+            "svc-token-other-admin",
+            "ten_a",
+            TenantState.SUSPENDED,
+            idempotency_key="ik-actor",
         )
     assert exc.value.reason is DenyReason.IDEMPOTENCY_CONFLICT
     # The other actor receives neither the effect nor the result of the first request.
-    assert [item for item in ta.store.transitions if item.actor_id == "svc_other_admin"] == []
+    assert [
+        item for item in ta.store.transitions if item.actor_id == "svc_other_admin"
+    ] == []
 
 
 def test_replay_requires_the_same_authorization_as_the_original_operation():
@@ -109,7 +120,10 @@ def test_replay_requires_the_same_authorization_as_the_original_operation():
     )
     with pytest.raises(AuthorizationDenied) as exc:
         ta.engine.transition_tenant(
-            "svc-token-identity", "ten_a", TenantState.SUSPENDED, idempotency_key="ik-authz"
+            "svc-token-identity",
+            "ten_a",
+            TenantState.SUSPENDED,
+            idempotency_key="ik-authz",
         )
     assert exc.value.reason is DenyReason.INSUFFICIENT_AUTHORIZATION
     assert len(ta.store.transitions) == 1
@@ -122,7 +136,10 @@ def test_key_is_scoped_per_operation():
     )
     with pytest.raises(TenantConflict) as exc:
         ta.engine.transition_tenant(
-            "svc-token-admin", "ten_idem", TenantState.ACTIVE, idempotency_key="ik-cross"
+            "svc-token-admin",
+            "ten_idem",
+            TenantState.ACTIVE,
+            idempotency_key="ik-cross",
         )
     assert exc.value.reason is DenyReason.IDEMPOTENCY_CONFLICT
     assert created.state is TenantState.PROVISIONING

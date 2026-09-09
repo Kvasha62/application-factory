@@ -100,7 +100,9 @@ def create_app(deployment: RecordsDeployment) -> FastAPI:
     )
 
     @app.exception_handler(RequestValidationError)
-    async def unreadable_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+    async def unreadable_request(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
         """Refuse — and audit — a request the contract schema rejected.
 
         This is a transport-level refusal (``422``), not an access answer:

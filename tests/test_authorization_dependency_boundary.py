@@ -63,7 +63,9 @@ def imported_packages(path: pathlib.Path) -> set[str]:
             name = getattr(node.func, "attr", getattr(node.func, "id", ""))
             if name in {"import_module", "__import__"}:
                 for argument in node.args:
-                    if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+                    if isinstance(argument, ast.Constant) and isinstance(
+                        argument.value, str
+                    ):
                         found.add(argument.value.split(".")[0])
     return found
 
@@ -157,14 +159,16 @@ def test_the_engine_decides_with_ports_that_are_no_component_at_all():
     assert allowed.subject_id == "idn_green"
     assert allowed.tenant_id == "ten_a"
 
-    assert client.decide("green", operation="records.write", resource=RESOURCE).reason is (
-        Reason.PERMISSION_NOT_GRANTED
-    )
+    assert client.decide(
+        "green", operation="records.write", resource=RESOURCE
+    ).reason is (Reason.PERMISSION_NOT_GRANTED)
     assert client.decide("red", operation="records.read", resource=RESOURCE).reason is (
         Reason.INVALID_IDENTITY
     )
     other = client.decide(
-        "other-tenant", operation="records.read", resource=ResourceRef("record", "rec_b1", "ten_b")
+        "other-tenant",
+        operation="records.read",
+        resource=ResourceRef("record", "rec_b1", "ten_b"),
     )
     assert other.reason is Reason.TENANT_SUSPENDED
 
@@ -219,9 +223,12 @@ def test_a_port_that_misbehaves_denies_instead_of_escaping():
         with_http=True,
     )
     client = deployment.publish(credential=DATA_OWNER_CREDENTIAL)
-    assert client.decide(
-        "token-human-a", operation="records.read", resource=RESOURCE
-    ).reason is Reason.AUTHORITY_UNAVAILABLE
+    assert (
+        client.decide(
+            "token-human-a", operation="records.read", resource=RESOURCE
+        ).reason
+        is Reason.AUTHORITY_UNAVAILABLE
+    )
 
     class Fine:
         def resolve_context(self, credential, **_):
@@ -230,9 +237,12 @@ def test_a_port_that_misbehaves_denies_instead_of_escaping():
     deployment.engine.identity = Fine()
     # Now the identity port answers, and the malformed lifecycle answer is the
     # one that denies: an unreadable verdict is not a servable Tenant.
-    assert client.decide(
-        "token-human-a", operation="records.read", resource=RESOURCE
-    ).reason is Reason.AUTHORITY_UNAVAILABLE
+    assert (
+        client.decide(
+            "token-human-a", operation="records.read", resource=RESOURCE
+        ).reason
+        is Reason.AUTHORITY_UNAVAILABLE
+    )
 
 
 def test_the_adapter_returns_values_of_this_component_only():
@@ -249,9 +259,9 @@ def test_the_adapter_returns_values_of_this_component_only():
     for value in (context.kind, context.source, context.platform_id, context.subject):
         assert value is None or isinstance(value, str)
 
-    verdict = tenant_authority_port(instance.tenant_authority_client).lifecycle_decision(
-        "ten_a", expected_platform_id=PLATFORM_ID
-    )
+    verdict = tenant_authority_port(
+        instance.tenant_authority_client
+    ).lifecycle_decision("ten_a", expected_platform_id=PLATFORM_ID)
     assert isinstance(verdict, TenantVerdict)
     assert verdict.permitted is True
 
@@ -264,9 +274,13 @@ def test_the_adapter_returns_values_of_this_component_only():
         ("token-unknown", "unknown_identity"),
     ],
 )
-def test_the_adapter_carries_a_published_refusal_code_and_nothing_else(credential, reason_code):
+def test_the_adapter_carries_a_published_refusal_code_and_nothing_else(
+    credential, reason_code
+):
     instance = monolith()
-    refusal = identity_port(instance.identity_context_client).resolve_context(credential)
+    refusal = identity_port(instance.identity_context_client).resolve_context(
+        credential
+    )
     assert isinstance(refusal, DependencyRefusal)
     assert refusal.reason_code == reason_code
     assert set(vars(type(refusal))["__slots__"]) == {"reason_code"}

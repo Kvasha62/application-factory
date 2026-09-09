@@ -30,7 +30,9 @@ ALLOW = DecisionAnswer(
 )
 
 
-def make(resource_id: str = "rec_x", owner: str = "records", tenant: str = "ten_a") -> OwnedResource:
+def make(
+    resource_id: str = "rec_x", owner: str = "records", tenant: str = "ten_a"
+) -> OwnedResource:
     return OwnedResource(
         resource_id=resource_id,
         resource_type="record",

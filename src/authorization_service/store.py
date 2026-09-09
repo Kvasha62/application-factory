@@ -34,7 +34,9 @@ class AuthorizationStore:
     audit: list[AuditEvent] = field(default_factory=list)
 
     # ------------------------------------------------------------------ grants
-    def grant(self, tenant_id: str, subject_id: str, *operations: str) -> PermissionGrant:
+    def grant(
+        self, tenant_id: str, subject_id: str, *operations: str
+    ) -> PermissionGrant:
         """Add operations to the grant of one subject inside one Tenant.
 
         Internal operation: provisioning grants is the job of the composition
@@ -44,8 +46,12 @@ class AuthorizationStore:
         """
         key = (tenant_id, subject_id)
         existing = self.grants.get(key)
-        merged = frozenset(operations) | (existing.operations if existing else frozenset())
-        record = PermissionGrant(tenant_id=tenant_id, subject_id=subject_id, operations=merged)
+        merged = frozenset(operations) | (
+            existing.operations if existing else frozenset()
+        )
+        record = PermissionGrant(
+            tenant_id=tenant_id, subject_id=subject_id, operations=merged
+        )
         self.grants[key] = record
         return record
 
@@ -84,7 +90,9 @@ class AuthorizationStore:
         foreign_platform = foreign_platform_id or platform_id
         self.services = {
             # The demo data owner: it may ask for decisions, nothing more.
-            "svc_records": ServiceAccess("svc_records", platform_id, CONSUMER_PERMISSIONS),
+            "svc_records": ServiceAccess(
+                "svc_records", platform_id, CONSUMER_PERMISSIONS
+            ),
             # Verified, but not allowed to ask this authority for decisions.
             "svc_reporting": ServiceAccess("svc_reporting", platform_id, frozenset()),
             # A service identity of another Platform Instance.

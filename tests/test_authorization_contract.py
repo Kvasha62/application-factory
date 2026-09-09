@@ -99,9 +99,9 @@ def test_contract_does_not_announce_unimplemented_events_or_cdc_or_ui():
 
 def test_published_api_matches_the_implementation_in_both_directions():
     data = contract()
-    assert Path(data["api"]["openapi"]).read_text(encoding="utf-8") == OPENAPI.read_text(
+    assert Path(data["api"]["openapi"]).read_text(
         encoding="utf-8"
-    )
+    ) == OPENAPI.read_text(encoding="utf-8")
     assert data["api"]["base_path"] == "/api/v1"
     assert data["api"]["supported_majors"] == ["v1"]
 
@@ -138,7 +138,9 @@ def test_declared_reason_codes_are_exactly_the_implemented_ones():
 
 def test_declared_refusal_semantics_match_the_error_surface():
     refusals = contract()["api"]["refusal_semantics"]["refused"]
-    declared = {reason for reasons in refusals.values() for reason in reasons.split(", ")}
+    declared = {
+        reason for reasons in refusals.values() for reason in reasons.split(", ")
+    }
     assert declared == {reason.value for reason in CallerDenyReason}
     # And the statuses are the ones the error classes actually carry.
     from authorization_service.errors import (
@@ -161,7 +163,9 @@ def test_declared_permission_is_the_one_that_is_enforced():
     assert data["authz"]["tenant_state_source"] == "tenant_authority"
 
     instance = monolith()
-    granted = set().union(*(s.permissions for s in instance.authorization.store.services.values()))
+    granted = set().union(
+        *(s.permissions for s in instance.authorization.store.services.values())
+    )
     assert granted <= set(data["authz"]["permissions"])
 
     # A service that holds no permission cannot ask, whatever it is called.
@@ -204,7 +208,9 @@ def test_declared_audit_fields_exist_on_a_real_audit_record():
     from authorization_service.contracts import ResourceRef
 
     instance.authorization_client.decide(
-        "token-human-a", operation="records.read", resource=ResourceRef("record", "rec_a1", "ten_a")
+        "token-human-a",
+        operation="records.read",
+        resource=ResourceRef("record", "rec_a1", "ten_a"),
     )
     event = instance.authorization.store.audit[-1]
     for field in declared:
@@ -221,7 +227,11 @@ def test_every_declared_refusal_is_audited_as_the_contract_claims():
     http = instance.authorization_http()
     valid = {
         "operation": "records.read",
-        "resource": {"resource_type": "record", "resource_id": "rec_a1", "tenant_id": "ten_a"},
+        "resource": {
+            "resource_type": "record",
+            "resource_id": "rec_a1",
+            "tenant_id": "ten_a",
+        },
     }
     # One request per declared status family, including the one the published
     # schema rejects before any handler of this component runs.
@@ -239,14 +249,20 @@ def test_every_declared_refusal_is_audited_as_the_contract_claims():
         request_id = f"req-declared-{status}"
         response = http.post(
             "/api/v1/decisions",
-            headers={**extra_headers, "X-Request-Id": request_id, "X-Correlation-Id": "cor-decl"},
+            headers={
+                **extra_headers,
+                "X-Request-Id": request_id,
+                "X-Correlation-Id": "cor-decl",
+            },
             json=body,
         )
         assert response.status_code == int(status)
         reason = response.json()["detail"]["reason"]
         assert reason in declared[status].split(", ")
         event = next(
-            item for item in instance.authorization.store.audit if item.request_id == request_id
+            item
+            for item in instance.authorization.store.audit
+            if item.request_id == request_id
         )
         assert event.details["refused"] == reason
         assert event.correlation_id == "cor-decl"
@@ -256,14 +272,23 @@ def test_declared_configuration_schema_matches_the_loader():
     schema = contract()["configuration_schema"]
     assert schema["additionalProperties"] is False
     assert schema["required"] == ["platform_id"]
-    assert set(schema["properties"]) == {"platform_id", "environment", "service_token_prefix"}
+    assert set(schema["properties"]) == {
+        "platform_id",
+        "environment",
+        "service_token_prefix",
+    }
 
     config = AuthorizationConfig.from_mapping({"platform_id": "plt_demo"})
     assert config.environment == schema["properties"]["environment"]["default"]
-    assert config.service_token_prefix == schema["properties"]["service_token_prefix"]["const"]
+    assert (
+        config.service_token_prefix
+        == schema["properties"]["service_token_prefix"]["const"]
+    )
     # ARCHITECTURE.md §20: an unknown configuration key is an error, not a default.
     with pytest.raises(ConfigurationError):
-        AuthorizationConfig.from_mapping({"platform_id": "plt_demo", "allow_everything": True})
+        AuthorizationConfig.from_mapping(
+            {"platform_id": "plt_demo", "allow_everything": True}
+        )
     with pytest.raises(ConfigurationError):
         AuthorizationConfig.from_mapping({})
 
@@ -296,8 +321,12 @@ def test_declared_dependencies_are_the_ones_that_are_wired():
         # declared consumer surface — never the provider's client itself.
         assert type(wired) is resolve(entry["local_adapter"])
         assert isinstance(wired, resolve(entry["local_port"]))
-        assert resolve(entry["local_adapter"]).__module__.startswith("authorization_service.")
-        assert resolve(entry["local_answer_type"]).__module__.startswith("authorization_service.")
+        assert resolve(entry["local_adapter"]).__module__.startswith(
+            "authorization_service."
+        )
+        assert resolve(entry["local_answer_type"]).__module__.startswith(
+            "authorization_service."
+        )
 
         # The declared operations exist on the published surface of the provider
         # and on the port, and neither offers anything beyond the declared reads.
@@ -306,7 +335,9 @@ def test_declared_dependencies_are_the_ones_that_are_wired():
         available = {name for name in dir(surface) if not name.startswith("_")}
         assert declared_operations <= available
         assert available <= declared_operations | {"lookup"}
-        port_operations = {n for n in dir(resolve(entry["local_port"])) if not n.startswith("_")}
+        port_operations = {
+            n for n in dir(resolve(entry["local_port"])) if not n.startswith("_")
+        }
         assert port_operations == declared_operations
 
 
@@ -314,7 +345,10 @@ def test_the_declared_version_ranges_admit_the_versions_in_this_repository():
     import identity_service
     import tenant_authority
 
-    ranges = {item["component_id"]: item["version_range"] for item in contract()["dependencies"]}
+    ranges = {
+        item["component_id"]: item["version_range"]
+        for item in contract()["dependencies"]
+    }
     versions = {
         "identity": identity_service.COMPONENT_VERSION,
         "tenant_authority": tenant_authority.COMPONENT_VERSION,

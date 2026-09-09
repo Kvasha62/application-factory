@@ -101,9 +101,9 @@ def test_contract_does_not_announce_unimplemented_events_or_cdc():
 
 def test_published_api_matches_the_implementation_in_both_directions():
     data = contract()
-    assert Path(data["api"]["openapi"]).read_text(encoding="utf-8") == OPENAPI.read_text(
+    assert Path(data["api"]["openapi"]).read_text(
         encoding="utf-8"
-    )
+    ) == OPENAPI.read_text(encoding="utf-8")
     assert data["api"]["base_path"] == "/api/v1"
     assert data["api"]["supported_majors"] == ["v1"]
 
@@ -154,7 +154,11 @@ def declared_header_parameters(text: str, path: str, method: str) -> set[str]:
             in_parameters = expect_name = False
         elif on_method and line.strip() == "parameters:":
             in_parameters = True
-        elif in_parameters and line.startswith("        ") and not line.startswith("         "):
+        elif (
+            in_parameters
+            and line.startswith("        ")
+            and not line.startswith("         ")
+        ):
             stripped = line.strip()
             expect_name = stripped == "- in: header"
             if stripped.startswith("- in:") and not expect_name:
@@ -174,18 +178,21 @@ def test_declared_headers_of_the_lifecycle_read_match_the_implementation():
     comparison are checked, so the contract cannot run ahead of the code either.
     """
     path, method = "/api/v1/tenants/{tenant_id}/lifecycle", "get"
-    declared = declared_header_parameters(OPENAPI.read_text(encoding="utf-8"), path, method)
+    declared = declared_header_parameters(
+        OPENAPI.read_text(encoding="utf-8"), path, method
+    )
     schema = create_app(tenant_authority()).openapi()
     implemented = {
         parameter["name"]
         for parameter in schema["paths"][path][method].get("parameters", [])
         if parameter.get("in") == "header"
-    } - {"authorization"}  # declared as security, not as a parameter
+    } - {
+        "authorization"
+    }  # declared as security, not as a parameter
 
     assert "X-Correlation-Id" in declared
     assert "X-Request-Id" in declared
-    assert declared == implemented, (declared ^ implemented)
-
+    assert declared == implemented, declared ^ implemented
 
 
 def test_declared_permissions_exist_and_are_enforced():
@@ -349,13 +356,19 @@ def test_openapi_declares_the_state_and_reason_vocabulary():
 
     state_block = text.split("    TenantState:\n", 1)[1].split("    Tenant:", 1)[0]
     declared_states = {
-        line.strip()[2:] for line in state_block.splitlines() if line.strip().startswith("- ")
+        line.strip()[2:]
+        for line in state_block.splitlines()
+        if line.strip().startswith("- ")
     }
     assert declared_states == {state.value for state in TenantState}
 
-    reason_block = text.split("    LifecycleDecision:", 1)[1].split("      enum:\n", 1)[1]
+    reason_block = text.split("    LifecycleDecision:", 1)[1].split("      enum:\n", 1)[
+        1
+    ]
     declared_reasons = {
-        line.strip()[2:] for line in reason_block.splitlines() if line.strip().startswith("- ")
+        line.strip()[2:]
+        for line in reason_block.splitlines()
+        if line.strip().startswith("- ")
     }
     produced_reasons = {policy[1] for policy in OPERATION_POLICY.values()}
     assert produced_reasons <= declared_reasons
@@ -392,7 +405,13 @@ def test_audit_and_transition_record_shapes_are_declared_and_real():
     }
     assert data["audit"]["denials_audited"] is True
     audit_fields = {f.name for f in fields(AuditEvent)}
-    assert {"request_id", "correlation_id", "actor_id", "tenant_id", "decision"} <= audit_fields
+    assert {
+        "request_id",
+        "correlation_id",
+        "actor_id",
+        "tenant_id",
+        "decision",
+    } <= audit_fields
 
 
 def test_component_has_no_declared_dependencies():
@@ -415,7 +434,9 @@ def test_configuration_schema_rejects_unknown_keys_at_build_time():
     }
     assert schema["required"] == ["platform_id"]
 
-    config = TenantAuthorityConfig.from_mapping({"platform_id": "plt_x", "environment": "test"})
+    config = TenantAuthorityConfig.from_mapping(
+        {"platform_id": "plt_x", "environment": "test"}
+    )
     assert config.platform_id == "plt_x"
     with pytest.raises(ConfigurationError):
         TenantAuthorityConfig.from_mapping({"platform_id": "plt_x", "unknown": 1})

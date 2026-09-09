@@ -16,9 +16,7 @@ from fastapi.testclient import TestClient
 
 from learning_service.store import LearningStore
 from tests.test_learning_authoring import (
-    STUDENT_C,
     TEACHER_A,
-    TEACHER_B,
     author_hierarchy,
     authoring_harness,
     create_assignment,
@@ -27,7 +25,7 @@ from tests.test_learning_authoring import (
     create_module,
     read_course,
 )
-from tests.test_learning_slice1 import envelope_of
+from tests.test_learning_slice1 import STUDENT_C, TEACHER_B, envelope_of
 
 
 # ---------------------------------------------------------------- publication
@@ -65,14 +63,21 @@ def test_publication_flips_the_whole_hierarchy_atomically():
 
     response = harness.http().post(
         f"/api/v1/learning/courses/{course_id}/publish",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-deep-pub"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-deep-pub",
+        },
     )
 
     assert response.status_code == 200, response.text
     store = harness.learning.store
     for module_id in (module_a["module_id"], module_b["module_id"]):
         assert store.modules[module_id].status == "PUBLISHED"
-    for lesson_id in (lesson_a1["lesson_id"], lesson_a2["lesson_id"], lesson_b1["lesson_id"]):
+    for lesson_id in (
+        lesson_a1["lesson_id"],
+        lesson_a2["lesson_id"],
+        lesson_b1["lesson_id"],
+    ):
         assert store.lessons[lesson_id].status == "PUBLISHED"
     assert store.assignments[asg["assignment_id"]].status == "PUBLISHED"
 
@@ -83,14 +88,20 @@ def test_publication_of_a_non_draft_course_is_refused():
 
     first = harness.http().post(
         f"/api/v1/learning/courses/{ids['course_id']}/publish",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-twice-1"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-twice-1",
+        },
     )
     assert first.status_code == 200
 
     # A second publication under a different key is an invalid transition.
     second = harness.http().post(
         f"/api/v1/learning/courses/{ids['course_id']}/publish",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-twice-2"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-twice-2",
+        },
     )
     assert second.status_code == 409
     body = envelope_of(second)
@@ -119,7 +130,10 @@ def test_publication_refuses_an_invalid_hierarchy_and_leaves_nothing_published()
 
     response = harness.http().post(
         f"/api/v1/learning/courses/{ids['course_id']}/publish",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-badtree-1"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-badtree-1",
+        },
     )
 
     assert response.status_code == 409
@@ -150,12 +164,16 @@ def test_publication_refuses_a_cross_tenant_hierarchy_and_leaves_nothing_publish
 
     response = harness.http().post(
         f"/api/v1/learning/courses/{ids['course_id']}/publish",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-xmod-1"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-xmod-1",
+        },
     )
 
     assert response.status_code == 409
     assert (
-        envelope_of(response)["error"]["details"]["reason"] == "invalid_state_transition"
+        envelope_of(response)["error"]["details"]["reason"]
+        == "invalid_state_transition"
     )
     store = harness.learning.store
     assert store.courses[ids["course_id"]].status == "DRAFT"
@@ -172,10 +190,14 @@ def test_publication_is_idempotent_on_exact_replay():
         "idempotency-key": "ik-replay-pub",
     }
 
-    first = http.post(f"/api/v1/learning/courses/{ids['course_id']}/publish", headers=headers)
+    first = http.post(
+        f"/api/v1/learning/courses/{ids['course_id']}/publish", headers=headers
+    )
     assert first.status_code == 200
     published_at = first.json()["updated_at"]
-    replay = http.post(f"/api/v1/learning/courses/{ids['course_id']}/publish", headers=headers)
+    replay = http.post(
+        f"/api/v1/learning/courses/{ids['course_id']}/publish", headers=headers
+    )
 
     assert replay.status_code == 200
     assert replay.json() == first.json()
@@ -184,9 +206,7 @@ def test_publication_is_idempotent_on_exact_replay():
     actions = [event.action for event in harness.learning.store.audit]
     assert actions.count("learning.courses.publish") == 2
     assert actions.count("idempotency_replay") == 1
-    assert (
-        harness.learning.store.courses[ids["course_id"]].updated_at == published_at
-    )
+    assert harness.learning.store.courses[ids["course_id"]].updated_at == published_at
 
 
 def test_concurrent_same_key_publication_executes_the_effect_once():
@@ -227,12 +247,18 @@ def test_a_teacher_archives_a_published_hierarchy():
     ids = author_hierarchy(harness, key_prefix="ik-arch")
     harness.http().post(
         f"/api/v1/learning/courses/{ids['course_id']}/publish",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-arch-p"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-arch-p",
+        },
     )
 
     response = harness.http().post(
         f"/api/v1/learning/courses/{ids['course_id']}/archive",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-arch-1"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-arch-1",
+        },
     )
 
     assert response.status_code == 200, response.text
@@ -250,7 +276,10 @@ def test_archiving_a_draft_course_is_refused():
 
     response = harness.http().post(
         f"/api/v1/learning/courses/{ids['course_id']}/archive",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-archdraft-1"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-archdraft-1",
+        },
     )
 
     assert response.status_code == 409
@@ -266,15 +295,21 @@ def test_archive_is_idempotent_on_exact_replay():
         "authorization": f"Bearer {TEACHER_A}",
         "idempotency-key": "ik-archrep-p",
     }
-    http.post(f"/api/v1/learning/courses/{ids['course_id']}/publish", headers=publish_headers)
+    http.post(
+        f"/api/v1/learning/courses/{ids['course_id']}/publish", headers=publish_headers
+    )
     headers = {
         "authorization": f"Bearer {TEACHER_A}",
         "idempotency-key": "ik-archrep-1",
     }
-    first = http.post(f"/api/v1/learning/courses/{ids['course_id']}/archive", headers=headers)
+    first = http.post(
+        f"/api/v1/learning/courses/{ids['course_id']}/archive", headers=headers
+    )
     assert first.status_code == 200
 
-    replay = http.post(f"/api/v1/learning/courses/{ids['course_id']}/archive", headers=headers)
+    replay = http.post(
+        f"/api/v1/learning/courses/{ids['course_id']}/archive", headers=headers
+    )
 
     assert replay.status_code == 200
     assert replay.json() == first.json()
@@ -289,16 +324,21 @@ def test_repeated_archive_under_a_new_key_is_refused():
     http = harness.http()
     for key in ("ik-arch2-p", "ik-arch2-1"):
         response = http.post(
-            f"/api/v1/learning/courses/{ids['course_id']}/publish"
-            if key.endswith("p")
-            else f"/api/v1/learning/courses/{ids['course_id']}/archive",
+            (
+                f"/api/v1/learning/courses/{ids['course_id']}/publish"
+                if key.endswith("p")
+                else f"/api/v1/learning/courses/{ids['course_id']}/archive"
+            ),
             headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": key},
         )
         assert response.status_code == 200
 
     again = http.post(
         f"/api/v1/learning/courses/{ids['course_id']}/archive",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-arch2-2"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-arch2-2",
+        },
     )
 
     assert again.status_code == 409
@@ -310,12 +350,18 @@ def test_no_unpublish_and_no_unarchive_exist():
     ids = author_hierarchy(harness, key_prefix="ik-no-undo")
 
     # The published surface offers no way back: no route, no store method.
-    assert harness.http().post(
-        f"/api/v1/learning/courses/{ids['course_id']}/unpublish"
-    ).status_code == 404
-    assert harness.http().post(
-        f"/api/v1/learning/courses/{ids['course_id']}/unarchive"
-    ).status_code == 404
+    assert (
+        harness.http()
+        .post(f"/api/v1/learning/courses/{ids['course_id']}/unpublish")
+        .status_code
+        == 404
+    )
+    assert (
+        harness.http()
+        .post(f"/api/v1/learning/courses/{ids['course_id']}/unarchive")
+        .status_code
+        == 404
+    )
     assert not hasattr(harness.learning.store, "unpublish_course")
     assert not hasattr(harness.learning.store, "unarchive_course")
 
@@ -323,15 +369,24 @@ def test_no_unpublish_and_no_unarchive_exist():
     http = harness.http()
     http.post(
         f"/api/v1/learning/courses/{ids['course_id']}/publish",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-no-undo-p"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-no-undo-p",
+        },
     )
     http.post(
         f"/api/v1/learning/courses/{ids['course_id']}/archive",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-no-undo-a"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-no-undo-a",
+        },
     )
     revived = http.post(
         f"/api/v1/learning/courses/{ids['course_id']}/publish",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-no-undo-p2"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-no-undo-p2",
+        },
     )
     assert revived.status_code == 409
 
@@ -342,7 +397,10 @@ def test_a_published_hierarchy_is_immutable():
     ids = author_hierarchy(harness, key_prefix="ik-immutable")
     harness.http().post(
         f"/api/v1/learning/courses/{ids['course_id']}/publish",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-immutable-p"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-immutable-p",
+        },
     )
 
     # No child creation under any published parent.
@@ -377,7 +435,10 @@ def test_a_student_reads_a_published_hierarchy_of_the_own_tenant():
     ids = author_hierarchy(harness, key_prefix="ik-sturead")
     harness.http().post(
         f"/api/v1/learning/courses/{ids['course_id']}/publish",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-sturead-p"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-sturead-p",
+        },
     )
 
     response = harness.http().get(
@@ -411,11 +472,17 @@ def test_a_student_cannot_read_an_archived_hierarchy():
     http = harness.http()
     http.post(
         f"/api/v1/learning/courses/{ids['course_id']}/publish",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-stuarch-p"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-stuarch-p",
+        },
     )
     http.post(
         f"/api/v1/learning/courses/{ids['course_id']}/archive",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-stuarch-a"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-stuarch-a",
+        },
     )
 
     response = harness.http().get(
@@ -435,11 +502,17 @@ def test_the_teacher_keeps_reading_after_archive():
     http = harness.http()
     http.post(
         f"/api/v1/learning/courses/{ids['course_id']}/publish",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-teacharch-p"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-teacharch-p",
+        },
     )
     http.post(
         f"/api/v1/learning/courses/{ids['course_id']}/archive",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-teacharch-a"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-teacharch-a",
+        },
     )
 
     response = read_course(harness, ids["course_id"])
@@ -456,20 +529,52 @@ def test_every_authoring_command_requires_an_idempotency_key():
     headers = {"authorization": f"Bearer {TEACHER_A}"}
     expected = [
         ("post", "/api/v1/learning/courses", {"title": "t", "description": "d"}),
-        ("post", f"/api/v1/learning/courses/{ids['course_id']}/modules", {"title": "t", "position": 1}),
-        ("post", f"/api/v1/learning/modules/{ids['module_id']}/lessons", {"title": "t", "content": "c", "position": 1}),
-        ("post", f"/api/v1/learning/lessons/{ids['lesson_id']}/assignments", {"title": "t", "instructions": "i"}),
+        (
+            "post",
+            f"/api/v1/learning/courses/{ids['course_id']}/modules",
+            {"title": "t", "position": 1},
+        ),
+        (
+            "post",
+            f"/api/v1/learning/modules/{ids['module_id']}/lessons",
+            {"title": "t", "content": "c", "position": 1},
+        ),
+        (
+            "post",
+            f"/api/v1/learning/lessons/{ids['lesson_id']}/assignments",
+            {"title": "t", "instructions": "i"},
+        ),
         ("post", f"/api/v1/learning/courses/{ids['course_id']}/publish", None),
         ("post", f"/api/v1/learning/courses/{ids['course_id']}/archive", None),
     ]
     # The course under test is DRAFT and the children DRAFT, so every refusal
     # below is the missing key, not the state rule.
     draft_ids = author_hierarchy(harness, key_prefix="ik-nokey2")
-    expected[1] = ("post", f"/api/v1/learning/courses/{draft_ids['course_id']}/modules", {"title": "t", "position": 1})
-    expected[2] = ("post", f"/api/v1/learning/modules/{draft_ids['module_id']}/lessons", {"title": "t", "content": "c", "position": 1})
-    expected[3] = ("post", f"/api/v1/learning/lessons/{draft_ids['lesson_id']}/assignments", {"title": "t", "instructions": "i"})
-    expected[4] = ("post", f"/api/v1/learning/courses/{draft_ids['course_id']}/publish", None)
-    expected[5] = ("post", f"/api/v1/learning/courses/{draft_ids['course_id']}/archive", None)
+    expected[1] = (
+        "post",
+        f"/api/v1/learning/courses/{draft_ids['course_id']}/modules",
+        {"title": "t", "position": 1},
+    )
+    expected[2] = (
+        "post",
+        f"/api/v1/learning/modules/{draft_ids['module_id']}/lessons",
+        {"title": "t", "content": "c", "position": 1},
+    )
+    expected[3] = (
+        "post",
+        f"/api/v1/learning/lessons/{draft_ids['lesson_id']}/assignments",
+        {"title": "t", "instructions": "i"},
+    )
+    expected[4] = (
+        "post",
+        f"/api/v1/learning/courses/{draft_ids['course_id']}/publish",
+        None,
+    )
+    expected[5] = (
+        "post",
+        f"/api/v1/learning/courses/{draft_ids['course_id']}/archive",
+        None,
+    )
 
     for method, url, payload in expected:
         response = getattr(http, method)(url, headers=headers, json=payload)
@@ -527,7 +632,11 @@ def test_exact_replay_of_every_child_creation_replays_without_a_second_effect():
     actions = [event.action for event in harness.learning.store.audit]
     assert actions.count("idempotency_replay") == 3
     store = harness.learning.store
-    assert len(store.modules) == 1 and len(store.lessons) == 1 and len(store.assignments) == 1
+    assert (
+        len(store.modules) == 1
+        and len(store.lessons) == 1
+        and len(store.assignments) == 1
+    )
 
 
 def test_a_changed_payload_under_the_same_key_is_a_conflict():
@@ -547,14 +656,10 @@ def test_a_changed_identity_under_the_same_key_is_a_conflict():
     harness = authoring_harness(store=LearningStore())
     # A second teacher of the SAME tenant: the tenant binding is identical,
     # the identity binding is not.
-    harness.instance.authorization.store.grant(
-        "ten_a", "idn_human_c", *TEACHER_GRANTS
-    )
+    harness.instance.authorization.store.grant("ten_a", "idn_human_c", *TEACHER_GRANTS)
 
     first = create_course(harness, key="ik-identity", token=TEACHER_A)
-    conflict = create_course(
-        harness, key="ik-identity", token=STUDENT_C
-    )
+    conflict = create_course(harness, key="ik-identity", token=STUDENT_C)
 
     assert first.status_code == 201
     assert conflict.status_code == 409
@@ -572,9 +677,9 @@ def test_a_changed_tenant_under_the_same_key_is_a_conflict():
     assert conflict.status_code == 409
     assert envelope_of(conflict)["error"]["code"] == "IDEMPOTENCY_CONFLICT"
     # Only the tenant A course exists.
-    assert [
-        course.tenant_id for course in harness.learning.store.courses.values()
-    ] == ["ten_a"]
+    assert [course.tenant_id for course in harness.learning.store.courses.values()] == [
+        "ten_a"
+    ]
 
 
 def test_a_changed_target_under_the_same_key_is_a_conflict():
@@ -599,12 +704,18 @@ def test_a_publish_key_is_not_reusable_for_a_different_operation():
 
     published = harness.http().post(
         f"/api/v1/learning/courses/{ids['course_id']}/publish",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-opmix-x"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-opmix-x",
+        },
     )
     assert published.status_code == 200
     conflict = harness.http().post(
         f"/api/v1/learning/courses/{ids['course_id']}/archive",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-opmix-x"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-opmix-x",
+        },
     )
 
     assert conflict.status_code == 409
@@ -618,7 +729,9 @@ def test_denied_authorization_creates_no_idempotency_record_and_no_effect():
     response = create_course(harness, key="ik-denied", token=STUDENT_C)
 
     assert response.status_code == 403
-    assert envelope_of(response)["error"]["details"]["reason"] == "permission_not_granted"
+    assert (
+        envelope_of(response)["error"]["details"]["reason"] == "permission_not_granted"
+    )
     # No business effect and no record: a DENY never binds a key.
     assert harness.learning.store.courses == {}
     assert "ik-denied" not in harness.learning.engine.idempotency._store
@@ -634,7 +747,10 @@ def test_a_failing_identity_dependency_fails_the_command_closed():
 
     harness = authoring_harness(store=LearningStore())
     learning = build_learning(
-        {"platform_id": harness.instance.authority.current_platform_id, "environment": "test"},
+        {
+            "platform_id": harness.instance.authority.current_platform_id,
+            "environment": "test",
+        },
         authorization=authorization_port(
             harness.instance.authorization.publish(credential=LEARNING_CREDENTIAL_REF)
         ),
@@ -687,14 +803,15 @@ def test_a_failing_authorization_dependency_fails_the_command_closed():
 
 # ----------------------------------------------------------------- regression
 def test_the_submission_flow_keeps_working_alongside_authoring():
-    from tests.test_learning_authoring import TEACHER_A as TEACHER
-
     harness = authoring_harness()
     ids = author_hierarchy(harness, key_prefix="ik-regression")
     http = harness.http()
     http.post(
         f"/api/v1/learning/courses/{ids['course_id']}/publish",
-        headers={"authorization": f"Bearer {TEACHER_A}", "idempotency-key": "ik-regression-p"},
+        headers={
+            "authorization": f"Bearer {TEACHER_A}",
+            "idempotency-key": "ik-regression-p",
+        },
     )
 
     review = http.post(

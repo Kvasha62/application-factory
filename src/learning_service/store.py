@@ -64,6 +64,7 @@ from learning_service.models import (
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
+
 #: Submission lifecycle of this slice — exactly these two states. No
 #: grading/review states exist.
 SUBMISSION_STATES: tuple[str, ...] = ("DRAFT", "SUBMITTED")
@@ -130,7 +131,7 @@ class LearningStore:
     def _text(value: object, *, what: str, max_length: int) -> str:
         """Validate one content string of an authored record."""
         if not isinstance(value, str):
-            raise ValueError(f"{what} must be a string")
+            raise TypeError(f"{what} must be a string")
         if not value.strip():
             raise ValueError(f"{what} must not be empty")
         if len(value) > max_length:
@@ -140,7 +141,7 @@ class LearningStore:
     @staticmethod
     def _position(value: object) -> int:
         if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError("position must be an integer")
+            raise TypeError("position must be an integer")
         if value < 0:
             raise ValueError("position must not be negative")
         return value
@@ -198,7 +199,9 @@ class LearningStore:
             raise ValueError(f"unknown course status {course.status!r}")
         self._text(course.title, what="a course title", max_length=512)
         if not isinstance(course.description, str) or len(course.description) > 4096:
-            raise ValueError("a course description must be a string of at most 4096 chars")
+            raise ValueError(
+                "a course description must be a string of at most 4096 chars"
+            )
         if not course.created_by or not str(course.created_by).strip():
             raise ValueError("a course must record the identity that created it")
         if course.course_id in self.courses:
@@ -242,9 +245,7 @@ class LearningStore:
                 "a module needs a registered parent course"
             )
         if module.tenant_id != parent.tenant_id:
-            raise ValueError(
-                "a module must belong to the same tenant as its course"
-            )
+            raise ValueError("a module must belong to the same tenant as its course")
         self.modules[module.module_id] = module
         return module
 
@@ -281,9 +282,7 @@ class LearningStore:
                 "a lesson needs a registered parent module"
             )
         if lesson.tenant_id != parent.tenant_id:
-            raise ValueError(
-                "a lesson must belong to the same tenant as its module"
-            )
+            raise ValueError("a lesson must belong to the same tenant as its module")
         self.lessons[lesson.lesson_id] = lesson
         return lesson
 
@@ -322,8 +321,13 @@ class LearningStore:
                 raise ValueError(
                     "an assignment must belong to the same tenant as its lesson"
                 )
-            self._text(assignment.title or "", what="an assignment title", max_length=512)
-            if not isinstance(assignment.instructions, str) or len(assignment.instructions) > 4096:
+            self._text(
+                assignment.title or "", what="an assignment title", max_length=512
+            )
+            if (
+                not isinstance(assignment.instructions, str)
+                or len(assignment.instructions) > 4096
+            ):
                 raise ValueError(
                     "assignment instructions must be a string of at most 4096 chars"
                 )
@@ -363,7 +367,7 @@ class LearningStore:
         if not isinstance(submission.attempt, int) or submission.attempt < 1:
             raise ValueError("attempt must be a positive integer")
         if not isinstance(submission.content, dict):
-            raise ValueError("content must be an object")
+            raise TypeError("content must be an object")
         self.submissions[submission.submission_id] = submission
         return submission
 
@@ -539,9 +543,7 @@ class LearningStore:
         modules.sort(key=lambda m: (m.position, m.module_id))
         module_ids = {module.module_id for module in modules}
         lessons = [
-            lesson
-            for lesson in self.lessons.values()
-            if lesson.module_id in module_ids
+            lesson for lesson in self.lessons.values() if lesson.module_id in module_ids
         ]
         lessons.sort(key=lambda l: (l.position, l.lesson_id))
         lesson_ids = {lesson.lesson_id for lesson in lessons}
@@ -649,7 +651,9 @@ class LearningStore:
 
     def course_hierarchy(
         self, course_id: str
-    ) -> tuple[OwnedCourse, list[OwnedModule], list[OwnedLesson], list[OwnedAssignment]]:
+    ) -> tuple[
+        OwnedCourse, list[OwnedModule], list[OwnedLesson], list[OwnedAssignment]
+    ]:
         """The owned-data hierarchy-read operation. Called only after an ALLOW.
 
         Returns the Course and its complete descendant chain in deterministic
@@ -669,7 +673,9 @@ class LearningStore:
         """The owned-data single-read operation. Called only after an ALLOW."""
         return self.submissions[submission_id]
 
-    def list_submissions_for_assignment(self, assignment_id: str) -> list[OwnedSubmission]:
+    def list_submissions_for_assignment(
+        self, assignment_id: str
+    ) -> list[OwnedSubmission]:
         """The owned-data list operation. Called only after an ALLOW.
 
         Returns only submissions belonging to the requested Assignment, in
@@ -721,9 +727,7 @@ class LearningStore:
             # first command never reaches this method — IS-005 returns the
             # recorded result.)
             raise DomainRefusal("already_reviewed")
-        updated = replace(
-            submission, reviewed_by=reviewed_by, reviewed_at=reviewed_at
-        )
+        updated = replace(submission, reviewed_by=reviewed_by, reviewed_at=reviewed_at)
         self.submissions[submission_id] = updated
         return updated
 

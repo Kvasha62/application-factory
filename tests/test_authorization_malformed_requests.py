@@ -22,7 +22,11 @@ from authorization_service.engine import DECISION_ACTION
 from authorization_service.errors import CallerDenyReason, MalformedDecisionRequest
 from tests.conftest import DATA_OWNER_CREDENTIAL, monolith
 
-VALID_RESOURCE = {"resource_type": "record", "resource_id": "rec_a1", "tenant_id": "ten_a"}
+VALID_RESOURCE = {
+    "resource_type": "record",
+    "resource_id": "rec_a1",
+    "tenant_id": "ten_a",
+}
 RESOURCE = ResourceRef("record", "rec_a1", "ten_a")
 
 #: The three ways the published schema can reject a decision request.
@@ -61,7 +65,9 @@ def test_a_request_the_schema_rejects_is_refused_and_audited(case):
 
     response = http.post(
         "/api/v1/decisions",
-        headers=headers(**{"X-Request-Id": f"req-{case}", "X-Correlation-Id": f"cor-{case}"}),
+        headers=headers(
+            **{"X-Request-Id": f"req-{case}", "X-Correlation-Id": f"cor-{case}"}
+        ),
         json=MALFORMED_BODIES[case],
     )
 
@@ -168,7 +174,10 @@ def test_a_caller_of_another_platform_instance_is_not_attributed_to_this_one():
     instance = monolith()
     instance.authorization_http().post(
         "/api/v1/decisions",
-        headers={"Authorization": "Bearer authz-svc-token-foreign", "X-Request-Id": "req-foreign"},
+        headers={
+            "Authorization": "Bearer authz-svc-token-foreign",
+            "X-Request-Id": "req-foreign",
+        },
         json={"resource": VALID_RESOURCE},
     )
     event = refusals(instance)[0]
@@ -247,7 +256,11 @@ def test_every_refusal_of_the_contract_reaches_the_journal():
         request_id = f"req-refusal-{index}"
         response = http.post(
             "/api/v1/decisions",
-            headers={**extra_headers, "X-Request-Id": request_id, "X-Correlation-Id": "cor-all"},
+            headers={
+                **extra_headers,
+                "X-Request-Id": request_id,
+                "X-Correlation-Id": "cor-all",
+            },
             json=body,
         )
         assert response.status_code == status, reason
@@ -255,7 +268,9 @@ def test_every_refusal_of_the_contract_reaches_the_journal():
         assert response.json()["detail"]["request_id"] == request_id
 
         event = next(
-            item for item in instance.authorization.store.audit if item.request_id == request_id
+            item
+            for item in instance.authorization.store.audit
+            if item.request_id == request_id
         )
         assert event.decision is Decision.DENY
         assert event.details["refused"] == reason

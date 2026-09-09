@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tenant_authority import COMPONENT_ID, COMPONENT_VERSION
 from tenant_authority.contracts import LifecycleDecision, TenantSnapshot, TenantState
-from tenant_authority.deployment import TenantAuthorityDeployment, build_deployment
+from tenant_authority.deployment import TenantAuthorityDeployment
 from tenant_authority.errors import DenyReason, TenantAuthorityError
 from tenant_authority.lifecycle import ALLOWED_TRANSITIONS
 from tenant_authority.models import LifecycleTransition
@@ -156,7 +156,13 @@ def create_app(deployment: TenantAuthorityDeployment) -> FastAPI:
     def lifecycle_machine() -> dict:
         """Published state machine: which transitions this authority accepts."""
         return {
-            "lifecycle": ["provisioning", "active", "suspended", "deletion_requested", "deleted"],
+            "lifecycle": [
+                "provisioning",
+                "active",
+                "suspended",
+                "deletion_requested",
+                "deleted",
+            ],
             "allowed_transitions": {
                 state.value: sorted(target.value for target in targets)
                 for state, targets in ALLOWED_TRANSITIONS.items()
@@ -248,7 +254,9 @@ def create_app(deployment: TenantAuthorityDeployment) -> FastAPI:
             raise _deny(exc, x_request_id) from exc
         return _lifecycle_out(decision)
 
-    @app.get("/api/v1/tenants/{tenant_id}/transitions", response_model=list[TransitionOut])
+    @app.get(
+        "/api/v1/tenants/{tenant_id}/transitions", response_model=list[TransitionOut]
+    )
     def tenant_transitions(
         tenant_id: str,
         authorization: str | None = Header(default=None),
@@ -292,9 +300,3 @@ def create_app(deployment: TenantAuthorityDeployment) -> FastAPI:
         return _transition_out(transition)
 
     return app
-
-
-_deployment = build_deployment({"platform_id": "plt_demo"}, seed_demo=True, with_http=True)
-
-#: ASGI application of the standalone demo deployment (`tenant_authority.api:app`).
-app = _deployment.http_app

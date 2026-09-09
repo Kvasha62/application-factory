@@ -24,7 +24,9 @@ from identity_service.models import DenyReason
 from tests.conftest import PLATFORM_ID, monolith
 
 
-def resource(tenant_id: str | None = "ten_a", resource_id: str = "rec_a1") -> ResourceRef:
+def resource(
+    tenant_id: str | None = "ten_a", resource_id: str = "rec_a1"
+) -> ResourceRef:
     return ResourceRef("record", resource_id, tenant_id)
 
 
@@ -135,7 +137,9 @@ def test_without_the_identity_component_no_decision_can_be_made():
         with_http=True,
     )
     client = deployment.publish(credential="authz-svc-token-records")
-    answer = client.decide("token-human-a", operation="records.read", resource=resource())
+    answer = client.decide(
+        "token-human-a", operation="records.read", resource=resource()
+    )
     assert answer.decision is Decision.DENY
     assert answer.reason is Reason.AUTHORITY_UNAVAILABLE
     assert answer.tenant_id is None
@@ -177,7 +181,9 @@ def test_an_identity_denial_is_translated_and_never_swallowed():
             with_http=True,
         )
         client = deployment.publish(credential="authz-svc-token-records")
-        answer = client.decide("token-human-a", operation="records.read", resource=resource())
+        answer = client.decide(
+            "token-human-a", operation="records.read", resource=resource()
+        )
         assert answer.decision is Decision.DENY, denial
         assert answer.reason is reason, denial
 

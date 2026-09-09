@@ -24,10 +24,14 @@ class RecordsConfig:
         declared = {f.name for f in fields(cls)}
         unknown = sorted(set(payload) - declared)
         if unknown:
-            raise ConfigurationError("unknown configuration key(s): " + ", ".join(unknown))
+            raise ConfigurationError(
+                "unknown configuration key(s): " + ", ".join(unknown)
+            )
         platform_id = payload.get("platform_id")
         if not isinstance(platform_id, str) or not platform_id.strip():
-            raise ConfigurationError("`platform_id` is required and must be a non-empty string")
+            raise ConfigurationError(
+                "`platform_id` is required and must be a non-empty string"
+            )
         environment = payload.get("environment", "standalone")
         if not isinstance(environment, str) or not environment.strip():
             raise ConfigurationError("`environment` must be a non-empty string")

@@ -35,7 +35,6 @@ ContractTransport = Callable[
 ]
 
 
-
 class ASGIContractTransport:
     """Execute one request against an ASGI application, in-process.
 
@@ -79,7 +78,9 @@ class ASGIContractTransport:
                     loop.call_soon(ready.set)
                     loop.run_forever()
 
-                threading.Thread(target=run, name="identity-contract-transport", daemon=True).start()
+                threading.Thread(
+                    target=run, name="identity-contract-transport", daemon=True
+                ).start()
                 ready.wait()
                 self._portal_loop = loop
             return self._portal_loop
@@ -110,7 +111,10 @@ class ASGIContractTransport:
             # does not have.
             "headers": [
                 *(
-                    [(b"content-type", b"application/json"), (b"content-length", str(len(raw)).encode())]
+                    [
+                        (b"content-type", b"application/json"),
+                        (b"content-length", str(len(raw)).encode()),
+                    ]
                     if raw
                     else []
                 ),
@@ -258,4 +262,3 @@ def asgi_transport(app: Any) -> ContractTransport:
         return transport(method, path, headers, body)
 
     return call
-

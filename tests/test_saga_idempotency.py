@@ -192,7 +192,6 @@ def test_an_interrupted_compensation_phase_resumes_without_a_second_undo():
         if interrupted["count"] == 0:
             interrupted["count"] += 1
             raise KeyboardInterrupt("process died during compensation")
-        return None
 
     definition = harness.definition(
         "interrupted-recovery",
@@ -227,7 +226,6 @@ def test_an_undo_that_already_happened_is_not_applied_again_on_resume():
         if not state["crashed"]:
             state["crashed"] = True
             raise KeyboardInterrupt("process died during compensation")
-        return None
 
     definition = harness.definition(
         "interrupted-recovery-2",

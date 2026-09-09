@@ -139,14 +139,18 @@ class AuthorizationClient:
     @staticmethod
     def _error(status: int, payload: Mapping[str, Any]) -> BaseException:
         if status >= 500:
-            return ContractViolation(f"authorization contract failed with status {status}")
+            return ContractViolation(
+                f"authorization contract failed with status {status}"
+            )
         detail = payload.get("detail")
         detail = detail if isinstance(detail, Mapping) else {}
-        reason = _as_caller_reason(detail.get("reason")) or _DEFAULT_REASON_BY_STATUS.get(
-            status, CallerDenyReason.MALFORMED_REQUEST
-        )
+        reason = _as_caller_reason(
+            detail.get("reason")
+        ) or _DEFAULT_REASON_BY_STATUS.get(status, CallerDenyReason.MALFORMED_REQUEST)
         error_type = _ERROR_BY_REASON.get(reason, AuthorizationServiceError)
-        return error_type(reason, str(detail.get("reason") or reason.value), details=dict(detail))
+        return error_type(
+            reason, str(detail.get("reason") or reason.value), details=dict(detail)
+        )
 
 
 def _decision_from(payload: Mapping[str, Any]) -> AuthorizationDecision:

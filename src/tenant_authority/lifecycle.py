@@ -28,8 +28,12 @@ from tenant_authority.errors import DenyReason, InvalidTransition
 
 ALLOWED_TRANSITIONS: dict[TenantState, frozenset[TenantState]] = {
     TenantState.PROVISIONING: frozenset({TenantState.ACTIVE}),
-    TenantState.ACTIVE: frozenset({TenantState.SUSPENDED, TenantState.DELETION_REQUESTED}),
-    TenantState.SUSPENDED: frozenset({TenantState.ACTIVE, TenantState.DELETION_REQUESTED}),
+    TenantState.ACTIVE: frozenset(
+        {TenantState.SUSPENDED, TenantState.DELETION_REQUESTED}
+    ),
+    TenantState.SUSPENDED: frozenset(
+        {TenantState.ACTIVE, TenantState.DELETION_REQUESTED}
+    ),
     TenantState.DELETION_REQUESTED: frozenset({TenantState.DELETED}),
     # `deleted` is terminal: no transition may leave it (T-006).
     TenantState.DELETED: frozenset(),

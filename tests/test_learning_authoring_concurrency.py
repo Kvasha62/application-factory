@@ -25,7 +25,6 @@ from fastapi.testclient import TestClient
 from tests.test_learning_authoring import (
     TEACHER_A,
     authoring_harness,
-    create_assignment,
     create_course,
     create_lesson,
     create_module,
@@ -79,9 +78,9 @@ def assert_uniform_hierarchy(store, course_id: str) -> None:
     leftover ``PUBLISHED``/``DRAFT`` record) is exactly the defect.
     """
     statuses = hierarchy_statuses(store, course_id)
-    assert set(statuses) == {statuses[0]}, (
-        f"hierarchy of {course_id} is mixed: {statuses}"
-    )
+    assert set(statuses) == {
+        statuses[0]
+    }, f"hierarchy of {course_id} is mixed: {statuses}"
 
 
 def race(harness, attempts: list[Callable[[], Any]]) -> list[Any]:
@@ -152,14 +151,14 @@ def test_concurrent_publication_and_module_creation_cannot_mix_states():
         publish_response, child_response = race(
             harness,
             [
-                lambda: http.post(
+                lambda course_id=course_id, i=i: http.post(
                     f"/api/v1/learning/courses/{course_id}/publish",
                     headers={
                         "authorization": f"Bearer {TEACHER_A}",
                         "idempotency-key": f"ik-mix-A-{i}",
                     },
                 ),
-                lambda: http.post(
+                lambda course_id=course_id, i=i: http.post(
                     f"/api/v1/learning/courses/{course_id}/modules",
                     headers={
                         "authorization": f"Bearer {TEACHER_A}",
@@ -210,14 +209,14 @@ def test_concurrent_publication_and_lesson_creation_cannot_mix_states():
         _, lesson_response = race(
             harness,
             [
-                lambda: http.post(
+                lambda course=course, i=i: http.post(
                     f"/api/v1/learning/courses/{course['course_id']}/publish",
                     headers={
                         "authorization": f"Bearer {TEACHER_A}",
                         "idempotency-key": f"ik-lesrace-A-{i}",
                     },
                 ),
-                lambda: http.post(
+                lambda course=course, module=module, i=i: http.post(
                     f"/api/v1/learning/modules/{module['module_id']}/lessons",
                     headers={
                         "authorization": f"Bearer {TEACHER_A}",
@@ -255,14 +254,14 @@ def test_concurrent_publication_and_assignment_creation_cannot_mix_states():
         _, assignment_response = race(
             harness,
             [
-                lambda: http.post(
+                lambda course=course, i=i: http.post(
                     f"/api/v1/learning/courses/{course['course_id']}/publish",
                     headers={
                         "authorization": f"Bearer {TEACHER_A}",
                         "idempotency-key": f"ik-asgrace-A-{i}",
                     },
                 ),
-                lambda: http.post(
+                lambda course=course, lesson=lesson, i=i: http.post(
                     f"/api/v1/learning/lessons/{lesson['lesson_id']}/assignments",
                     headers={
                         "authorization": f"Bearer {TEACHER_A}",
@@ -304,14 +303,14 @@ def test_concurrent_archive_and_child_creation_stay_serialized():
         archive_response, child_response = race(
             harness,
             [
-                lambda: http.post(
+                lambda course=course, i=i: http.post(
                     f"/api/v1/learning/courses/{course['course_id']}/archive",
                     headers={
                         "authorization": f"Bearer {TEACHER_A}",
                         "idempotency-key": f"ik-arcrace-C-{i}",
                     },
                 ),
-                lambda: http.post(
+                lambda course=course, i=i: http.post(
                     f"/api/v1/learning/courses/{course['course_id']}/modules",
                     headers={
                         "authorization": f"Bearer {TEACHER_A}",
@@ -326,7 +325,9 @@ def test_concurrent_archive_and_child_creation_stay_serialized():
         assert archive_response.status_code == 200, (i, archive_response.text)
         # A published hierarchy is immutable in every interleaving.
         assert child_response.status_code == 409, (i, child_response.text)
-        assert envelope_of(child_response)["error"]["code"] == "INVALID_STATE_TRANSITION"
+        assert (
+            envelope_of(child_response)["error"]["code"] == "INVALID_STATE_TRANSITION"
+        )
         assert_uniform_hierarchy(store, course["course_id"])
 
 
@@ -349,14 +350,14 @@ def test_concurrent_publication_and_archive_stay_serialized():
         publish_response, archive_response = race(
             harness,
             [
-                lambda: http.post(
+                lambda course=course, i=i: http.post(
                     f"/api/v1/learning/courses/{course['course_id']}/publish",
                     headers={
                         "authorization": f"Bearer {TEACHER_A}",
                         "idempotency-key": f"ik-parcrace-A-{i}",
                     },
                 ),
-                lambda: http.post(
+                lambda course=course, i=i: http.post(
                     f"/api/v1/learning/courses/{course['course_id']}/archive",
                     headers={
                         "authorization": f"Bearer {TEACHER_A}",
@@ -400,7 +401,9 @@ def test_child_creation_waits_outside_the_publication_critical_section():
     ):
         # Nothing was written while the section was held.
         assert [
-            module for module in store.modules.values() if module.course_id == course["course_id"]
+            module
+            for module in store.modules.values()
+            if module.course_id == course["course_id"]
         ] == []
 
     response = results[0]
@@ -534,11 +537,11 @@ def test_publication_records_the_hierarchy_it_transitioned():
         publish_response, _archive_response = race(
             harness,
             [
-                lambda: http.post(
+                lambda course=course, headers=headers: http.post(
                     f"/api/v1/learning/courses/{course['course_id']}/publish",
                     headers=headers,
                 ),
-                lambda: http.post(
+                lambda course=course, i=i: http.post(
                     f"/api/v1/learning/courses/{course['course_id']}/archive",
                     headers={
                         "authorization": f"Bearer {TEACHER_A}",

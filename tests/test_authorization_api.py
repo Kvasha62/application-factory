@@ -15,7 +15,12 @@ from tests.conftest import monolith
 DATA_OWNER = {"Authorization": "Bearer authz-svc-token-records"}
 
 
-def body(operation="records.read", resource_id="rec_a1", tenant_id="ten_a", resource_type="record"):
+def body(
+    operation="records.read",
+    resource_id="rec_a1",
+    tenant_id="ten_a",
+    resource_type="record",
+):
     return {
         "operation": operation,
         "resource": {
@@ -38,7 +43,10 @@ def test_health_and_readiness_are_published():
     health = client.get("/health")
     assert health.status_code == 200
     assert health.json()["component_id"] == "authorization"
-    assert client.get("/ready").json() == {"status": "ready", "component_id": "authorization"}
+    assert client.get("/ready").json() == {
+        "status": "ready",
+        "component_id": "authorization",
+    }
 
 
 def test_an_allow_is_answered_with_the_published_decision_model():
@@ -46,7 +54,11 @@ def test_an_allow_is_answered_with_the_published_decision_model():
     response = client.post(
         "/api/v1/decisions",
         json=body(),
-        headers={**subject("token-human-a"), "X-Request-Id": "req-http", "X-Correlation-Id": "cor-http"},
+        headers={
+            **subject("token-human-a"),
+            "X-Request-Id": "req-http",
+            "X-Correlation-Id": "cor-http",
+        },
     )
     assert response.status_code == 200
     payload = response.json()
@@ -92,9 +104,14 @@ def test_a_denial_is_an_answer_not_a_transport_failure(token, resource, reason):
         ("Bearer authz-svc-token-foreign", 403, "platform_mismatch"),
     ],
 )
-def test_the_asking_component_is_authenticated_and_authorized(credential, status, reason):
+def test_the_asking_component_is_authenticated_and_authorized(
+    credential, status, reason
+):
     client = monolith().authorization_http()
-    headers = {"X-Subject-Authorization": "Bearer token-human-a", "X-Request-Id": "req-refused"}
+    headers = {
+        "X-Subject-Authorization": "Bearer token-human-a",
+        "X-Request-Id": "req-refused",
+    }
     if credential is not None:
         headers["Authorization"] = credential
     response = client.post("/api/v1/decisions", json=body(), headers=headers)
@@ -108,7 +125,9 @@ def test_the_asking_component_is_authenticated_and_authorized(credential, status
 def test_an_unanswerable_question_is_refused_and_no_decision_is_invented():
     client = monolith().authorization_http()
     empty_operation = client.post(
-        "/api/v1/decisions", json=body(operation="   "), headers=subject("token-human-a")
+        "/api/v1/decisions",
+        json=body(operation="   "),
+        headers=subject("token-human-a"),
     )
     assert empty_operation.status_code == 422
     assert empty_operation.json()["detail"]["reason"] == "malformed_request"

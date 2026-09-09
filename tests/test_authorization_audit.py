@@ -51,7 +51,11 @@ def test_every_decision_is_audited_with_caller_subject_tenant_and_resource():
     "credential, resource, reason",
     [
         (None, ResourceRef("record", "rec_a1", "ten_a"), Reason.MISSING_IDENTITY),
-        ("token-invalid", ResourceRef("record", "rec_a1", "ten_a"), Reason.INVALID_IDENTITY),
+        (
+            "token-invalid",
+            ResourceRef("record", "rec_a1", "ten_a"),
+            Reason.INVALID_IDENTITY,
+        ),
         (
             "token-human-b",
             ResourceRef("record", "rec_a1", "ten_a"),
@@ -60,7 +64,9 @@ def test_every_decision_is_audited_with_caller_subject_tenant_and_resource():
         ("token-human-c", ResourceRef("record", "rec_a1", "ten_a"), None),
     ],
 )
-def test_a_denial_is_recorded_with_its_reason_and_request_context(credential, resource, reason):
+def test_a_denial_is_recorded_with_its_reason_and_request_context(
+    credential, resource, reason
+):
     instance = monolith()
     operation = "records.write" if reason is None else "records.read"
     answer = instance.authorization_client.decide(
@@ -141,7 +147,9 @@ def test_the_request_and_correlation_ids_reach_the_journals_of_both_authorities(
 def test_absent_request_headers_produce_a_bound_pair_not_an_empty_one():
     instance = monolith()
     answer = instance.authorization_client.decide(
-        "token-human-a", operation="records.read", resource=ResourceRef("record", "rec_a1", "ten_a")
+        "token-human-a",
+        operation="records.read",
+        resource=ResourceRef("record", "rec_a1", "ten_a"),
     )
     event = last(instance)
     assert answer.request_id and answer.correlation_id
@@ -167,7 +175,11 @@ def test_the_observability_context_is_the_standard_one():
     assert obs.component_version == COMPONENT_VERSION
     assert obs.environment == "test"
     assert obs.platform_id == instance.authorization.current_platform_id
-    assert (obs.request_id, obs.correlation_id, obs.trace_id) == ("req-obs", "cor-obs", "req-obs")
+    assert (obs.request_id, obs.correlation_id, obs.trace_id) == (
+        "req-obs",
+        "cor-obs",
+        "req-obs",
+    )
     assert obs.tenant_id == "ten_a"
     assert obs.subject_id == "idn_human_a"
     assert obs.service_id == "svc_records"
@@ -181,12 +193,18 @@ def test_the_audit_journal_is_append_only_from_the_outside():
     instance = monolith()
     before = len(instance.authorization.store.audit)
     instance.authorization_client.decide(
-        "token-human-a", operation="records.read", resource=ResourceRef("record", "rec_a1", "ten_a")
+        "token-human-a",
+        operation="records.read",
+        resource=ResourceRef("record", "rec_a1", "ten_a"),
     )
     instance.authorization_client.decide(
-        "token-human-b", operation="records.read", resource=ResourceRef("record", "rec_a1", "ten_a")
+        "token-human-b",
+        operation="records.read",
+        resource=ResourceRef("record", "rec_a1", "ten_a"),
     )
     assert len(instance.authorization.store.audit) == before + 2
     assert not hasattr(instance.authorization_client, "audit")
-    published = {name for name in dir(instance.authorization_client) if not name.startswith("_")}
+    published = {
+        name for name in dir(instance.authorization_client) if not name.startswith("_")
+    }
     assert published == {"decide"}

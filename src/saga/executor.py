@@ -53,7 +53,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -491,7 +491,7 @@ class SagaExecutor:
                     operation=step.operation,
                     step_id=step.step_id,
                     obs=obs,
-                    effect=lambda: step.execute(context),
+                    effect=lambda context=context: step.execute(context),
                 )
             except StepConflict as conflict:
                 # The same step identity was delivered with another context or

@@ -52,7 +52,9 @@ class StubAuthority:
     def lookup(self, tenant_id, *, expected_platform_id=None, **_):
         self.calls.append(f"lookup:{tenant_id}")
         stamp = "2026-09-08T00:00:00+00:00"
-        return TenantSnapshot(tenant_id, expected_platform_id or "plt_stub", self.state, stamp, stamp)
+        return TenantSnapshot(
+            tenant_id, expected_platform_id or "plt_stub", self.state, stamp, stamp
+        )
 
     def lifecycle_decision(self, tenant_id, *, expected_platform_id=None, **_):
         self.calls.append(f"lifecycle:{tenant_id}")
@@ -71,14 +73,23 @@ def bare_identity_engine(authority: TenantAuthorityPort) -> IdentityEngine:
     return IdentityEngine(
         store=store,
         tenant_authority=authority,
-        config=IdentityConfig.from_mapping({"current_platform_id": "plt_demo", "environment": "test"}),
+        config=IdentityConfig.from_mapping(
+            {"current_platform_id": "plt_demo", "environment": "test"}
+        ),
     )
 
 
 def test_identity_holds_no_copy_of_the_tenant_registry():
     """T-004: Identity does not own Tenant state at all — there is nothing to diverge."""
     owned = {f.name for f in fields(IdentityStore)}
-    assert owned == {"identities", "tokens", "associations", "records", "audit", "idempotency"}
+    assert owned == {
+        "identities",
+        "tokens",
+        "associations",
+        "records",
+        "audit",
+        "idempotency",
+    }
     assert not any("tenant_status" in name or name == "tenants" for name in owned)
 
     identity_engine, _ = composed()
@@ -95,7 +106,7 @@ def test_identity_does_not_define_a_second_tenant_state_vocabulary():
     field_types = {f.name: f.type for f in fields(TenantContext)}
     assert field_types["status"] == "TenantState"
     # Identity's context type is annotated with the authority's enum object itself.
-    import tenant_authority.contracts as contracts
+    from tenant_authority import contracts
 
     assert contracts.TenantState is TenantState
     assert TenantState("suspended") is contracts.TenantState.SUSPENDED
@@ -118,7 +129,9 @@ def test_authorization_follows_the_authority_not_local_data():
 
 
 def test_deletion_requested_state_is_enforced_through_the_identity_boundary():
-    authority = StubAuthority(TenantState.DELETION_REQUESTED, False, "tenant_deletion_requested")
+    authority = StubAuthority(
+        TenantState.DELETION_REQUESTED, False, "tenant_deletion_requested"
+    )
     engine = bare_identity_engine(authority)
     with pytest.raises(AccessDenied) as exc:
         engine.write_record("token-human-a", "rec_new", "body", "ten_a")
@@ -138,8 +151,16 @@ def test_identity_consumes_the_published_port_only():
     assert isinstance(client, TenantAuthorityPort)
     published = {name for name in dir(client) if not name.startswith("_")}
     assert published == {"lookup", "lifecycle_decision"}
-    for forbidden in ("store", "transitions", "audit", "idempotency",
-                      "transition_tenant", "create_tenant", "engine", "config"):
+    for forbidden in (
+        "store",
+        "transitions",
+        "audit",
+        "idempotency",
+        "transition_tenant",
+        "create_tenant",
+        "engine",
+        "config",
+    ):
         assert not hasattr(client, forbidden), forbidden
     assert not hasattr(IdentityEngine, "tenant_store")
     assert not hasattr(IdentityEngine, "tenant_registry")
@@ -172,7 +193,9 @@ def test_only_tenant_authority_can_change_tenant_state():
         "/api/v1/tenants/ten_a/state",
     ):
         assert identity_client.get(path).status_code == 404, path
-        assert identity_client.post(path, json={"state": "active"}).status_code == 404, path
+        assert (
+            identity_client.post(path, json={"state": "active"}).status_code == 404
+        ), path
 
     # The authority application is reachable only through its own deployment, and
     # never as a part of identity's HTTP surface.
@@ -194,9 +217,13 @@ def test_lifecycle_written_through_the_authority_api_is_enforced_by_the_identity
     headers = {"Authorization": "Bearer svc-token-admin"}
     user = {"Authorization": "Bearer token-human-a", "X-Tenant-Id": "ten_a"}
 
-    assert identity_client.get("/api/v1/records/rec_a1", headers=user).status_code == 200
+    assert (
+        identity_client.get("/api/v1/records/rec_a1", headers=user).status_code == 200
+    )
     suspended = authority_client.post(
-        "/api/v1/tenants/ten_a/transitions", json={"to_state": "suspended"}, headers=headers
+        "/api/v1/tenants/ten_a/transitions",
+        json={"to_state": "suspended"},
+        headers=headers,
     )
     assert suspended.status_code == 200
 
@@ -212,23 +239,32 @@ def test_lifecycle_written_through_the_authority_api_is_enforced_by_the_identity
     assert written.status_code == 403
 
     reactivate = authority_client.post(
-        "/api/v1/tenants/ten_a/transitions", json={"to_state": "active"}, headers=headers
+        "/api/v1/tenants/ten_a/transitions",
+        json={"to_state": "active"},
+        headers=headers,
     )
     assert reactivate.status_code == 200
-    assert identity_client.get("/api/v1/records/rec_a1", headers=user).status_code == 200
+    assert (
+        identity_client.get("/api/v1/records/rec_a1", headers=user).status_code == 200
+    )
 
     # Suspension is visible in the authority's journal as a transition and in
     # identity's journal as a denial — two owned journals, one decision source.
     actions = [event.action for event in instance.authority.store.audit]
     assert "tenant.transition" in actions
-    assert any(event.reason == "tenant_suspended" for event in instance.identity.store.audit)
+    assert any(
+        event.reason == "tenant_suspended" for event in instance.identity.store.audit
+    )
 
 
 def test_identity_contract_declares_the_dependency_and_no_tenant_state_ownership():
     data = json.loads(IDENTITY_CONTRACT.read_text(encoding="utf-8"))
     scopes = {d["name"]: d["scope"] for d in data["data_ownership"]["datasets"]}
     assert "tenants" not in scopes
-    assert "tenant_associations" in scopes and scopes["tenant_associations"] == "tenant-scoped"
+    assert (
+        "tenant_associations" in scopes
+        and scopes["tenant_associations"] == "tenant-scoped"
+    )
 
     dependencies = {dep["component_id"]: dep for dep in data["dependencies"]}
     assert "tenant_authority" in dependencies
@@ -238,7 +274,9 @@ def test_identity_contract_declares_the_dependency_and_no_tenant_state_ownership
     assert Path(dependency["contract"]).resolve().is_relative_to(Path.cwd())
 
     # The published OpenAPI of identity has no tenant-lifecycle surface either.
-    openapi = Path("components/identity/contract/openapi.yaml").read_text(encoding="utf-8")
+    openapi = Path("components/identity/contract/openapi.yaml").read_text(
+        encoding="utf-8"
+    )
     declared = {
         line.strip()[:-1] for line in openapi.splitlines() if line.startswith("  /api")
     }
@@ -267,8 +305,13 @@ def test_effective_tenant_derivation_is_unchanged_by_is_002():
         "idn_human_a", "ten_b", frozenset({"records.read"})
     )
     try:
-        assert identity_engine.resolve_tenant_context(identity, None).tenant_id == "ten_a"
-        assert identity_engine.resolve_tenant_context(identity, "ten_b").tenant_id == "ten_b"
+        assert (
+            identity_engine.resolve_tenant_context(identity, None).tenant_id == "ten_a"
+        )
+        assert (
+            identity_engine.resolve_tenant_context(identity, "ten_b").tenant_id
+            == "ten_b"
+        )
         with pytest.raises(AccessDenied) as exc:
             identity_engine.resolve_tenant_context(identity, "ten_deletion_requested")
         assert exc.value.reason is DenyReason.TENANT_MISMATCH
@@ -400,7 +443,9 @@ def test_identity_declares_the_consumer_surface_it_actually_uses():
     assert type(instance.identity.tenant_authority) is client_class
     assert not hasattr(instance.identity_app.state, "tenant_authority")
     assert {
-        name for name in dir(instance.identity.tenant_authority) if not name.startswith("_")
+        name
+        for name in dir(instance.identity.tenant_authority)
+        if not name.startswith("_")
     } == set(consumed["operations"])
 
     from tenant_authority.store import LOOKUP_PERMISSIONS

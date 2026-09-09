@@ -55,7 +55,11 @@ def test_the_asking_component_cannot_assert_who_the_subject_is():
         },
         json={
             "operation": WRITE,
-            "resource": {"resource_type": "record", "resource_id": "rec_a1", "tenant_id": "ten_a"},
+            "resource": {
+                "resource_type": "record",
+                "resource_id": "rec_a1",
+                "tenant_id": "ten_a",
+            },
         },
     )
     assert response.status_code == 200
@@ -86,7 +90,9 @@ def test_a_credential_that_is_not_exactly_a_valid_one_never_yields_allow(credent
     assert decision.subject_id is None
 
 
-@pytest.mark.parametrize("credential", ["token-human-a ", " token-human-a", "token-human-a\n"])
+@pytest.mark.parametrize(
+    "credential", ["token-human-a ", " token-human-a", "token-human-a\n"]
+)
 def test_padding_a_credential_with_whitespace_changes_nothing(credential):
     """Whitespace around a bearer value is HTTP framing, not part of the secret.
 
@@ -104,7 +110,15 @@ def test_padding_a_credential_with_whitespace_changes_nothing(credential):
 
 @pytest.mark.parametrize(
     "operation",
-    ["records.READ", "records.read ", "records", "records.*", "*", "records.read.extra", "read"],
+    [
+        "records.READ",
+        "records.read ",
+        "records",
+        "records.*",
+        "*",
+        "records.read.extra",
+        "read",
+    ],
 )
 def test_an_operation_is_matched_exactly_and_never_by_pattern(operation):
     """No wildcard, no prefix, no case folding: a grant covers what it names."""
@@ -143,7 +157,9 @@ def test_a_revoked_service_identity_can_no_longer_ask():
 def test_a_service_that_loses_its_permission_can_no_longer_ask():
     instance = monolith()
     services = instance.authorization.store.services
-    services["svc_records"] = dataclasses.replace(services["svc_records"], permissions=frozenset())
+    services["svc_records"] = dataclasses.replace(
+        services["svc_records"], permissions=frozenset()
+    )
 
     with pytest.raises(CallerNotAuthorized) as exc:
         decide(instance, "token-human-a")
@@ -157,16 +173,28 @@ def test_a_service_that_loses_its_permission_can_no_longer_ask():
 def test_deciding_never_changes_who_is_allowed_what():
     """Asking is a read: the grant table is identical after any sequence of asks."""
     instance = monolith()
-    before = {key: value.operations for key, value in instance.authorization.store.grants.items()}
+    before = {
+        key: value.operations
+        for key, value in instance.authorization.store.grants.items()
+    }
 
-    for credential in ("token-human-a", "token-human-b", "token-human-c", "token-unknown", None):
+    for credential in (
+        "token-human-a",
+        "token-human-b",
+        "token-human-c",
+        "token-unknown",
+        None,
+    ):
         for operation in (READ, WRITE, "records.delete"):
             try:
                 decide(instance, credential, operation=operation)
             except Exception:  # pragma: no cover - a refusal is not a mutation either
                 pass
 
-    after = {key: value.operations for key, value in instance.authorization.store.grants.items()}
+    after = {
+        key: value.operations
+        for key, value in instance.authorization.store.grants.items()
+    }
     assert after == before
 
 
@@ -210,9 +238,17 @@ def test_no_credential_value_is_echoed_into_a_decision_or_the_journal():
             subject_credential="token-human-a",
         )
 
-    secrets = ("token-human-a", DATA_OWNER_CREDENTIAL, "authz-svc-token-unknown-and-secret")
+    secrets = (
+        "token-human-a",
+        DATA_OWNER_CREDENTIAL,
+        "authz-svc-token-unknown-and-secret",
+    )
     for event in instance.authorization.store.audit:
-        rendered = repr(dataclasses.asdict(event) if dataclasses.is_dataclass(event) else vars(event))
+        rendered = repr(
+            dataclasses.asdict(event)
+            if dataclasses.is_dataclass(event)
+            else vars(event)
+        )
         for secret in secrets:
             assert secret not in rendered, event.action
 
@@ -244,7 +280,11 @@ def test_an_unreachable_tenant_authority_denies_instead_of_allowing():
 def test_a_resource_whose_tenant_is_unstated_is_not_a_wildcard():
     instance = monolith()
     for tenant_id in (None, "", "   "):
-        decision = decide(instance, "token-human-a", resource=ResourceRef("record", "rec_a1", tenant_id))
+        decision = decide(
+            instance,
+            "token-human-a",
+            resource=ResourceRef("record", "rec_a1", tenant_id),
+        )
         assert decision.decision is Decision.DENY
         assert decision.reason is Reason.RESOURCE_TENANT_UNKNOWN
 
@@ -258,14 +298,18 @@ def test_a_data_owner_that_misstates_its_resource_deceives_only_itself():
     recorded, so a wrong one is attributable to the component that made it.
     """
     instance = monolith()
-    lying = instance.data_owner(records={"rec_b1": "ten_a"})  # rec_b1 really belongs to ten_b
+    lying = instance.data_owner(
+        records={"rec_b1": "ten_a"}
+    )  # rec_b1 really belongs to ten_b
 
     decision = lying.decision_for("token-human-a", "rec_b1", request_id="req-misstated")
     assert decision.allowed
     assert decision.resource.tenant_id == "ten_a"
 
     event = next(
-        item for item in instance.authorization.store.audit if item.request_id == "req-misstated"
+        item
+        for item in instance.authorization.store.audit
+        if item.request_id == "req-misstated"
     )
     assert event.resource_id == "rec_b1"
     assert event.resource_tenant_id == "ten_a"
@@ -273,4 +317,7 @@ def test_a_data_owner_that_misstates_its_resource_deceives_only_itself():
 
     # And the honest owner of the same record is still refused it.
     honest = instance.data_owner()
-    assert honest.decision_for("token-human-a", "rec_b1").reason is Reason.RESOURCE_TENANT_MISMATCH
+    assert (
+        honest.decision_for("token-human-a", "rec_b1").reason
+        is Reason.RESOURCE_TENANT_MISMATCH
+    )

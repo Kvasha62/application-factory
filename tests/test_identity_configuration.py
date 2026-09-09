@@ -47,7 +47,8 @@ def test_declared_token_prefix_is_the_configured_one():
     engine = IdentityEngine(
         store=store,
         tenant_authority=authority.publish(
-            credential="svc-token-identity", expected_platform_id=config.current_platform_id
+            credential="svc-token-identity",
+            expected_platform_id=config.current_platform_id,
         ),
         config=config,
     )

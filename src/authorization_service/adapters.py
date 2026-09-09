@@ -141,7 +141,9 @@ class TenantAuthorityAdapter:
         if not isinstance(permitted, bool):
             # No readable verdict means no permission to serve the Tenant.
             return DependencyRefusal(None)
-        return TenantVerdict(permitted=permitted, reason_code=_code(getattr(verdict, "reason", None)))
+        return TenantVerdict(
+            permitted=permitted, reason_code=_code(getattr(verdict, "reason", None))
+        )
 
 
 def identity_port(client: Any) -> IdentityContextAdapter:

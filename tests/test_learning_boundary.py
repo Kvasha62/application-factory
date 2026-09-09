@@ -94,9 +94,18 @@ class StubAuthorizationPort:
         self.outcome = outcome
         self.calls: list[dict[str, Any]] = []
 
-    def decide(self, subject_credential, *, operation, resource_type, resource_id,
-               resource_tenant_id, claimed_tenant_id=None, request_id=None,
-               correlation_id=None):
+    def decide(
+        self,
+        subject_credential,
+        *,
+        operation,
+        resource_type,
+        resource_id,
+        resource_tenant_id,
+        claimed_tenant_id=None,
+        request_id=None,
+        correlation_id=None,
+    ):
         self.calls.append(
             {
                 "operation": operation,
@@ -134,14 +143,18 @@ def learning_deployment(
 
 def deny(reason: str) -> DecisionAnswer:
     return DecisionAnswer(
-        decision="DENY", reason=reason,
-        subject_id="idn_human_a", tenant_id="ten_a",
+        decision="DENY",
+        reason=reason,
+        subject_id="idn_human_a",
+        tenant_id="ten_a",
     )
 
 
 ALLOW = DecisionAnswer(
-    decision="ALLOW", reason="permitted",
-    subject_id="idn_human_a", tenant_id="ten_a",
+    decision="ALLOW",
+    reason="permitted",
+    subject_id="idn_human_a",
+    tenant_id="ten_a",
 )
 
 
@@ -225,7 +238,10 @@ def test_every_published_route_refuses_without_an_allow():
         elif response.status_code == 422 and code == "INVALID_REQUEST":
             # A command without a readable body is refused by the published
             # schema before any handler runs.
-            assert body["error"]["details"]["reason"] == "malformed_request", (method, path)
+            assert body["error"]["details"]["reason"] == "malformed_request", (
+                method,
+                path,
+            )
         else:
             # Every route refuses at the identity step without a credential.
             assert code == "AUTHENTICATION_REQUIRED", (method, path)
@@ -242,7 +258,8 @@ def test_published_surface_is_exactly_the_contract_operations():
         (route.path, method)
         for route in harness.learning.contract_app().routes
         for method in getattr(route, "methods", set())
-        if route.path not in framework_routes and method in {"GET", "POST", "PUT", "PATCH", "DELETE"}
+        if route.path not in framework_routes
+        and method in {"GET", "POST", "PUT", "PATCH", "DELETE"}
     }
     assert implemented == {
         ("/health", "GET"),
@@ -266,7 +283,9 @@ def test_client_state_is_a_single_opaque_value():
 
     client = learning_harness().client()
 
-    state = [getattr(client, name) for name in client.__slots__ if not name.startswith("__")]
+    state = [
+        getattr(client, name) for name in client.__slots__ if not name.startswith("__")
+    ]
     assert len(state) == 1
     assert isinstance(state[0], str) and state[0]
 
@@ -406,7 +425,11 @@ def _imported_modules(tree: ast.AST) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             modules.add(node.module.split(".")[0])
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            for name in ("identity_service", "tenant_authority", "authorization_service"):
+            for name in (
+                "identity_service",
+                "tenant_authority",
+                "authorization_service",
+            ):
                 if node.value == name or node.value.startswith(name + "."):
                     modules.add(name)
     return modules
@@ -449,6 +472,7 @@ def test_a_fresh_interpreter_imports_no_other_component():
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,  # the exit code is asserted below, with its stderr as context
     )
     assert result.returncode == 0, result.stderr
 
@@ -584,9 +608,7 @@ def test_nonauthoritative_answers_fail_closed():
         ("DENY", "unknown_reason"),
         ("MAYBE", "permitted"),
     ]:
-        port = StubAuthorizationPort(
-            DecisionAnswer(decision=decision, reason=reason)
-        )
+        port = StubAuthorizationPort(DecisionAnswer(decision=decision, reason=reason))
         deployment = learning_deployment(port, store=CountingLearningStore())
         with pytest.raises(AccessRefused) as refused:
             deployment.engine.read_submission(TEACHER_A, "sub_a1_1")

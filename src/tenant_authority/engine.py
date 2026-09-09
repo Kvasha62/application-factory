@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from tenant_authority import COMPONENT_ID, COMPONENT_VERSION
@@ -200,7 +200,9 @@ class TenantAuthorityEngine:
         idempotency_key: str | None,
         obs: ObservabilityContext,
     ) -> tuple[TenantSnapshot, ObservabilityContext, AuditEvent]:
-        fingerprint = _fingerprint("tenant.create", platform_id=platform_id, tenant_id=tenant_id)
+        fingerprint = _fingerprint(
+            "tenant.create", platform_id=platform_id, tenant_id=tenant_id
+        )
         if idempotency_key:
             replay = self._replay(
                 idempotency_key,
@@ -305,7 +307,8 @@ class TenantAuthorityEngine:
         records = [
             record
             for record in self.store.tenants.values()
-            if record.platform_id == platform_id and (wanted is None or record.state is wanted)
+            if record.platform_id == platform_id
+            and (wanted is None or record.state is wanted)
         ]
         records.sort(key=lambda record: record.tenant_id)
         event = self.audit(
@@ -314,7 +317,10 @@ class TenantAuthorityEngine:
             reason=None,
             access=access,
             obs=obs,
-            details={"count": len(records), "state_filter": None if wanted is None else wanted.value},
+            details={
+                "count": len(records),
+                "state_filter": None if wanted is None else wanted.value,
+            },
         )
         return [_snapshot(record) for record in records], obs, event
 
@@ -456,7 +462,9 @@ class TenantAuthorityEngine:
             request_id=request_id,
             correlation_id=correlation_id,
         )
-        decision = operation_decision(record.tenant_id, record.platform_id, record.state)
+        decision = operation_decision(
+            record.tenant_id, record.platform_id, record.state
+        )
         event = self.audit(
             action="tenant.lifecycle",
             decision=Decision.ALLOW,
@@ -464,8 +472,11 @@ class TenantAuthorityEngine:
             access=access,
             obs=obs,
             tenant_id=record.tenant_id,
-            details={"state": record.state.value, "permitted": decision.permitted,
-                     "lifecycle_reason": decision.reason},
+            details={
+                "state": record.state.value,
+                "permitted": decision.permitted,
+                "lifecycle_reason": decision.reason,
+            },
         )
         return decision, obs, event
 
@@ -488,7 +499,9 @@ class TenantAuthorityEngine:
             correlation_id=correlation_id,
         )
         history = [
-            item for item in self.store.transitions if item.tenant_id == record.tenant_id
+            item
+            for item in self.store.transitions
+            if item.tenant_id == record.tenant_id
         ]
         event = self.audit(
             action="tenant.history",
@@ -544,7 +557,9 @@ class TenantAuthorityEngine:
             raise AuthenticationDenied(DenyReason.UNKNOWN_SERVICE)
         return access
 
-    def _resolve_platform(self, access: ServiceAccess, claimed_platform_id: str | None) -> str:
+    def _resolve_platform(
+        self, access: ServiceAccess, claimed_platform_id: str | None
+    ) -> str:
         current = self.config.platform_id
         if claimed_platform_id is not None and claimed_platform_id != current:
             raise AuthorizationDenied(
@@ -597,7 +612,10 @@ class TenantAuthorityEngine:
                 f"tenant {tenant_id} does not exist",
                 details={"tenant_id": tenant_id},
             )
-        if expected_platform_id is not None and record.platform_id != expected_platform_id:
+        if (
+            expected_platform_id is not None
+            and record.platform_id != expected_platform_id
+        ):
             # Same status as "not found": no existence disclosure across platforms.
             raise OwnershipDenied(
                 DenyReason.FOREIGN_TENANT,
@@ -634,7 +652,9 @@ class TenantAuthorityEngine:
             platform_id = self._resolve_platform(access, claimed_platform_id)
             self._require_permission(access, permission)
             record = (
-                self._require_tenant(tenant_id, platform_id) if load_tenant and tenant_id else None
+                self._require_tenant(tenant_id, platform_id)
+                if load_tenant and tenant_id
+                else None
             )
         except TenantAuthorityError as exc:
             obs = self.observability(
@@ -703,7 +723,10 @@ class TenantAuthorityEngine:
             access=access,
             obs=obs,
             tenant_id=tenant_id,
-            details={"idempotency_key": idempotency_key, "result_ref": existing.result_ref},
+            details={
+                "idempotency_key": idempotency_key,
+                "result_ref": existing.result_ref,
+            },
         )
         return existing, event
 

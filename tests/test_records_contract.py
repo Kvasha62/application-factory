@@ -137,9 +137,9 @@ def test_contract_declares_exactly_one_dependency_on_the_published_contract():
 # --------------------------------------------------------------- surface match
 def test_published_api_matches_the_implementation_in_both_directions():
     data = contract()
-    assert Path(data["api"]["openapi"]).read_text(encoding="utf-8") == OPENAPI.read_text(
+    assert Path(data["api"]["openapi"]).read_text(
         encoding="utf-8"
-    )
+    ) == OPENAPI.read_text(encoding="utf-8")
     assert data["api"]["base_path"] == "/api/v1"
     assert data["api"]["supported_majors"] == ["v1"]
 
@@ -200,32 +200,48 @@ def refusal_scenarios() -> dict[int, tuple[str, callable]]:
         return response.status_code, response.json()["detail"]["reason"]
 
     def scenario_403() -> tuple[int, str]:
-        response = monolith().records_http().get(
-            "/api/v1/resources/rec_b1",
-            headers={"authorization": f"Bearer {TOKEN_A}"},
+        response = (
+            monolith()
+            .records_http()
+            .get(
+                "/api/v1/resources/rec_b1",
+                headers={"authorization": f"Bearer {TOKEN_A}"},
+            )
         )
         return response.status_code, response.json()["detail"]["reason"]
 
     def scenario_404() -> tuple[int, str]:
-        response = monolith().records_http().get(
-            "/api/v1/resources/missing",
-            headers={"authorization": f"Bearer {TOKEN_A}"},
+        response = (
+            monolith()
+            .records_http()
+            .get(
+                "/api/v1/resources/missing",
+                headers={"authorization": f"Bearer {TOKEN_A}"},
+            )
         )
         return response.status_code, response.json()["detail"]["reason"]
 
     def scenario_409() -> tuple[int, str]:
-        response = monolith().records_http().post(
-            "/api/v1/resources/rec_a1/transitions",
-            json={"transition": "activate"},
-            headers={"authorization": f"Bearer {TOKEN_A}"},
+        response = (
+            monolith()
+            .records_http()
+            .post(
+                "/api/v1/resources/rec_a1/transitions",
+                json={"transition": "activate"},
+                headers={"authorization": f"Bearer {TOKEN_A}"},
+            )
         )
         return response.status_code, response.json()["detail"]["reason"]
 
     def scenario_422() -> tuple[int, str]:
-        response = monolith().records_http().post(
-            "/api/v1/resources/rec_a2/transitions",
-            json={"transition": "activate", "extra": 1},
-            headers={"authorization": f"Bearer {TOKEN_A}"},
+        response = (
+            monolith()
+            .records_http()
+            .post(
+                "/api/v1/resources/rec_a2/transitions",
+                json={"transition": "activate", "extra": 1},
+                headers={"authorization": f"Bearer {TOKEN_A}"},
+            )
         )
         return response.status_code, response.json()["detail"]["reason"]
 
@@ -282,7 +298,8 @@ def test_owner_mismatch_is_a_documented_403():
     reason = response.json()["detail"]["reason"]
     assert reason == OwnDenyReason.OWNER_MISMATCH
     documented = {
-        r.strip() for r in contract()["api"]["refusal_semantics"]["refused"]["403"].split(",")
+        r.strip()
+        for r in contract()["api"]["refusal_semantics"]["refused"]["403"].split(",")
     }
     assert reason in documented
 
@@ -306,6 +323,9 @@ def test_dependency_isolation_is_declared_with_the_real_module_names():
     consumed = consumes[0]
     assert consumed["component_id"] == "authorization"
     assert consumed["local_port"] == "records_service.ports.AuthorizationPort"
-    assert consumed["local_adapter"] == "records_service.adapters.AuthorizationDecisionAdapter"
+    assert (
+        consumed["local_adapter"]
+        == "records_service.adapters.AuthorizationDecisionAdapter"
+    )
     assert consumed["local_answer_type"] == "records_service.consumed.DecisionAnswer"
     assert consumed["operations"] == ["decide"]

@@ -66,7 +66,9 @@ def test_a_dependency_refusal_with_a_stated_code_is_recorded():
             super().__init__("refused")
 
     store = CountingRecordsStore()
-    deployment = records_deployment(StubAuthorizationPort(PublishedRefusal()), store=store)
+    deployment = records_deployment(
+        StubAuthorizationPort(PublishedRefusal()), store=store
+    )
 
     with pytest.raises(AccessRefused) as refused:
         deployment.engine.read_resource(TOKEN_A, "rec_a1")
@@ -108,6 +110,7 @@ def test_a_non_authoritative_answer_fails_closed_including_permissive_ones(answe
 
 def test_the_adapter_turns_provider_exceptions_into_refusals():
     """Through the real adapter, a raising client never becomes an ALLOW."""
+
     class RaisingClient:
         def decide(self, *args, **kwargs):
             raise ContractViolation("the authorization contract channel is closed")
@@ -165,7 +168,9 @@ def test_a_closed_decision_channel_fails_closed_end_to_end():
 
 def test_dependency_failures_are_observable_through_the_published_client():
     store = CountingRecordsStore()
-    deployment = records_deployment(StubAuthorizationPort(RuntimeError("boom")), store=store)
+    deployment = records_deployment(
+        StubAuthorizationPort(RuntimeError("boom")), store=store
+    )
     consumer = deployment.publish()
 
     with pytest.raises(AccessRefused) as refused:

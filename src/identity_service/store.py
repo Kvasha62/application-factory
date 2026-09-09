@@ -27,16 +27,28 @@ class IdentityStore:
 
     def seed_demo(self) -> None:
         human_a = VerifiedIdentity(
-            "idn_human_a", IdentityKind.HUMAN, "user-a@example.test", home_tenant_id="ten_a"
+            "idn_human_a",
+            IdentityKind.HUMAN,
+            "user-a@example.test",
+            home_tenant_id="ten_a",
         )
         human_b = VerifiedIdentity(
-            "idn_human_b", IdentityKind.HUMAN, "user-b@example.test", home_tenant_id="ten_b"
+            "idn_human_b",
+            IdentityKind.HUMAN,
+            "user-b@example.test",
+            home_tenant_id="ten_b",
         )
         human_c = VerifiedIdentity(
-            "idn_human_c", IdentityKind.HUMAN, "user-c@example.test", home_tenant_id="ten_a"
+            "idn_human_c",
+            IdentityKind.HUMAN,
+            "user-c@example.test",
+            home_tenant_id="ten_a",
         )
         svc = VerifiedIdentity(
-            "idn_service_jobs", IdentityKind.SERVICE, "svc://jobs", home_tenant_id="ten_a"
+            "idn_service_jobs",
+            IdentityKind.SERVICE,
+            "svc://jobs",
+            home_tenant_id="ten_a",
         )
         self.identities = {
             human_a.identity_id: human_a,

@@ -1,7 +1,8 @@
 # ADR-0011 — SCS-001 Learning Content Authoring Boundary
 
-**Status:** PROPOSED
+**Status:** `RATIFIED` — принято владельцем проекта 2026-09-10
 **Date:** 2026-09-09
+**Ratified:** 2026-09-10
 **Level:** D — domain/architecture boundary decision
 
 ## Context
@@ -115,3 +116,9 @@ No architecture version bump is proposed unless implementation review identifies
 ## Consequence
 
 If ratified, an implementation Issue can be created as a narrow SCS-001 content-authoring slice. The implementation must extend the existing Learning boundary rather than redesigning the foundation or absorbing unrelated deferred capabilities.
+
+## Ratification
+
+RATIFIED by the project owner (`@Kvasha62`) on 2026-09-10. The ratification confirms the decision as written; it does not change `docs/ARCHITECTURE.md` v1.2.0 RATIFIED and does not bump the architecture version, as this ADR explicitly states.
+
+**Process note (recorded, not rewritten).** The first authoring slice (Issue #31; SCS-001 learning component 0.2.0, including the `create_course` / `create_module` / `create_lesson` / `create_assignment` / `publish_course` / `archive_course` commands and the immutable published hierarchy) was merged into `main` (commit `8445e2b`) while this ADR was still `PROPOSED`. This deviation from the LAW-14/§34 sequence "ratify first, implement after" was identified by the 2026-09-09 conformance review (`docs/CONFORMANCE_REVIEW_1.2.0.md`, finding H-2) and is recorded here deliberately: the history is preserved, not re-dated, and the implementation is not claimed to pre-authorize itself. From this ratification onward, essential component decisions must be RATIFIED before their implementation is merged.

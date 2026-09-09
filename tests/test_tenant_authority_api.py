@@ -32,7 +32,9 @@ def test_health_and_readiness_identify_the_component_and_platform():
 
 def test_create_tenant_through_the_api_starts_in_provisioning():
     client, authority = client_with_authority()
-    response = client.post("/api/v1/tenants", json={"tenant_id": "ten_http"}, headers=ADMIN)
+    response = client.post(
+        "/api/v1/tenants", json={"tenant_id": "ten_http"}, headers=ADMIN
+    )
     assert response.status_code == 201
     body = response.json()
     assert body == {
@@ -53,7 +55,9 @@ def test_write_operations_require_a_verified_service_identity():
     assert unauthenticated.json()["detail"]["reason"] == "missing_service_identity"
 
     read_only = client.post(
-        "/api/v1/tenants/ten_a/transitions", json={"to_state": "suspended"}, headers=READ_ONLY
+        "/api/v1/tenants/ten_a/transitions",
+        json={"to_state": "suspended"},
+        headers=READ_ONLY,
     )
     assert read_only.status_code == 403
     assert read_only.json()["detail"]["reason"] == "insufficient_authorization"
@@ -64,7 +68,11 @@ def test_transition_through_the_api_writes_an_auditable_record():
     response = client.post(
         "/api/v1/tenants/ten_a/transitions",
         json={"to_state": "suspended", "reason": "abuse desk"},
-        headers={**ADMIN, "X-Request-Id": "req-http-1", "X-Correlation-Id": "cor-http-1"},
+        headers={
+            **ADMIN,
+            "X-Request-Id": "req-http-1",
+            "X-Correlation-Id": "cor-http-1",
+        },
     )
     assert response.status_code == 200
     assert response.json() == {
@@ -85,7 +93,9 @@ def test_transition_through_the_api_writes_an_auditable_record():
 def test_invalid_transition_is_rejected_with_a_conflict_status():
     client, authority = client_with_authority()
     response = client.post(
-        "/api/v1/tenants/ten_deleted/transitions", json={"to_state": "active"}, headers=ADMIN
+        "/api/v1/tenants/ten_deleted/transitions",
+        json={"to_state": "active"},
+        headers=ADMIN,
     )
     assert response.status_code == 409
     assert response.json()["detail"]["reason"] == "invalid_transition"
@@ -96,8 +106,16 @@ def test_invalid_transition_is_rejected_with_a_conflict_status():
 def test_idempotent_transition_replay_over_http():
     client, authority = client_with_authority()
     headers = {**ADMIN, "Idempotency-Key": "ik-http"}
-    first = client.post("/api/v1/tenants/ten_a/transitions", json={"to_state": "suspended"}, headers=headers)
-    replay = client.post("/api/v1/tenants/ten_a/transitions", json={"to_state": "suspended"}, headers=headers)
+    first = client.post(
+        "/api/v1/tenants/ten_a/transitions",
+        json={"to_state": "suspended"},
+        headers=headers,
+    )
+    replay = client.post(
+        "/api/v1/tenants/ten_a/transitions",
+        json={"to_state": "suspended"},
+        headers=headers,
+    )
     assert first.status_code == replay.status_code == 200
     assert first.json()["transition_id"] == replay.json()["transition_id"]
     assert len(authority.store.transitions) == 1
@@ -139,7 +157,9 @@ def test_unknown_request_fields_are_rejected_not_ignored():
     assert response.status_code == 422
 
     illegal_state = client.post(
-        "/api/v1/tenants/ten_a/transitions", json={"to_state": "archived"}, headers=ADMIN
+        "/api/v1/tenants/ten_a/transitions",
+        json={"to_state": "archived"},
+        headers=ADMIN,
     )
     assert illegal_state.status_code == 422
 
@@ -156,10 +176,20 @@ def test_published_surface_exposes_no_internal_data():
         "/health",
         "/ready",
     }
-    for path in ("/api/v1/audit", "/internal/tenants", "/api/v1/store", "/api/v1/services"):
+    for path in (
+        "/api/v1/audit",
+        "/internal/tenants",
+        "/api/v1/store",
+        "/api/v1/services",
+    ):
         assert client.get(path).status_code == 404
     assert client.delete("/api/v1/tenants/ten_a", headers=ADMIN).status_code == 405
-    assert client.patch("/api/v1/tenants/ten_a", json={"state": "active"}, headers=ADMIN).status_code == 405
+    assert (
+        client.patch(
+            "/api/v1/tenants/ten_a", json={"state": "active"}, headers=ADMIN
+        ).status_code
+        == 405
+    )
 
 
 def test_state_machine_is_published_not_embedded_in_callers():

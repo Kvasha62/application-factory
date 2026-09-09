@@ -259,20 +259,20 @@
   },
   "dependencies": [
     {
-      "component_id": "idempotency_guard",
+      "component_id": "idempotency",
       "version_range": ">=0.1.0,<0.2.0",
       "kind": "internal-consumer-surface",
       "contract": "components/idempotency/contract/component_contract.json",
-      "direction": "saga -> idempotency_guard (exactly-once delivery of every step effect and compensation)",
+      "direction": "saga -> idempotency (exactly-once delivery of every step effect and compensation)",
       "note": "IS-006 implements no second idempotency mechanism: the command identity of a step is delivered to IS-005, which decides between executing, replaying and refusing a conflict."
     },
     {
       "component_id": "identity",
-      "version_range": ">=0.1.0,<0.2.0",
+      "version_range": ">=0.3.0,<0.4.0",
       "kind": "api",
       "contract": "components/identity/contract/component_contract.json",
       "direction": "saga -> identity (read-only tenant context of one delivery)",
-      "note": "Consumed through the TenantContextPort of saga.ports; the effective Tenant is resolved by IS-001 and is immutable for the whole workflow."
+      "note": "Consumed through the TenantContextPort of saga.ports; the effective Tenant is resolved by IS-001 and is immutable for the whole workflow. The range tracks the IS-001 published context read (GET /api/v1/context, introduced in identity 0.3.0)."
     }
   ],
   "consumed_at_runtime_by_steps": {

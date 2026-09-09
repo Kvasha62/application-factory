@@ -81,7 +81,9 @@ def build_deployment(
     return deployment
 
 
-def build_demo_deployment(platform_id: str = "plt_demo", *, environment: str = "standalone"):
+def build_demo_deployment(
+    platform_id: str = "plt_demo", *, environment: str = "standalone"
+):
     """Demo deployment of the standalone component (and of the Level 0 monolith)."""
     return build_deployment(
         {"platform_id": platform_id, "environment": environment},
