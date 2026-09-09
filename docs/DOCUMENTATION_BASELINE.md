@@ -5,6 +5,7 @@
 **Ветка создания:** `chore/phase-0-repository-cleanup` (ветка впоследствии удалена)
 **Исторический commit:** `19c8a5b1efe31d01b8b7044e197b11c44f7fa2f4`
 **Актуализация:** 2026-09-08 — Issue #6 (DOC-002): ратифицирован и включён в контур `docs/OPERATING_MODEL.md` как канонический операционный источник
+**Актуализация:** 2026-09-10 — состояние приведено в соответствие с фактическим репозиторием (реализация компонентов, Component Contracts, contract-test suite, Quality Gate, CI). История перехода к реализованному состоянию сохраняется, в том числе зафиксированное в ADR-0011 (раздел Ratification) отклонение последовательности «ратифицировать → реализовать» для среза 4 SCS-001
 **Основание:** `docs/ARCHITECTURE.md` 1.2.0 + `docs/adr/ADR-0010-architecture-gap-review.md`
 
 ## 1. Назначение
@@ -26,12 +27,16 @@
 | Область | Источник | Статус |
 |---|---|---|
 | Архитектурный закон | `docs/ARCHITECTURE.md` | RATIFIED 1.2.0 |
-| Архитектурные решения | `docs/adr/` | ACTIVE |
+| Архитектурные решения | `docs/adr/` | ACTIVE (ADR-0010 RATIFIED 2026-09-08; ADR-0011 RATIFIED 2026-09-10) |
 | Текущее ADR конституционного изменения | `docs/adr/ADR-0010-architecture-gap-review.md` | RATIFIED |
 | Документационный baseline | `docs/DOCUMENTATION_BASELINE.md` | CLEAN |
 | Операционная модель | `docs/OPERATING_MODEL.md` | RATIFIED 1.0.0 |
 | Проектная ориентация | `README.md` | ALIGNED |
-| Реализация компонентов | код соответствующего компонента | ещё отсутствует |
+| Реализация компонентов | код соответствующего компонента (`src/`) | существует: 7 компонентов, Level 0 modular monolith, standalone-режим |
+| Component Contracts | `components/*/contract/` (component_contract.json + openapi.yaml) | существует: 7/7, machine-readable |
+| Contract-test suite | `tests/` (contract/boundary/conformance наборы) | существует: 730 тестов |
+| Quality Gate | `scripts/quality-gate.ps1` + `.github/workflows/quality-gate.yml` | GREEN (закреплённые ruff 0.16.6 / black 26.5.1) |
+| Маршрутизация ответственности | `.github/CODEOWNERS` | существует |
 
 `docs/OPERATING_MODEL.md` — канонический операционный источник: он определяет, как команда (ChatGPT / Arena) работает через GitHub, и не создаёт архитектурных законов (Level A, §34.1 ARCHITECTURE.md; ADR не требуется). Архитектурным источником истины остаётся только `docs/ARCHITECTURE.md`, поэтому Operating Model не формирует второй архитектурный контур: при конфликте приоритет у ARCHITECTURE.md (см. §13 OPERATING_MODEL.md).
 
@@ -73,29 +78,37 @@ README синхронизирован с архитектурой 1.2.0 и бо�
 
 Ожидаемые по мере развития репозитория, но не обязательные до появления соответствующей потребности:
 
-- `.github/CODEOWNERS` — машиночитаемая маршрутизация ответственности;
-- Component Contracts;
-- contract-test suite;
-- CI/conformance automation;
 - `RELEASE_POLICY.md` — при переходе к соответствующему операционному режиму.
+
+Появившиеся с переходом к реализации (необязательные для foundation-режима, но уже существующие и охраняемые):
+
+- `.github/CODEOWNERS` — существует;
+- Component Contracts — существуют (7/7);
+- contract-test suite — существует;
+- CI/conformance automation — существует (`.github/workflows/quality-gate.yml`).
 
 Отсутствие необязательного артефакта не делает baseline `DIRTY`.
 
 ## 5. Состояние репозитория
 
-На момент baseline подтверждено отсутствие реализации фабричных механизмов и компонентов. В частности, ещё не созданы:
+**Существует (факт на момент этой актуализации):**
+
+- 7 реализованных компонентов Level 0 (in-memory, standalone): `authorization`, `identity`, `tenant_authority`, `records`, `learning` (SCS-001, Slices 1–4), `saga`, `idempotency`;
+- Component Contracts (7/7) с OpenAPI-документами;
+- contract-test suite и поведенческие тесты (730 тестов: границы, tenant isolation, fail closed, idempotency, saga, audit, observability);
+- Quality Gate (локальный скрипт + CI) с закреплёнными версиями инструментов.
+
+**По-прежнему не существует** (фабричные механизмы не введены, что допустимо в standalone/foundation-режиме §4.1):
 
 - Component Catalog;
 - Component Registry;
 - Composer;
 - Golden Bundle;
 - Platform Instance implementation;
-- production contracts/schemas;
-- migration sets;
-- contract-test suite;
-- CI/conformance automation.
+- migration sets (физических БД нет — in-memory stores Level 0);
+- deployable-артефакты (текущие `deployment.py` — только композиционный код).
 
-Это **не является нарушением**: текущий проект находится в standalone/foundation-режиме, разрешённом §4.1 ARCHITECTURE.md 1.2.0.
+Следствие для §30: ни один компонент не является `PUBLISHABLE` (отсутствуют migrations, deployable-артефакт, event-инфраструктура). Проект публикации не заявляет; это задокументированное состояние foundation/standalone-режима, а **не нарушение** архитектурного закона.
 
 ## 6. Что означает CLEAN
 
@@ -125,4 +138,4 @@ Tests / Conformance
 
 **DOCUMENTATION BASELINE: CLEAN.**
 
-Фундамент документации считается пригодным для перехода от конституционной подготовки к проектированию первого implementation slice.
+Фундамент документации сопровождает репозиторий от конституционной подготовки до текущего реализованного состояния: компоненты Level 0 реализованы, контракты и contract-тесты существуют, Quality Gate воспроизводим и зелёный, фабричные механизмы намеренно не введены (standalone-режим, §4.1), компоненты не публикуются и `NOT PUBLISHABLE` по §30 задокументировано как текущее состояние.

@@ -78,13 +78,22 @@ OIDC, CDC, RLS, SemVer).
 
 ## Статус
 
-Начальная стадия (Foundation stage).
+Стадия реализации (Foundation stage, standalone mode, ARCHITECTURE.md §4.1).
+
+Реализованы 7 компонентов Level 0 (in-memory, модульный монолит):
+`authorization`, `identity`, `tenant_authority`, `records`,
+`learning` (SCS-001, Slices 1–4), `saga`, `idempotency`
+(`src/`, контракты в `components/*/contract/`, поведенческие и
+contract-тесты в `tests/`).
 
 Текущее состояние — автономный режим (standalone mode, ARCHITECTURE.md §4.1):
 механизмы фабрики (Component Catalog, Golden Bundles, Composer,
 Release Train) ещё не включены, и создание их до достижения гейтов
-было бы нарушением LAW-13.
+было бы нарушением LAW-13. Миграции и deployable-артефакты отсутствуют,
+поэтому компоненты не являются `PUBLISHABLE` по §30 — это задокументированное
+состояние foundation-режима, а не нарушение.
 
-Архитектура 1.2.0 ратифицирована. ADR-0010 также ратифицирован.
+Архитектура 1.2.0 ратифицирована (ADR-0010, 2026-09-08).
+ADR-0011 (SCS-001 Learning Content Authoring) ратифицирован 2026-09-10.
 Документационный базовый стандарт зафиксирован в
 `docs/DOCUMENTATION_BASELINE.md` (статус: `CLEAN`).
