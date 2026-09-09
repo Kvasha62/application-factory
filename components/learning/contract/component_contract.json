@@ -4,7 +4,7 @@
   "component_version": "0.1.0",
   "class": "business_system",
   "maturity_level": "level_0_modular_monolith",
-  "task": "SCS-001 Slice 1 — Submission Read (prerequisite for Slice 2 / Issue #20)",
+  "task": "SCS-001 Slice 2 — Teacher Submission Discovery (Issue #20)",
   "learning_boundary": {
     "role": "Data Ownership / Learning Boundary",
     "invariants": [
@@ -15,7 +15,8 @@
       "L-005 the effective tenant comes from IS-001; this component creates no second tenant-context mechanism",
       "L-006 the public surface provides no access path that bypasses the Learning enforcement boundary",
       "L-007 security-sensitive refusals are auditable and observable with request/correlation and actor/tenant context where applicable",
-      "L-008 the internals of this component are not a consumer contract: a consumer receives the published client and values only"
+      "L-008 the internals of this component are not a consumer contract: a consumer receives the published client and values only",
+      "L-009 a list answer contains only submissions of the requested Assignment, or is a refusal — there is no partial cross-assignment or cross-tenant set"
     ],
     "enforcement_chain": [
       "ownership_boundary",
@@ -49,6 +50,15 @@
         "authorization_operation": "learning.submissions.read",
         "idempotency": "natural",
         "idempotency_note": "A read changes no state beyond the append-only audit journal."
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/learning/assignments/{assignment_id}/submissions",
+        "openapi_path": "/assignments/{assignment_id}/submissions",
+        "purpose": "list one Assignment's submissions after the enforcement chain allowed the access (teacher discovery); an empty assignment answers 200 with {items: []}",
+        "authorization_operation": "learning.submissions.list",
+        "idempotency": "natural",
+        "idempotency_note": "A read changes no state beyond the append-only audit journal."
       }
     ],
     "enforcement_model": {
@@ -59,9 +69,11 @@
         "owned_data_operation"
       ],
       "owned_data_operations": [
-        "serve_submission"
+        "serve_submission",
+        "list_submissions_for_assignment"
       ],
       "own_deny_reasons": [
+        "assignment_unknown",
         "submission_unknown",
         "owner_mismatch",
         "authorization_unavailable"
@@ -107,7 +119,7 @@
           "NOT_FOUND": {
             "status": 404,
             "message": "Requested resource was not found.",
-            "reasons": "submission_unknown"
+            "reasons": "assignment_unknown, submission_unknown"
           },
           "INVALID_REQUEST": {
             "status": 422,
@@ -126,10 +138,10 @@
       "refused": {
         "401": "missing_identity, invalid_identity, unknown_identity",
         "403": "tenant_mismatch, tenant_unknown, platform_ownership_mismatch, resource_tenant_unknown, resource_tenant_mismatch, tenant_not_active, tenant_suspended, tenant_deletion_requested, tenant_deleted, permission_not_granted, authority_unavailable, missing_tenant_context, owner_mismatch",
-        "404": "submission_unknown",
+        "404": "assignment_unknown, submission_unknown",
         "503": "authorization_unavailable"
       },
-      "served": "HTTP 200 with the eight-field submission representation, produced only by the owned-data operation at the end of the enforcement chain"
+      "served": "HTTP 200 with the eight-field submission representation — one submission or {items: [...]} — produced only by the owned-data operation at the end of the enforcement chain"
     },
     "consumer_surface": {
       "module": "learning_service.reader",
@@ -145,10 +157,12 @@
         "opaque contract channel handle (str)"
       ],
       "operations": [
-        "read_submission"
+        "read_submission",
+        "list_submissions"
       ],
       "returns": [
-        "learning_service.contracts.SubmissionView"
+        "learning_service.contracts.SubmissionView",
+        "list[learning_service.contracts.SubmissionView]"
       ],
       "errors": [
         "learning_service.errors.AccessRefused — the access did not happen; the reason is one of the published refusal reasons (401/403/404/503), carried in error.details.reason, with the request_id/correlation_id of the refusal",
@@ -162,7 +176,7 @@
         "importing the published module binds no reference to learning_service.transport — its namespace holds no module object, no channel table and no transport type",
         "an unknown or revoked channel handle raises ContractViolation, so there is no permissive fallback and a handle cannot be guessed",
         "every access runs through the same routing, enforcement chain and audit code that serves an HTTP request",
-        "there is no listing, bulk export, search, pagination or raw-store operation: the published read operation is the only access path, and it is enforced"
+        "there is no assignment listing, bulk export, search, pagination or raw-store operation beyond the published per-assignment list: the two published read operations are the only access paths, and both are enforced"
       ],
       "composition_root_only": [
         "learning_service.deployment (LearningDeployment: engine, store, configuration)",
@@ -196,7 +210,7 @@
         "operations": [
           "decide"
         ],
-        "note": "The access decision is read per access and never cached. The resource's owning Tenant stated in the question comes from this component's own store, never from a caller claim (LAW-16a).",
+        "note": "The access decision is read per access and never cached. The resource's owning Tenant stated in the question comes from this component's own store, never from a caller claim (LAW-16a). The single-read question names the submission, the teacher-discovery question names the Assignment; both name the record's own tenant from the store.",
         "dependency_isolation": "No module of learning imports authorization_service, identity_service or tenant_authority: the published client is adapted at the composition boundary and only values owned by this component reach the enforcement logic (ARCHITECTURE.md 1.1, 6.1, LAW-04)."
       }
     ]
@@ -206,19 +220,19 @@
     "status": "declared_only",
     "published": [],
     "consumed": [],
-    "note": "SCS-001 Slice 1 publishes no inter-component events and does not simulate a broker. The access audit journal is owned data, not a public event contract."
+    "note": "SCS-001 Slice 2 publishes no inter-component events and does not simulate a broker. The access audit journal is owned data, not a public event contract."
   },
   "data_export_cdc": {
     "status": "declared_only",
     "version": null,
     "compatibility_policy": null,
     "streams": [],
-    "note": "No CDC or bulk export stream is implemented in Slice 1. A bulk path would be a bypass risk for the enforcement boundary and is deliberately out of this slice."
+    "note": "No CDC or bulk export stream is implemented in Slice 2. A bulk path would be a bypass risk for the enforcement boundary and is deliberately out of this slice."
   },
   "ui": {
     "kind": "declared_only",
     "embedding": "not_applicable",
-    "note": "Class A Business System / SCS; UI is out of this Level 0 slice. The submission read is proven at the API boundary."
+    "note": "Class A Business System / SCS; UI is out of this Level 0 slice. Both reads are proven at the API boundary."
   },
   "configuration_schema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -261,7 +275,7 @@
     ],
     "notes": [
       "This component owns no identity, no permission grant, no tenant registry and no tenant state: those belong to identity, authorization and tenant_authority and are read through their published contracts.",
-      "The submission model is the business model of Slice 1 (submission_id, assignment_id, student_identity_id, attempt, content, status, created_at, updated_at) with lifecycle DRAFT → SUBMITTED; no grading, comments, review states, progress or enrollment exist in this slice."
+      "The submission model is the business model of Slices 1–2 (submission_id, assignment_id, student_identity_id, attempt, content, status, created_at, updated_at) with lifecycle DRAFT → SUBMITTED; no grading, comments, review states, progress or enrollment exist in this slice."
     ]
   },
   "audit": {
@@ -317,7 +331,8 @@
     "enforcement_point": "learning",
     "tenant_context_source": "identity",
     "operations_guarded": [
-      "learning.submissions.read"
+      "learning.submissions.read",
+      "learning.submissions.list"
     ],
     "authentication_does_not_imply_authorization": true,
     "note": "ALLOW from IS-003 is not direct data access: the data owner remains the final enforcement boundary (ARCHITECTURE.md §6.2). A decision that cannot be obtained is a denial."
