@@ -12,10 +12,12 @@ is the enforcement story of the component:
   whether a record exists here and who its single owner is. The engine
   reads them to form the question it asks IS-003; they serve nothing to a
   caller;
-* :meth:`LearningStore.serve_submission` — the owned-data operation
-  itself. The engine calls it only after the enforcement chain produced
-  an ``ALLOW``, and the tests count exactly these calls to prove that a
-  denied request never reaches them.
+* :meth:`LearningStore.serve_submission`,
+  :meth:`LearningStore.list_submissions_for_assignment` and
+  :meth:`LearningStore.apply_review` — the owned-data operations
+  themselves. The engine calls them only after the enforcement chain
+  produced an ``ALLOW``, and the tests count exactly these calls to prove
+  that a denied request never reaches them.
 """
 
 from __future__ import annotations
@@ -130,6 +132,22 @@ class LearningStore:
         """The owned-data single-read operation. Called only after an ALLOW."""
         return self.submissions[submission_id]
 
+    def list_submissions_for_assignment(self, assignment_id: str) -> list[OwnedSubmission]:
+        """The owned-data list operation. Called only after an ALLOW.
+
+        Returns only submissions belonging to the requested Assignment, in
+        deterministic ``submission_id`` order. No pagination, sorting or
+        search parameters exist in this slice — the full set is the answer,
+        and an empty set is a successful empty list.
+        """
+        items = [
+            sub
+            for sub in self.submissions.values()
+            if sub.assignment_id == assignment_id
+        ]
+        items.sort(key=lambda s: s.submission_id)
+        return items
+
     def assert_reviewable(self, submission_id: str) -> OwnedSubmission:
         """The state rule of the review command, enforced before idempotency.
 
@@ -223,8 +241,12 @@ class LearningStore:
                 )
             )
 
+        # Tenant A: one assignment with two submissions, one with a single
+        # submission (filtering proof), one empty (empty-list proof).
         add_assignment("asg_a1", "ten_a")
         add_assignment("asg_a2", "ten_a")
+        add_assignment("asg_a_empty", "ten_a")
+        # Tenant B: one assignment with one submission (isolation proof).
         add_assignment("asg_b1", "ten_b")
 
         add_submission("sub_a1_1", "asg_a1", "ten_a", "idn_human_c", 1, "SUBMITTED")

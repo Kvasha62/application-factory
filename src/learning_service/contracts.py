@@ -9,7 +9,9 @@ imported or reached through the published surface (ARCHITECTURE.md §1.1,
 LAW-04).
 
 The object a consumer receives is ``learning_service.reader.LearningClient``
-— one read operation over the published API, values in and values out.
+— the published operations over the published API (the Slice 1 single read,
+the Slice 2 teacher-discovery list and the Slice 3 review command), values
+in and values out.
 
 Two facts about the model are deliberate:
 
@@ -19,11 +21,11 @@ Two facts about the model are deliberate:
   a view means the access was allowed — and a refusal can never be mistaken
   for one. No student profile/account data is carried: ``student_identity_id``
   is an opaque reference owned outside Learning;
-* the published reason vocabulary is closed: three reasons of this
-  component's own boundary plus the published denial reasons of IS-003
-  passed through unchanged. A refusal outside that vocabulary cannot
-  happen: a non-authoritative answer of the dependency is reported as
-  ``authorization_unavailable`` and denied.
+* the published reason vocabulary is closed: the reasons of this
+  component's own boundary (see :class:`OwnDenyReason`) plus the published
+  denial reasons of IS-003 passed through unchanged. A refusal outside that
+  vocabulary cannot happen: a non-authoritative answer of the dependency is
+  reported as ``authorization_unavailable`` and denied.
 """
 
 from __future__ import annotations
@@ -41,16 +43,20 @@ OWNER_COMPONENT = "learning"
 RESOURCE_TYPE_ASSIGNMENT = "assignment"
 RESOURCE_TYPE_SUBMISSION = "submission"
 
-#: The grant vocabulary the data owner asks IS-003 about. The single read
-#: changes no state beyond the append-only audit journal; the review command
-#: is the state-changing operation of Slice 3, guarded by IS-005.
+#: The grant vocabulary the data owner asks IS-003 about. The two read
+#: operations change no state beyond the append-only audit journal; the review
+#: command is the state-changing operation of Slice 3, guarded by IS-005.
+#: The teacher discovery operation is the Slice 2 addition; the single read is
+#: the Slice 1 prerequisite it builds on.
 OPERATION_READ = "learning.submissions.read"
+OPERATION_LIST = "learning.submissions.list"
 OPERATION_REVIEW = "learning.submissions.review"
 
 
 class OwnDenyReason:
     """Reasons of this component's own enforcement boundary (closed set).
 
+    ``assignment_unknown`` — no such assignment is owned here.
     ``submission_unknown`` — no such submission is owned here.
     ``owner_mismatch`` — a record whose single owner is another component
     can never be served through this boundary.
@@ -69,6 +75,7 @@ class OwnDenyReason:
     a different binding (identity, tenant, operation, target or command).
     """
 
+    ASSIGNMENT_UNKNOWN = "assignment_unknown"
     SUBMISSION_UNKNOWN = "submission_unknown"
     OWNER_MISMATCH = "owner_mismatch"
     AUTHORIZATION_UNAVAILABLE = "authorization_unavailable"
@@ -81,6 +88,7 @@ class OwnDenyReason:
 #: The closed set of own reasons, as values.
 OWN_DENY_REASONS: frozenset[str] = frozenset(
     {
+        OwnDenyReason.ASSIGNMENT_UNKNOWN,
         OwnDenyReason.SUBMISSION_UNKNOWN,
         OwnDenyReason.OWNER_MISMATCH,
         OwnDenyReason.AUTHORIZATION_UNAVAILABLE,
@@ -126,6 +134,7 @@ class SubmissionView:
 
 
 __all__ = [
+    "OPERATION_LIST",
     "OPERATION_READ",
     "OPERATION_REVIEW",
     "OWN_DENY_REASONS",
