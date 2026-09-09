@@ -59,6 +59,10 @@ class OwnDenyReason:
     ``invalid_state_transition`` — a domain refusal after an ALLOW: only a
     ``SUBMITTED`` submission may be reviewed, and review never changes the
     lifecycle state.
+    ``already_reviewed`` — a domain refusal after an ALLOW: the review fact
+    is immutable, so a review command against an already reviewed submission
+    (a different command, i.e. a different ``Idempotency-Key``) can never
+    overwrite ``reviewed_by`` / ``reviewed_at``.
     ``idempotency_key_required`` — a state-changing command was sent without
     the mandatory ``Idempotency-Key`` header.
     ``idempotency_conflict`` — the ``Idempotency-Key`` was already used with
@@ -69,6 +73,7 @@ class OwnDenyReason:
     OWNER_MISMATCH = "owner_mismatch"
     AUTHORIZATION_UNAVAILABLE = "authorization_unavailable"
     INVALID_STATE_TRANSITION = "invalid_state_transition"
+    ALREADY_REVIEWED = "already_reviewed"
     IDEMPOTENCY_KEY_REQUIRED = "idempotency_key_required"
     IDEMPOTENCY_CONFLICT = "idempotency_conflict"
 
@@ -80,6 +85,7 @@ OWN_DENY_REASONS: frozenset[str] = frozenset(
         OwnDenyReason.OWNER_MISMATCH,
         OwnDenyReason.AUTHORIZATION_UNAVAILABLE,
         OwnDenyReason.INVALID_STATE_TRANSITION,
+        OwnDenyReason.ALREADY_REVIEWED,
         OwnDenyReason.IDEMPOTENCY_KEY_REQUIRED,
         OwnDenyReason.IDEMPOTENCY_CONFLICT,
     }

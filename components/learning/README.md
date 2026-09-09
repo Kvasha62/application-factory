@@ -27,6 +27,13 @@ Review означает ровно одно: учитель фиксирует �
 комментарий, не evaluation и не LearningResult. Review не меняет lifecycle
 Submission и не создаёт сущности Review.
 
+Факт review — **однократный и неизменяемый (immutable)**: `reviewed_by` и
+`reviewed_at` устанавливаются первым успешным review и далее не
+перезаписываются. Повтор с тем же `Idempotency-Key` — это идемпотентный
+replay (тот же результат, без второго эффекта); повтор с **другим**
+`Idempotency-Key` — новая команда, которая отказывается с `ALREADY_REVIEWED`
+и не меняет первый факт review.
+
 ## Цепочка, которая доказывается
 
 ```text
@@ -42,9 +49,10 @@ Learning Boundary (этот компонент)
    ├─ Submission == SUBMITTED?                   иначе INVALID_STATE_TRANSITION
    ├─ Idempotency-Key обязателен и binding тот же? иначе IDEMPOTENCY_KEY_REQUIRED /
    │                                              IDEMPOTENCY_CONFLICT
+   ├─ факт review ещё не установлен?             иначе ALREADY_REVIEWED
    └─ IS-005 исполняет эффект ровно один раз
       ↓
-reviewed_by / reviewed_at записываются; lifecycle остаётся SUBMITTED
+reviewed_by / reviewed_at записываются один раз; lifecycle остаётся SUBMITTED
 ```
 
 Порядок шагов опубликован (`api.enforcement_model.enforcement_chain`) и
@@ -63,8 +71,8 @@ reviewed_by / reviewed_at записываются; lifecycle остаётся S
 | `content` | тело работы (object) |
 | `status` | `DRAFT → SUBMITTED` — ровно эти два состояния |
 | `created_at` / `updated_at` | метки времени |
-| `reviewed_by` | opaque-ссылка на verified identity учителя; `null` до review |
-| `reviewed_at` | timestamp успешного review; `null` до review |
+| `reviewed_by` | opaque-ссылка на verified identity учителя; `null` до review; неизменяем после первого review |
+| `reviewed_at` | timestamp успешного review; `null` до review; неизменяем после первого review |
 
 Работа принадлежит тому же тенанту, что и её задание — это инвариант
 хранилища, а не заявление вызывающей стороны. Оценок, комментариев,
@@ -109,6 +117,7 @@ Feedback/LearningResult в срезе нет: review — это ровно дв�
 | `403` | `AUTHORIZATION_DENIED` | опубликованные `DENY`-причины IS-003 без изменений; `owner_mismatch` |
 | `404` | `NOT_FOUND` | `submission_unknown` — решение не запрашивается |
 | `409` | `INVALID_STATE_TRANSITION` | `invalid_state_transition` — review только для `SUBMITTED` |
+| `409` | `ALREADY_REVIEWED` | `already_reviewed` — факт review неизменяем; другой ключ не перезаписывает первый review |
 | `409` | `IDEMPOTENCY_CONFLICT` | `idempotency_conflict` — ключ уже использован с другим binding |
 | `503` | `DEPENDENCY_UNAVAILABLE` | `authorization_unavailable` — зависимость не ответила или вне контракта |
 

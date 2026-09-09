@@ -192,8 +192,11 @@ paths:
         "409":
           description: >-
             состояние не допускает review (код INVALID_STATE_TRANSITION,
-            invalid_state_transition) либо Idempotency-Key уже использован с
-            другим binding (код IDEMPOTENCY_CONFLICT, idempotency_conflict)
+            invalid_state_transition); работа уже проверена и факт review
+            неизменяем (код ALREADY_REVIEWED, already_reviewed) — повторная
+            команда с другим Idempotency-Key не перезаписывает первый факт;
+            либо Idempotency-Key уже использован с другим binding (код
+            IDEMPOTENCY_CONFLICT, idempotency_conflict)
           content:
             application/json:
               schema:
@@ -264,10 +267,13 @@ components:
           type: [string, "null"]
           description: >-
             opaque-ссылка на verified identity учителя, выполнившего review;
-            null до первого review; профиль вне Learning
+            null до первого review; профиль вне Learning. Устанавливается
+            первым успешным review и далее неизменяем (immutable)
         reviewed_at:
           type: [string, "null"]
-          description: timestamp успешного review; null до первого review
+          description: >-
+            timestamp успешного review; null до первого review. Устанавливается
+            первым успешным review и далее неизменяем (immutable)
     Error:
       type: object
       additionalProperties: false
@@ -280,7 +286,7 @@ components:
           properties:
             code:
               type: string
-              enum: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, NOT_FOUND, INVALID_REQUEST, INVALID_STATE_TRANSITION, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, DEPENDENCY_UNAVAILABLE]
+              enum: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, NOT_FOUND, INVALID_REQUEST, INVALID_STATE_TRANSITION, ALREADY_REVIEWED, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, DEPENDENCY_UNAVAILABLE]
               description: минимальный опубликованный код отказа SCS-001
             message:
               type: string

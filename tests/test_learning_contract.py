@@ -21,7 +21,11 @@ from learning_service import COMPONENT_ID, COMPONENT_VERSION
 from learning_service.api import ERROR_CODES, error_code_for
 from learning_service.config import LearningConfig
 from learning_service.consumed import DecisionAnswer
-from learning_service.contracts import OWN_DENY_REASONS, PUBLISHED_DENY_REASONS, OwnDenyReason
+from learning_service.contracts import (
+    OWN_DENY_REASONS,
+    PUBLISHED_DENY_REASONS,
+    OwnDenyReason,
+)
 from learning_service.engine import ENFORCEMENT_CHAIN
 from learning_service.errors import ConfigurationError
 from learning_service.models import OwnedSubmission
@@ -158,7 +162,9 @@ def test_contract_declares_the_two_dependencies_on_published_contracts():
     data = contract()
     dependencies = data["dependencies"]
     assert len(dependencies) == 2
-    by_component = {dependency["component_id"]: dependency for dependency in dependencies}
+    by_component = {
+        dependency["component_id"]: dependency for dependency in dependencies
+    }
     authorization = by_component["authorization"]
     assert authorization["kind"] == "api"
     assert authorization["version_range"] == ">=0.1.0,<0.2.0"
@@ -294,15 +300,23 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
         return learning_harness().http().get("/api/v1/learning/submissions/sub_a1_1")
 
     def scenario_403():
-        return learning_harness().http().get(
-            "/api/v1/learning/submissions/sub_b1_1",
-            headers={"authorization": f"Bearer {TEACHER_A}"},
+        return (
+            learning_harness()
+            .http()
+            .get(
+                "/api/v1/learning/submissions/sub_b1_1",
+                headers={"authorization": f"Bearer {TEACHER_A}"},
+            )
         )
 
     def scenario_404():
-        return learning_harness().http().get(
-            "/api/v1/learning/submissions/missing",
-            headers={"authorization": f"Bearer {TEACHER_A}"},
+        return (
+            learning_harness()
+            .http()
+            .get(
+                "/api/v1/learning/submissions/missing",
+                headers={"authorization": f"Bearer {TEACHER_A}"},
+            )
         )
 
     def scenario_409():
@@ -318,7 +332,10 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
         )
 
     def scenario_503():
-        from tests.test_learning_boundary import StubAuthorizationPort, learning_deployment
+        from tests.test_learning_boundary import (
+            StubAuthorizationPort,
+            learning_deployment,
+        )
 
         deployment = learning_deployment(StubAuthorizationPort(RuntimeError("boom")))
         http = TestClient(deployment.contract_app())
@@ -349,7 +366,9 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
         assert response.status_code == status, (status, response.text)
         body = envelope_of(response)
         assert body["error"]["code"] == expected_codes[status]
-        assert body["error"]["message"] == ERROR_CODES[expected_codes[status]]["message"]
+        assert (
+            body["error"]["message"] == ERROR_CODES[expected_codes[status]]["message"]
+        )
         documented = {r.strip() for r in refused[str(status)].split(",")}
         assert body["error"]["details"]["reason"] in documented
 
@@ -426,7 +445,10 @@ def test_dependency_isolation_is_declared_with_the_real_module_names():
     consumed = consumes[0]
     assert consumed["component_id"] == "authorization"
     assert consumed["local_port"] == "learning_service.ports.AuthorizationPort"
-    assert consumed["local_adapter"] == "learning_service.adapters.AuthorizationDecisionAdapter"
+    assert (
+        consumed["local_adapter"]
+        == "learning_service.adapters.AuthorizationDecisionAdapter"
+    )
     assert consumed["local_answer_type"] == "learning_service.consumed.DecisionAnswer"
     assert consumed["operations"] == ["decide"]
 
@@ -444,7 +466,8 @@ def test_review_operation_is_declared_in_openapi():
 def test_review_operation_is_declared_in_the_component_contract():
     data = contract()
     operations = {
-        (operation["method"], operation["path"]): operation for operation in data["api"]["operations"]
+        (operation["method"], operation["path"]): operation
+        for operation in data["api"]["operations"]
     }
     review = operations[("POST", "/api/v1/learning/submissions/{submission_id}/review")]
     assert review["authorization_operation"] == "learning.submissions.review"
@@ -467,7 +490,14 @@ def test_no_review_entity_and_no_grading_features_exist():
     import ast
     from dataclasses import fields
 
-    forbidden_classes = {"Review", "Evaluation", "Grade", "Feedback", "LearningResult", "Comment"}
+    forbidden_classes = {
+        "Review",
+        "Evaluation",
+        "Grade",
+        "Feedback",
+        "LearningResult",
+        "Comment",
+    }
     package = Path("src/learning_service")
     class_names: set[str] = set()
     for path in package.glob("*.py"):
@@ -484,7 +514,14 @@ def test_no_review_entity_and_no_grading_features_exist():
 
 def test_no_forbidden_endpoints_exist_in_openapi():
     text = openapi_text()
-    for forbidden in ("/unreview", "/reset-review", "/evaluate", "/grade", "/feedback", "/comments"):
+    for forbidden in (
+        "/unreview",
+        "/reset-review",
+        "/evaluate",
+        "/grade",
+        "/feedback",
+        "/comments",
+    ):
         assert forbidden not in text, forbidden
 
 
@@ -494,3 +531,23 @@ def test_review_semantics_are_declared_as_fact_not_grading():
     assert review["no_review_entity"].startswith("no Review")
     assert "reviewed_by" in review["semantics"]
     assert review["state_rule"]  # SUBMITTED only
+
+
+def test_contract_declares_the_review_fact_is_immutable():
+    data = contract()
+    review = data["api"]["enforcement_model"]["review"]
+    assert "immutability" in review
+    assert "immutable" in review["immutability"]
+    assert "immutable" in review["semantics"]
+    # The immutability is expressed without a new lifecycle state.
+    assert data["api"]["enforcement_model"]["submission_states"] == [
+        "DRAFT",
+        "SUBMITTED",
+    ]
+
+
+def test_openapi_declares_the_review_fact_is_immutable():
+    text = openapi_text()
+    assert "неизменяем" in text
+    assert "ALREADY_REVIEWED" in text
+    assert "already_reviewed" in text

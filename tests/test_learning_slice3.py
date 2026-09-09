@@ -19,7 +19,7 @@ from learning_service.consumed import DependencyRefusal
 from learning_service.contracts import OPERATION_REVIEW, OwnDenyReason
 from learning_service.errors import AccessRefused
 from learning_service.models import OwnedSubmission
-from learning_service.store import SUBMISSION_STATES, LearningStore
+from learning_service.store import SUBMISSION_STATES, DomainRefusal, LearningStore
 from tests.test_learning_boundary import (
     ALLOW,
     StubAuthorizationPort,
@@ -177,6 +177,95 @@ def test_the_published_client_records_the_review():
     assert view.reviewed_by == "idn_human_a"
     assert view.reviewed_at
     assert view.status == "SUBMITTED"
+
+
+# --------------------------------------------------------------- immutability
+def test_review_fact_is_immutable_across_different_keys():
+    harness = review_harness()
+    harness.learning.engine.clock = lambda: "2026-09-09T10:00:00+00:00"
+
+    # 1. Review with Idempotency-Key A.
+    first = review(harness, "sub_a1_1", key="ik-immutable-a")
+    # 2. Success.
+    assert first.status_code == 200
+    # 3. Save the review fact.
+    first_by = first.json()["reviewed_by"]
+    first_at = first.json()["reviewed_at"]
+    assert first_by == "idn_human_a"
+    assert first_at == "2026-09-09T10:00:00+00:00"
+
+    # A second command with another key would write a different timestamp if
+    # the fact were mutable: advance the clock to prove it cannot.
+    harness.learning.engine.clock = lambda: "2026-09-09T11:00:00+00:00"
+
+    # 4. Review the same submission with Idempotency-Key B.
+    second = review(harness, "sub_a1_1", key="ik-immutable-b")
+
+    # 5. The first review fact is NOT overwritten: the command is refused.
+    assert second.status_code == 409
+    body = envelope_of(second)
+    assert body["error"]["code"] == "ALREADY_REVIEWED"
+    assert body["error"]["details"]["reason"] == "already_reviewed"
+
+    stored = harness.learning.store.submissions["sub_a1_1"]
+    # 6. reviewed_by remains the first teacher.
+    assert stored.reviewed_by == first_by == "idn_human_a"
+    # 7. reviewed_at remains the original timestamp.
+    assert stored.reviewed_at == first_at == "2026-09-09T10:00:00+00:00"
+    # The lifecycle stays SUBMITTED.
+    assert stored.status == "SUBMITTED"
+
+
+def test_a_different_key_creates_no_second_effect():
+    store = CountingLearningStore()
+    harness = review_harness(store=store)
+
+    first = review(harness, "sub_a1_1", key="ik-effect-a")
+    second = review(harness, "sub_a1_1", key="ik-effect-b")
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    # The review effect ran exactly once: the second command applied nothing.
+    assert store.applied_reviews == 1
+    # The second command saved no successful idempotency record (IS-005 saves
+    # only after the effect returned).
+    assert "ik-effect-b" not in harness.learning.engine.idempotency._store
+
+
+def test_second_review_is_audited_as_a_denial():
+    harness = review_harness()
+
+    assert review(harness, "sub_a1_1", key="ik-audit-a").status_code == 200
+    response = review(harness, "sub_a1_1", key="ik-audit-b")
+    assert response.status_code == 409
+
+    event = harness.learning.store.audit[-1]
+    assert event.action == OPERATION_REVIEW
+    assert event.decision == "DENY"
+    assert event.reason == "already_reviewed"
+    assert event.subject_id == "idn_human_a"
+    assert event.submission_id == "sub_a1_1"
+
+
+def test_apply_review_is_immutable_at_the_store_boundary():
+    store = LearningStore()
+    store.seed_demo()
+
+    first = store.apply_review("sub_a1_1", "idn_human_a", "2026-09-09T10:00:00+00:00")
+    assert first.reviewed_by == "idn_human_a"
+    assert first.reviewed_at == "2026-09-09T10:00:00+00:00"
+
+    # Defence in depth: the store itself refuses a second review and never
+    # overwrites the first fact, whatever identity/timestamp is passed.
+    try:
+        store.apply_review("sub_a1_1", "idn_human_c", "2026-09-09T11:00:00+00:00")
+        raise AssertionError("expected a domain refusal")
+    except DomainRefusal as refused:
+        assert refused.reason == "already_reviewed"
+
+    stored = store.submissions["sub_a1_1"]
+    assert stored.reviewed_by == "idn_human_a"
+    assert stored.reviewed_at == "2026-09-09T10:00:00+00:00"
 
 
 # ------------------------------------------------------------------ negative

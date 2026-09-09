@@ -85,14 +85,18 @@ def _utc_now() -> str:
 
 
 def _status_for(reason: str) -> int:
-    """HTTP status of a refusal: 401 authentication, 404 unknown, 409 state
-    or idempotency conflict, 400 missing idempotency key, 503 fail-closed
-    dependency, 403 everything else."""
+    """HTTP status of a refusal: 401 authentication, 404 unknown, 409 state,
+    immutability or idempotency conflict, 400 missing idempotency key, 503
+    fail-closed dependency, 403 everything else."""
     if reason in _AUTHENTICATION_DENIALS:
         return 401
     if reason == OwnDenyReason.SUBMISSION_UNKNOWN:
         return 404
-    if reason in (OwnDenyReason.INVALID_STATE_TRANSITION, OwnDenyReason.IDEMPOTENCY_CONFLICT):
+    if reason in (
+        OwnDenyReason.INVALID_STATE_TRANSITION,
+        OwnDenyReason.ALREADY_REVIEWED,
+        OwnDenyReason.IDEMPOTENCY_CONFLICT,
+    ):
         return 409
     if reason == OwnDenyReason.IDEMPOTENCY_KEY_REQUIRED:
         return 400
@@ -263,7 +267,10 @@ class LearningEngine:
         match), then inside the owned-data step the state rule (``SUBMITTED``
         only), then the IS-005 guard (mandatory key, replay, conflict), then
         the review effect. The review effect records ``reviewed_by`` /
-        ``reviewed_at`` and leaves the lifecycle ``SUBMITTED``.
+        ``reviewed_at`` and leaves the lifecycle ``SUBMITTED``. The review
+        fact is immutable: a second review command with a different
+        ``Idempotency-Key`` cannot overwrite the first review — only an exact
+        replay of the first command returns the recorded result.
         """
         obs = self.observability(
             tenant_id=None, subject_id=None,
@@ -393,6 +400,23 @@ class LearningEngine:
                 submission_id=submission_id,
                 claimed_tenant_id=claimed_tenant_id,
                 details={"idempotency_key": idempotency_key},
+            )
+        except DomainRefusal as exc:
+            # A second review command (different Idempotency-Key) reached an
+            # already reviewed submission: the review fact is immutable, so the
+            # owned-data operation refused and no record was saved by IS-005.
+            raise self._refuse(
+                exc.reason,
+                action=OPERATION_REVIEW,
+                obs=obs,
+                subject_id=subject_id,
+                tenant_id=tenant_id,
+                resource_id=submission_id,
+                resource_tenant_id=submission.tenant_id,
+                assignment_id=submission.assignment_id,
+                submission_id=submission_id,
+                claimed_tenant_id=claimed_tenant_id,
+                details={"kind": "domain_refusal", "submission_state": submission.status},
             )
 
         # 3c. the review effect ran exactly once; the result is the submission

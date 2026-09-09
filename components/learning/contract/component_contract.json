@@ -78,6 +78,7 @@
         "owner_mismatch",
         "authorization_unavailable",
         "invalid_state_transition",
+        "already_reviewed",
         "idempotency_key_required",
         "idempotency_conflict"
       ],
@@ -94,9 +95,10 @@
       ],
       "transitions": {},
       "review": {
-        "semantics": "review records the fact that a submission has been checked: reviewed_by (verified teacher identity) and reviewed_at (timestamp) are set on the first successful review and the lifecycle stays SUBMITTED. Review is not grading, scoring, feedback, commenting, evaluation or a lifecycle transition.",
+        "semantics": "review records the fact that a submission has been checked: reviewed_by (verified teacher identity) and reviewed_at (timestamp) are set on the first successful review, remain immutable thereafter, and the lifecycle stays SUBMITTED. Review is not grading, scoring, feedback, commenting, evaluation or a lifecycle transition.",
         "state_rule": "review is allowed only when status == SUBMITTED; a DRAFT submission is refused as invalid_state_transition",
-        "idempotency": "IS-005 guard; Idempotency-Key mandatory; exact replay returns the recorded result; changed binding is refused as idempotency_conflict",
+        "immutability": "reviewed_by and reviewed_at are set by the first successful review and are immutable thereafter: a review command with a different Idempotency-Key against an already reviewed submission is refused as already_reviewed and never overwrites the first review fact",
+        "idempotency": "IS-005 guard; Idempotency-Key mandatory; exact replay returns the recorded result; changed binding is refused as idempotency_conflict. The two cases stay distinct: same key = idempotent replay, different key = a new command against an immutable review fact",
         "no_review_entity": "no Review, Evaluation, Grade, Feedback or LearningResult entity exists; the review fact is exactly the two nullable fields reviewed_by / reviewed_at on Submission"
       }
     },
@@ -141,6 +143,11 @@
             "message": "Operation is not valid for the current submission state.",
             "reasons": "invalid_state_transition"
           },
+          "ALREADY_REVIEWED": {
+            "status": 409,
+            "message": "The submission has already been reviewed.",
+            "reasons": "already_reviewed"
+          },
           "IDEMPOTENCY_KEY_REQUIRED": {
             "status": 400,
             "message": "An Idempotency-Key header is required for this operation.",
@@ -164,7 +171,7 @@
         "401": "missing_identity, invalid_identity, unknown_identity",
         "403": "tenant_mismatch, tenant_unknown, platform_ownership_mismatch, resource_tenant_unknown, resource_tenant_mismatch, tenant_not_active, tenant_suspended, tenant_deletion_requested, tenant_deleted, permission_not_granted, authority_unavailable, missing_tenant_context, owner_mismatch",
         "404": "submission_unknown",
-        "409": "invalid_state_transition, idempotency_conflict",
+        "409": "invalid_state_transition, already_reviewed, idempotency_conflict",
         "503": "authorization_unavailable"
       },
       "served": "HTTP 200 with the ten-field submission representation (including reviewed_by / reviewed_at), produced only by the owned-data operation at the end of the enforcement chain"
@@ -291,7 +298,7 @@
       {
         "name": "submissions",
         "scope": "tenant-scoped",
-        "note": "Every submission belongs to exactly one assignment and to the same Tenant; student_identity_id is an opaque reference — no student profile/account data is stored here. reviewed_by / reviewed_at are opaque review facts set by the review command; no Review/Evaluation/Grade/Feedback/LearningResult entity exists."
+        "note": "Every submission belongs to exactly one assignment and to the same Tenant; student_identity_id is an opaque reference — no student profile/account data is stored here. reviewed_by / reviewed_at are opaque review facts set by the first successful review and immutable thereafter; no Review/Evaluation/Grade/Feedback/LearningResult entity exists."
       },
       {
         "name": "access_audit",

@@ -36,10 +36,11 @@ ASSIGNMENT_STATES: tuple[str, ...] = ("DRAFT", "PUBLISHED", "ARCHIVED")
 class DomainRefusal(Exception):
     """A domain-level refusal of an otherwise allowed operation.
 
-    Currently one case: the review command does not apply to the
-    submission's current state (only ``SUBMITTED`` may be reviewed). It is
-    raised only inside the owned-data step of the chain and is audited like
-    every refusal.
+    Two cases: the review command does not apply to the submission's
+    current state (only ``SUBMITTED`` may be reviewed), and the review fact
+    is immutable (an already reviewed submission cannot be reviewed again).
+    It is raised only inside the owned-data step of the chain and is
+    audited like every refusal.
     """
 
     def __init__(self, reason: str) -> None:
@@ -149,13 +150,22 @@ class LearningStore:
         decision to execute.
 
         Records the review fact — the verified Teacher identity and the
-        timestamp — and leaves the submission ``SUBMITTED``. The state rule is
-        re-checked here as well (defence in depth): the store never applies a
-        review to a non-``SUBMITTED`` submission.
+        timestamp — and leaves the submission ``SUBMITTED``. The state rule
+        and the immutability of the review fact are re-checked here as well
+        (defence in depth): the store never applies a review to a
+        non-``SUBMITTED`` submission and never overwrites an existing review
+        fact, whatever the calling command's binding is.
         """
         submission = self.submissions[submission_id]
         if submission.status != "SUBMITTED":
             raise DomainRefusal("invalid_state_transition")
+        if submission.reviewed_by is not None or submission.reviewed_at is not None:
+            # The review fact is a one-time immutable fact: a second review
+            # command with a different Idempotency-Key is a new command that
+            # must not overwrite the first review. (An exact replay of the
+            # first command never reaches this method — IS-005 returns the
+            # recorded result.)
+            raise DomainRefusal("already_reviewed")
         updated = replace(
             submission, reviewed_by=reviewed_by, reviewed_at=reviewed_at
         )

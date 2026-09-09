@@ -110,6 +110,10 @@ ERROR_CODES: dict[str, dict[str, Any]] = {
         "status": 409,
         "message": "Operation is not valid for the current submission state.",
     },
+    "ALREADY_REVIEWED": {
+        "status": 409,
+        "message": "The submission has already been reviewed.",
+    },
     "IDEMPOTENCY_KEY_REQUIRED": {
         "status": 400,
         "message": "An Idempotency-Key header is required for this operation.",
@@ -146,6 +150,8 @@ def error_code_for(reason: str) -> str:
         return "INVALID_REQUEST"
     if reason == "invalid_state_transition":
         return "INVALID_STATE_TRANSITION"
+    if reason == "already_reviewed":
+        return "ALREADY_REVIEWED"
     if reason == "idempotency_key_required":
         return "IDEMPOTENCY_KEY_REQUIRED"
     if reason == "idempotency_conflict":
