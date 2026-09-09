@@ -195,16 +195,39 @@ def test_every_published_route_refuses_without_an_allow():
         for method in getattr(route, "methods", set())
         if route.path.startswith("/api/") and method in {"GET", "POST"}
     ]
-    assert len(resource_routes) == 3
+    assert len(resource_routes) == 10
 
+    substitutions = {
+        "{submission_id}": "sub_a1_1",
+        "{assignment_id}": "asg_a1",
+        "{course_id}": "crs_a1",
+        "{module_id}": "mod_a1",
+        "{lesson_id}": "les_a1",
+    }
     for method, path in resource_routes:
-        concrete = path.replace("{submission_id}", "sub_a1_1").replace(
-            "{assignment_id}", "asg_a1"
-        )
-        response = getattr(client, method.lower())(concrete)
-        assert response.status_code in {401, 403, 404, 422}, (method, path)
+        concrete = path
+        for placeholder, demo_id in substitutions.items():
+            concrete = concrete.replace(placeholder, demo_id)
+        kwargs = {}
+        if method == "POST" and path == "/api/v1/learning/courses":
+            # A schema-readable command body: without a credential the refusal
+            # must still come from the chain (401), not from the schema (422).
+            kwargs["json"] = {"title": "t", "description": "d"}
+        response = getattr(client, method.lower())(concrete, **kwargs)
+        assert response.status_code in {401, 403, 404, 422, 503}, (method, path)
         body = envelope_of(response)
-        assert body["error"]["code"] == "AUTHENTICATION_REQUIRED"
+        code = body["error"]["code"]
+        if response.status_code == 503:
+            # The harness wires no tenant-context port, so the create-course
+            # command fails closed on the unwired dependency.
+            assert code == "DEPENDENCY_UNAVAILABLE", (method, path)
+        elif response.status_code == 422 and code == "INVALID_REQUEST":
+            # A command without a readable body is refused by the published
+            # schema before any handler runs.
+            assert body["error"]["details"]["reason"] == "malformed_request", (method, path)
+        else:
+            # Every route refuses at the identity step without a credential.
+            assert code == "AUTHENTICATION_REQUIRED", (method, path)
         assert "submission_id" not in response.json(), (method, path)
         assert "items" not in response.json(), (method, path)
 
@@ -226,6 +249,13 @@ def test_published_surface_is_exactly_the_contract_operations():
         ("/api/v1/learning/submissions/{submission_id}", "GET"),
         ("/api/v1/learning/assignments/{assignment_id}/submissions", "GET"),
         ("/api/v1/learning/submissions/{submission_id}/review", "POST"),
+        ("/api/v1/learning/courses", "POST"),
+        ("/api/v1/learning/courses/{course_id}", "GET"),
+        ("/api/v1/learning/courses/{course_id}/modules", "POST"),
+        ("/api/v1/learning/modules/{module_id}/lessons", "POST"),
+        ("/api/v1/learning/lessons/{lesson_id}/assignments", "POST"),
+        ("/api/v1/learning/courses/{course_id}/publish", "POST"),
+        ("/api/v1/learning/courses/{course_id}/archive", "POST"),
     }
 
 
@@ -240,7 +270,18 @@ def test_client_state_is_a_single_opaque_value():
     assert isinstance(state[0], str) and state[0]
 
     published = {name for name in dir(client) if not name.startswith("_")}
-    assert published == {"read_submission", "list_submissions", "review_submission"}
+    assert published == {
+        "read_submission",
+        "list_submissions",
+        "review_submission",
+        "create_course",
+        "read_course",
+        "create_module",
+        "create_lesson",
+        "create_assignment",
+        "publish_course",
+        "archive_course",
+    }
 
 
 def test_client_object_graph_reaches_nothing_internal():

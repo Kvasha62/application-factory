@@ -1,24 +1,34 @@
 openapi: 3.1.0
 info:
-  title: SCS-001 Learning — Submission Read, Teacher Discovery and Review (Slices 1–3)
-  version: 0.1.0
+  title: >-
+    SCS-001 Learning — Submission Read, Teacher Discovery, Review
+    (Slices 1–3) and Content Authoring (Slice 4)
+  version: 0.2.0
   description: >-
     Граница владельца учебных данных одной Platform Instance. Компонент владеет
-    tenant-scoped заданиями (Assignments) и работами (Submissions) и доказывает,
-    что ALLOW от IS-003 не является прямым доступом к данным: финальный контроль
-    остаётся на границе владельца. Каждый доступ проходит фиксированную цепочку
+    tenant-scoped учебными данными (Course, Module, Lesson, Assignment,
+    Submission) и доказывает, что ALLOW от IS-003 не является прямым доступом
+    к данным: финальный контроль остаётся на границе владельца. Каждый доступ
+    проходит фиксированную цепочку
     `ownership_boundary → authorization_decision → owned_data_operation`;
     решение по умолчанию — DENY, отказ зависимости закрывает доступ.
-    Срез 1 публикует чтение отдельной работы; срез 2 (Issue #20) добавляет ровно
-    одну операцию чтения — teacher discovery списка работ задания
-    (`GET /assignments/{assignment_id}/submissions`); срез 3 добавляет ровно одну
-    команду изменения состояния — review работы учителем. Review фиксирует факт
-    проверки (`reviewed_by` / `reviewed_at`), не меняет lifecycle `DRAFT →
-    SUBMITTED`, не содержит оценки, балла, feedback или комментариев и защищён
-    IS-005 (`Idempotency-Key` обязателен). Отказы используют утверждённый
-    конверт SCS-001: `error.code` / `error.message` / `error.details` плюс
-    `request_id` / `correlation_id` верхнего уровня; стабильная внутренняя
-    причина сохраняется в `error.details.reason`.
+    Срез 1 публикует чтение отдельной работы; срез 2 (Issue #20) добавляет
+    ровно одну операцию чтения — teacher discovery списка работ задания
+    (`GET /assignments/{assignment_id}/submissions`); срез 3 добавляет ровно
+    одну команду изменения состояния — review работы учителем; Content
+    Authoring (срез 4, Issue #31) устанавливает верхнюю часть того же потока —
+    иерархию `Course → Module → Lesson → Assignment`: команды создания
+    (course/module/lesson/assignment), атомарные команды уровня Course
+    publish и archive и чтение иерархии `GET /courses/{course_id}`.
+    Review фиксирует факт проверки (`reviewed_by` / `reviewed_at`), не меняет
+    lifecycle `DRAFT → SUBMITTED`, не содержит оценки, балла, feedback или
+    комментариев. Каждая команда изменения состояния защищена IS-005
+    (`Idempotency-Key` обязателен); публикация и архивация применяются
+    атомарно ко всей иерархии; UNPUBLISH и UNARCHIVE отсутствуют;
+    опубликованная иерархия неизменяема (immutable). Отказы используют
+    утверждённый конверт SCS-001: `error.code` / `error.message` /
+    `error.details` плюс `request_id` / `correlation_id` верхнего уровня;
+    стабильная внутренняя причина сохраняется в `error.details.reason`.
 servers:
   - url: /api/v1/learning
     description: Learning API base path of one Platform Instance
@@ -293,6 +303,701 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /courses:
+    post:
+      summary: Create one owned course (learning.courses.create)
+      description: >-
+        Команда создания Course. `Authorization` несёт credential субъекта; он
+        проверяется в IS-001 внутри цепочки — сам компонент credentials не
+        проверяет. `X-Tenant-Id` — только cross-check (LAW-16a) и никогда не
+        выбирает эффективный тенант. Эффективный тенант выводится из
+        проверенной идентичности (IS-001) и подставляется в вопрос к IS-003
+        (`learning.courses.create`); Course принадлежит ровно этому тенанту.
+        `Idempotency-Key` обязателен: команда доставляется через IS-005 —
+        точный повтор возвращает тот же результат без второго эффекта,
+        изменение binding (payload, identity, tenant, operation, target)
+        даёт IDEMPOTENCY_CONFLICT. Новый Course создаётся в `DRAFT`.
+        Lifecycle: `DRAFT → PUBLISHED → ARCHIVED`; UNPUBLISH отсутствует.
+      operationId: createCourse
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+          description: >-
+            обязателен для команды изменения состояния; доставляется через
+            IS-005 — повтор с тем же ключом не создаёт второго эффекта, а
+            изменение binding даёт IDEMPOTENCY_CONFLICT
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CourseCreate"
+      responses:
+        "201":
+          description: >-
+            Course создан в `DRAFT` ровно один раз либо повторён идемпотентно;
+            возвращается представление иерархии Course
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Course"
+        "400":
+          description: >-
+            отсутствует обязательный Idempotency-Key (код
+            IDEMPOTENCY_KEY_REQUIRED; причина в `error.details.reason`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`), включая tenant_mismatch при
+            несовпадении cross-check
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            запрос не соответствует опубликованной схеме (код INVALID_REQUEST,
+            malformed_request) либо нарушает содержательные правила возможности
+            — пустой или слишком длинный title и т.п. (код VALIDATION_ERROR,
+            validation_error); эффект не применён, successful idempotency
+            record не создан
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость (identity или authorization) не ответила либо ответила
+            вне опубликованного контракта (код DEPENDENCY_UNAVAILABLE):
+            доступ закрыт; эффект не применён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /courses/{course_id}:
+    get:
+      summary: Read one owned course hierarchy (learning.courses.read / read_unpublished)
+      description: >-
+        Чтение иерархии `Course → Module → Lesson → Assignment`. Вопрос к
+        IS-003 выбирается по собственному состоянию Course из хранилища
+        владельца: опубликованный Course читается через
+        `learning.courses.read` (Teacher и Student), неопубликованный —
+        `DRAFT` или `ARCHIVED` — через `learning.courses.read_unpublished`
+        (только Teacher). Ответ содержит полную цепочку навигации; другой
+        исход — отказ в утверждённом конверте, никогда частичная иерархия.
+        `X-Tenant-Id` — только cross-check (LAW-16a).
+      operationId: readCourse
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: course_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            доступ разрешён цепочкой контроля; возвращается представление
+            иерархии Course с вложенными Module → Lesson → Assignment в
+            детерминированном порядке (position, затем id)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Course"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`) либо запись принадлежит другому компоненту
+            (owner_mismatch); Student читает только опубликованную иерархию
+            своего тенанта
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            Course неизвестен этому владельцу (код NOT_FOUND, course_unknown);
+            решение у власти не запрашивается; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /courses/{course_id}/modules:
+    post:
+      summary: Create one module inside a course (learning.modules.create)
+      description: >-
+        Команда создания Module внутри существующего Course. Resource-вопрос к
+        IS-003 называет родительский Course и его тенант из собственного
+        хранилища владельца. Новый Module создаётся только в `DRAFT`, только
+        в тенанте родителя и только пока Course в `DRAFT` — опубликованная
+        иерархия immutable (иначе INVALID_STATE_TRANSITION). Module без
+        Course существовать не может. `Idempotency-Key` обязателен (IS-005).
+      operationId: createModule
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: course_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+          description: >-
+            обязателен для команды изменения состояния; target binding —
+            родительский Course, fingerprint — payload команды
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModuleCreate"
+      responses:
+        "201":
+          description: Module создан в `DRAFT` ровно один раз либо повторён идемпотентно
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Module"
+        "400":
+          description: отсутствует обязательный Idempotency-Key (код IDEMPOTENCY_KEY_REQUIRED)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: субъект не установлен (код AUTHENTICATION_REQUIRED)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`), включая cross-tenant создание и
+            owner_mismatch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Course неизвестен этому владельцу (код NOT_FOUND, course_unknown)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            Course не в `DRAFT` — иерархия immutable (код
+            INVALID_STATE_TRANSITION, invalid_state_transition) либо
+            Idempotency-Key уже использован с другим binding (код
+            IDEMPOTENCY_CONFLICT)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            схема или содержательные правила payload нарушены (коды
+            INVALID_REQUEST / VALIDATION_ERROR; причина в
+            `error.details.reason`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: зависимость не ответила — доступ закрыт, эффект не применён (код DEPENDENCY_UNAVAILABLE)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /modules/{module_id}/lessons:
+    post:
+      summary: Create one lesson inside a module (learning.lessons.create)
+      description: >-
+        Команда создания Lesson внутри существующего Module. Resource-вопрос к
+        IS-003 называет родительский Module и его тенант из собственного
+        хранилища владельца. Новый Lesson создаётся только в `DRAFT`, только
+        в тенанте родителя и только пока Module в `DRAFT`. Lesson без Module
+        существовать не может. `Idempotency-Key` обязателен (IS-005).
+      operationId: createLesson
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: module_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+          description: >-
+            обязателен для команды изменения состояния; target binding —
+            родительский Module, fingerprint — payload команды
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LessonCreate"
+      responses:
+        "201":
+          description: Lesson создан в `DRAFT` ровно один раз либо повторён идемпотентно
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lesson"
+        "400":
+          description: отсутствует обязательный Idempotency-Key (код IDEMPOTENCY_KEY_REQUIRED)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: субъект не установлен (код AUTHENTICATION_REQUIRED)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: решение власти — DENY (код AUTHORIZATION_DENIED; причина в `error.details.reason`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Module неизвестен этому владельцу (код NOT_FOUND, module_unknown)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            Module не в `DRAFT` (код INVALID_STATE_TRANSITION,
+            invalid_state_transition) либо Idempotency-Key уже использован с
+            другим binding (код IDEMPOTENCY_CONFLICT)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            схема или содержательные правила payload нарушены (коды
+            INVALID_REQUEST / VALIDATION_ERROR; причина в
+            `error.details.reason`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: зависимость не ответила — доступ закрыт, эффект не применён (код DEPENDENCY_UNAVAILABLE)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /lessons/{lesson_id}/assignments:
+    post:
+      summary: Create one assignment inside a lesson (learning.assignments.create)
+      description: >-
+        Команда создания Assignment внутри существующего Lesson. Существующая
+        модель Assignment сохраняется — второй модели нет: созданная запись
+        несёт родительский Lesson, тенант Lesson, title/instructions и
+        lifecycle status. Новый Assignment создаётся только в `DRAFT`, только
+        в тенанте родителя и только пока Lesson в `DRAFT`. Assignment без
+        Lesson существовать не может. Созданный Assignment остаётся той же
+        identity, которую обслуживает поток Submission → Teacher Review.
+        `Idempotency-Key` обязателен (IS-005).
+      operationId: createAssignment
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: lesson_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+          description: >-
+            обязателен для команды изменения состояния; target binding —
+            родительский Lesson, fingerprint — payload команды
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignmentCreate"
+      responses:
+        "201":
+          description: Assignment создан в `DRAFT` ровно один раз либо повторён идемпотентно
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Assignment"
+        "400":
+          description: отсутствует обязательный Idempotency-Key (код IDEMPOTENCY_KEY_REQUIRED)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: субъект не установлен (код AUTHENTICATION_REQUIRED)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: решение власти — DENY (код AUTHORIZATION_DENIED; причина в `error.details.reason`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Lesson неизвестен этому владельцу (код NOT_FOUND, lesson_unknown)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            Lesson не в `DRAFT` (код INVALID_STATE_TRANSITION,
+            invalid_state_transition) либо Idempotency-Key уже использован с
+            другим binding (код IDEMPOTENCY_CONFLICT)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            схема или содержательные правила payload нарушены (коды
+            INVALID_REQUEST / VALIDATION_ERROR; причина в
+            `error.details.reason`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: зависимость не ответила — доступ закрыт, эффект не применён (код DEPENDENCY_UNAVAILABLE)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /courses/{course_id}/publish:
+    post:
+      summary: Publish one course and its whole hierarchy atomically (learning.courses.publish)
+      description: >-
+        Единственная команда публикации среза: выполняется на уровне Course.
+        Валидная `DRAFT`-иерархия (каждый Module принадлежит Course и его
+        тенанту, каждый Lesson — Module и тенанту, каждый Assignment — Lesson
+        и тенанту, все потомки в `DRAFT`) атомарно переводится
+        `DRAFT → PUBLISHED` вместе с Course; при отказе валидации или
+        зависимости не публикуется ни один объект. Повтор с тем же
+        `Idempotency-Key` возвращает записанный результат без второго
+        эффекта; повторная команда с другим ключом после публикации —
+        INVALID_STATE_TRANSITION. UNPUBLISH отсутствует; после публикации
+        иерархия immutable.
+      operationId: publishCourse
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: course_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+          description: >-
+            обязателен; target binding — Course, fingerprint — операция
+            (команда без payload)
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            публикация применена ровно один раз либо повторена идемпотентно;
+            возвращается представление опубликованной иерархии Course
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Course"
+        "400":
+          description: отсутствует обязательный Idempotency-Key (код IDEMPOTENCY_KEY_REQUIRED)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: субъект не установлен (код AUTHENTICATION_REQUIRED)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`); cross-tenant публикация запрещена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Course неизвестен этому владельцу (код NOT_FOUND, course_unknown)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            Course не в `DRAFT` либо иерархия структурно невалидна (код
+            INVALID_STATE_TRANSITION, invalid_state_transition) — ни один
+            объект не опубликован; либо Idempotency-Key уже использован с
+            другим binding (код IDEMPOTENCY_CONFLICT)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость не ответила — доступ закрыт; ни один объект иерархии
+            не опубликован (код DEPENDENCY_UNAVAILABLE)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /courses/{course_id}/archive:
+    post:
+      summary: Archive one course and its whole hierarchy atomically (learning.courses.archive)
+      description: >-
+        Команда архивации допустима только для `PUBLISHED` Course:
+        `PUBLISHED → ARCHIVED` применяется атомарно ко всей иерархии или не
+        применяется ни к одному объекту. UNARCHIVE отсутствует — архив —
+        терминальное состояние среза. Повтор с тем же `Idempotency-Key`
+        возвращает записанный результат без второго эффекта.
+      operationId: archiveCourse
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: course_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+          description: обязателен; target binding — Course
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            архивация применена ровно один раз либо повторена идемпотентно;
+            возвращается представление архивной иерархии Course
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Course"
+        "400":
+          description: отсутствует обязательный Idempotency-Key (код IDEMPOTENCY_KEY_REQUIRED)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: субъект не установлен (код AUTHENTICATION_REQUIRED)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`); cross-tenant архивация запрещена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Course неизвестен этому владельцу (код NOT_FOUND, course_unknown)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            Course не в `PUBLISHED` (код INVALID_STATE_TRANSITION,
+            invalid_state_transition) либо Idempotency-Key уже использован с
+            другим binding (код IDEMPOTENCY_CONFLICT)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость не ответила — доступ закрыт; ни один объект иерархии
+            не заархивирован (код DEPENDENCY_UNAVAILABLE)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /health:
     servers:
       - url: /
@@ -369,6 +1074,169 @@ components:
           description: >-
             работы задания в детерминированном порядке submission_id; пусто,
             когда у задания нет работ
+    Course:
+      type: object
+      additionalProperties: false
+      required: [course_id, title, description, status, created_by, created_at, updated_at, modules]
+      properties:
+        course_id:
+          type: string
+          description: непрозрачный идентификатор курса
+        title:
+          type: string
+          description: название курса (непустое, не длиннее 512 символов)
+        description:
+          type: string
+          description: описание курса (не длиннее 4096 символов)
+        status:
+          type: string
+          enum: [DRAFT, PUBLISHED, ARCHIVED]
+          description: >-
+            жизненный цикл курса этого среза — ровно эти три состояния;
+            переходы выполняют команды publish и archive на уровне Course,
+            UNPUBLISH и UNARCHIVE отсутствуют
+        created_by:
+          type: string
+          description: непрозрачная ссылка на verified identity учителя, создавшего курс
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        modules:
+          type: array
+          items:
+            $ref: "#/components/schemas/Module"
+          description: >-
+            модули курса в детерминированном порядке (position, затем
+            module_id); пустой курс отвечает пустым списком
+    Module:
+      type: object
+      additionalProperties: false
+      required: [module_id, course_id, title, position, status, lessons]
+      properties:
+        module_id:
+          type: string
+          description: непрозрачный идентификатор модуля
+        course_id:
+          type: string
+          description: курс-родитель; модуль принадлежит ровно одному курсу
+        title:
+          type: string
+        position:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+          enum: [DRAFT, PUBLISHED, ARCHIVED]
+          description: >-
+            жизненный цикл модуля меняется только командами уровня Course;
+            новый модуль создаётся только в `DRAFT`
+        lessons:
+          type: array
+          items:
+            $ref: "#/components/schemas/Lesson"
+          description: уроки модуля в детерминированном порядке (position, затем lesson_id)
+    Lesson:
+      type: object
+      additionalProperties: false
+      required: [lesson_id, module_id, title, content, position, status, assignments]
+      properties:
+        lesson_id:
+          type: string
+          description: непрозрачный идентификатор урока
+        module_id:
+          type: string
+          description: модуль-родитель; урок принадлежит ровно одному модулю
+        title:
+          type: string
+        content:
+          type: string
+          description: тело урока; медиа-сервис и вложения вне этого среза
+        position:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+          enum: [DRAFT, PUBLISHED, ARCHIVED]
+          description: >-
+            жизненный цикл урока меняется только командами уровня Course;
+            новый урок создаётся только в `DRAFT`
+        assignments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Assignment"
+          description: задания урока в детерминированном порядке assignment_id
+    Assignment:
+      type: object
+      additionalProperties: false
+      required: [assignment_id, lesson_id, title, instructions, status]
+      properties:
+        assignment_id:
+          type: string
+          description: >-
+            непрозрачный идентификатор задания; это та же identity, которую
+            обслуживают чтение работ, teacher discovery и review
+        lesson_id:
+          type: string
+          description: урок-родитель; задание принадлежит ровно одному уроку
+        title:
+          type: string
+        instructions:
+          type: string
+          description: инструкции к заданию; не являются feedback или оценкой
+        status:
+          type: string
+          enum: [DRAFT, PUBLISHED, ARCHIVED]
+          description: >-
+            жизненный цикл задания меняется только командами уровня Course;
+            новое задание создаётся только в `DRAFT`
+    CourseCreate:
+      type: object
+      additionalProperties: false
+      required: [title, description]
+      properties:
+        title:
+          type: string
+          description: непустое название не длиннее 512 символов
+        description:
+          type: string
+          description: описание не длиннее 4096 символов
+    ModuleCreate:
+      type: object
+      additionalProperties: false
+      required: [title, position]
+      properties:
+        title:
+          type: string
+          description: непустое название не длиннее 512 символов
+        position:
+          type: integer
+          minimum: 0
+    LessonCreate:
+      type: object
+      additionalProperties: false
+      required: [title, content, position]
+      properties:
+        title:
+          type: string
+          description: непустое название не длиннее 512 символов
+        content:
+          type: string
+          description: тело урока, не длиннее 65536 символов
+        position:
+          type: integer
+          minimum: 0
+    AssignmentCreate:
+      type: object
+      additionalProperties: false
+      required: [title, instructions]
+      properties:
+        title:
+          type: string
+          description: непустое название не длиннее 512 символов
+        instructions:
+          type: string
+          description: инструкции не длиннее 4096 символов
     Error:
       type: object
       additionalProperties: false
@@ -381,7 +1249,7 @@ components:
           properties:
             code:
               type: string
-              enum: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, NOT_FOUND, INVALID_REQUEST, INVALID_STATE_TRANSITION, ALREADY_REVIEWED, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, DEPENDENCY_UNAVAILABLE]
+              enum: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, NOT_FOUND, INVALID_REQUEST, VALIDATION_ERROR, INVALID_STATE_TRANSITION, ALREADY_REVIEWED, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, DEPENDENCY_UNAVAILABLE]
               description: минимальный опубликованный код отказа SCS-001
             message:
               type: string

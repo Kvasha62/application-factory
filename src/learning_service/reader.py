@@ -33,7 +33,14 @@ from __future__ import annotations
 from typing import Any, Mapping
 from urllib.parse import quote
 
-from learning_service.contracts import PUBLISHED_DENY_REASONS, SubmissionView
+from learning_service.contracts import (
+    PUBLISHED_DENY_REASONS,
+    AssignmentView,
+    CourseView,
+    LessonView,
+    ModuleView,
+    SubmissionView,
+)
 from learning_service.errors import AccessRefused, ContractViolation
 
 __all__ = [
@@ -77,9 +84,9 @@ class LearningClient:
     """Value-only access reader over the published learning contract.
 
     It performs exactly the published operations — the single-submission
-    read, the teacher submission-discovery list and the single-submission
-    review — and nothing else; the exact same API is available to a remote
-    consumer.
+    read, the teacher submission-discovery list, the single-submission
+    review and the Content Authoring commands and hierarchy read — and
+    nothing else; the exact same API is available to a remote consumer.
 
     ``channel`` is the opaque handle of a contract channel opened by the
     provider. It is deliberately not a callable: a consumer holding values
@@ -181,6 +188,206 @@ class LearningClient:
             raise self._error(status, payload)
         return _view_from(payload)
 
+    # ------------------------------------------------- content authoring
+    def create_course(
+        self,
+        subject_credential: str | None,
+        *,
+        title: str,
+        description: str,
+        idempotency_key: str | None,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> CourseView:
+        """Create one Course through the enforcement chain.
+
+        ``idempotency_key`` is mandatory and delivered through IS-005. The
+        effective tenant is resolved inside the enforcement chain from the
+        verified identity — never from ``claimed_tenant_id``, which stays a
+        cross-check.
+        """
+        status, payload = self._call(
+            "POST",
+            "/api/v1/learning/courses",
+            subject_credential=subject_credential,
+            claimed_tenant_id=claimed_tenant_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
+            body={"title": title, "description": description},
+        )
+        if not 200 <= status < 300:
+            raise self._error(status, payload)
+        return _course_from(payload)
+
+    def read_course(
+        self,
+        subject_credential: str | None,
+        course_id: str,
+        *,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> CourseView:
+        """Read one Course hierarchy through the enforcement chain.
+
+        Returns the nested navigation chain
+        ``Course → Module → Lesson → Assignment``; a caller outside the
+        Course's Tenant — or, for a hierarchy that is not published, a
+        caller without the authoring-side read grant — receives a refusal,
+        never a partial hierarchy.
+        """
+        status, payload = self._call(
+            "GET",
+            f"/api/v1/learning/courses/{quote(course_id, safe='')}",
+            subject_credential=subject_credential,
+            claimed_tenant_id=claimed_tenant_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        if not 200 <= status < 300:
+            raise self._error(status, payload)
+        return _course_from(payload)
+
+    def create_module(
+        self,
+        subject_credential: str | None,
+        course_id: str,
+        *,
+        title: str,
+        position: int,
+        idempotency_key: str | None,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> ModuleView:
+        """Create one Module inside a Course through the enforcement chain."""
+        status, payload = self._call(
+            "POST",
+            f"/api/v1/learning/courses/{quote(course_id, safe='')}/modules",
+            subject_credential=subject_credential,
+            claimed_tenant_id=claimed_tenant_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
+            body={"title": title, "position": position},
+        )
+        if not 200 <= status < 300:
+            raise self._error(status, payload)
+        return _module_from(payload)
+
+    def create_lesson(
+        self,
+        subject_credential: str | None,
+        module_id: str,
+        *,
+        title: str,
+        content: str,
+        position: int,
+        idempotency_key: str | None,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> LessonView:
+        """Create one Lesson inside a Module through the enforcement chain."""
+        status, payload = self._call(
+            "POST",
+            f"/api/v1/learning/modules/{quote(module_id, safe='')}/lessons",
+            subject_credential=subject_credential,
+            claimed_tenant_id=claimed_tenant_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
+            body={"title": title, "content": content, "position": position},
+        )
+        if not 200 <= status < 300:
+            raise self._error(status, payload)
+        return _lesson_from(payload)
+
+    def create_assignment(
+        self,
+        subject_credential: str | None,
+        lesson_id: str,
+        *,
+        title: str,
+        instructions: str,
+        idempotency_key: str | None,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> AssignmentView:
+        """Create one Assignment inside a Lesson through the enforcement chain."""
+        status, payload = self._call(
+            "POST",
+            f"/api/v1/learning/lessons/{quote(lesson_id, safe='')}/assignments",
+            subject_credential=subject_credential,
+            claimed_tenant_id=claimed_tenant_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
+            body={"title": title, "instructions": instructions},
+        )
+        if not 200 <= status < 300:
+            raise self._error(status, payload)
+        return _assignment_from(payload)
+
+    def publish_course(
+        self,
+        subject_credential: str | None,
+        course_id: str,
+        *,
+        idempotency_key: str | None,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> CourseView:
+        """Publish one Course and its hierarchy atomically through the chain.
+
+        An exact replay with the same ``Idempotency-Key`` returns the
+        recorded published hierarchy without a second effect.
+        """
+        status, payload = self._call(
+            "POST",
+            f"/api/v1/learning/courses/{quote(course_id, safe='')}/publish",
+            subject_credential=subject_credential,
+            claimed_tenant_id=claimed_tenant_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
+        )
+        if not 200 <= status < 300:
+            raise self._error(status, payload)
+        return _course_from(payload)
+
+    def archive_course(
+        self,
+        subject_credential: str | None,
+        course_id: str,
+        *,
+        idempotency_key: str | None,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> CourseView:
+        """Archive one Course and its hierarchy atomically through the chain.
+
+        An exact replay with the same ``Idempotency-Key`` returns the
+        recorded archived hierarchy without a second effect.
+        """
+        status, payload = self._call(
+            "POST",
+            f"/api/v1/learning/courses/{quote(course_id, safe='')}/archive",
+            subject_credential=subject_credential,
+            claimed_tenant_id=claimed_tenant_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
+        )
+        if not 200 <= status < 300:
+            raise self._error(status, payload)
+        return _course_from(payload)
+
     # --------------------------------------------------------------- internals
     def _call(
         self,
@@ -192,6 +399,7 @@ class LearningClient:
         request_id: str | None,
         correlation_id: str | None,
         idempotency_key: str | None = None,
+        body: Mapping[str, Any] | None = None,
     ) -> tuple[int, Mapping[str, Any]]:
         headers: list[tuple[str, str]] = []
         if subject_credential is not None:
@@ -204,7 +412,7 @@ class LearningClient:
             headers.append(("x-request-id", request_id))
         if correlation_id:
             headers.append(("x-correlation-id", correlation_id))
-        return _call_contract()(self._channel, method, path, headers, None)
+        return _call_contract()(self._channel, method, path, headers, body)
 
     @staticmethod
     def _error(status: int, payload: Mapping[str, Any]) -> BaseException:
@@ -234,6 +442,98 @@ def _views_from(payload: Mapping[str, Any]) -> list[SubmissionView]:
     except (KeyError, TypeError, ValueError) as exc:
         raise ContractViolation(
             "the learning contract answered outside its published list model"
+        ) from exc
+
+
+def _text_field(payload: Mapping[str, Any], name: str) -> str:
+    value = payload[name]
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string")
+    return value
+
+
+def _assignment_from(payload: Mapping[str, Any]) -> AssignmentView:
+    """Rebuild the published assignment value; an outside answer fails closed."""
+    try:
+        return AssignmentView(
+            assignment_id=_text_field(payload, "assignment_id"),
+            lesson_id=_text_field(payload, "lesson_id"),
+            title=_text_field(payload, "title"),
+            instructions=_text_field(payload, "instructions"),
+            status=_text_field(payload, "status"),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ContractViolation(
+            "the learning contract answered outside its published assignment model"
+        ) from exc
+
+
+def _lesson_from(payload: Mapping[str, Any]) -> LessonView:
+    """Rebuild the published lesson value; an outside answer fails closed."""
+    try:
+        position = payload["position"]
+        if isinstance(position, bool) or not isinstance(position, int):
+            raise ValueError("position must be an integer")
+        assignments = payload["assignments"]
+        if not isinstance(assignments, list):
+            raise ValueError("assignments must be a list")
+        return LessonView(
+            lesson_id=_text_field(payload, "lesson_id"),
+            module_id=_text_field(payload, "module_id"),
+            title=_text_field(payload, "title"),
+            content=_text_field(payload, "content"),
+            position=position,
+            status=_text_field(payload, "status"),
+            assignments=tuple(_assignment_from(item) for item in assignments),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ContractViolation(
+            "the learning contract answered outside its published lesson model"
+        ) from exc
+
+
+def _module_from(payload: Mapping[str, Any]) -> ModuleView:
+    """Rebuild the published module value; an outside answer fails closed."""
+    try:
+        position = payload["position"]
+        if isinstance(position, bool) or not isinstance(position, int):
+            raise ValueError("position must be an integer")
+        lessons = payload["lessons"]
+        if not isinstance(lessons, list):
+            raise ValueError("lessons must be a list")
+        return ModuleView(
+            module_id=_text_field(payload, "module_id"),
+            course_id=_text_field(payload, "course_id"),
+            title=_text_field(payload, "title"),
+            position=position,
+            status=_text_field(payload, "status"),
+            lessons=tuple(_lesson_from(item) for item in lessons),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ContractViolation(
+            "the learning contract answered outside its published module model"
+        ) from exc
+
+
+def _course_from(payload: Mapping[str, Any]) -> CourseView:
+    """Rebuild the published course-hierarchy value; an outside answer fails closed."""
+    try:
+        modules = payload["modules"]
+        if not isinstance(modules, list):
+            raise ValueError("modules must be a list")
+        return CourseView(
+            course_id=_text_field(payload, "course_id"),
+            title=_text_field(payload, "title"),
+            description=_text_field(payload, "description"),
+            status=_text_field(payload, "status"),
+            created_by=_text_field(payload, "created_by"),
+            created_at=_text_field(payload, "created_at"),
+            updated_at=_text_field(payload, "updated_at"),
+            modules=tuple(_module_from(item) for item in modules),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ContractViolation(
+            "the learning contract answered outside its published course model"
         ) from exc
 
 

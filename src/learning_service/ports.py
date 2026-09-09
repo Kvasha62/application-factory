@@ -15,6 +15,13 @@ and on nothing else:
   second idempotency mechanism: the review command is delivered to the
   IS-005 guard, which decides between executing, replaying and refusing a
   conflict.
+* :class:`TenantContextPort` — the effective tenant context of one verified
+  subject, answered by IS-001. Consumed by exactly one command (create-
+  course) whose target does not exist yet, so its authorization question
+  can only name the effective tenant of the verified identity. The
+  composition root adapts the published identity contract client to this
+  port, exactly as it does for the Saga boundary — no second identity or
+  tenant mechanism is created.
 
 The port declares what this component *needs*, not what IS-003 happens to
 offer: nothing here can grant a permission, read a grant, enumerate
@@ -35,7 +42,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol, TypeVar, runtime_checkable
 
-from learning_service.consumed import DecisionOutcome
+from learning_service.consumed import DecisionOutcome, TenantContextOutcome
 
 T = TypeVar("T")
 
@@ -62,6 +69,29 @@ class AuthorizationPort(Protocol):
         request_id: str | None = None,
         correlation_id: str | None = None,
     ) -> DecisionOutcome: ...
+
+
+@runtime_checkable
+class TenantContextPort(Protocol):
+    """Source of the effective tenant context of one subject (IS-001).
+
+    Consumed by exactly one command — create-course — whose target does not
+    exist yet, so its resource Tenant can only be the effective tenant of
+    the verified identity. The port is expressed in this component's own
+    vocabulary; the composition root adapts the published identity contract
+    client to it (the same pattern the Saga boundary uses). No second
+    identity or tenant mechanism exists here: the port carries the answer of
+    IS-001 and nothing else.
+    """
+
+    def resolve(
+        self,
+        subject_credential: str | None,
+        *,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> TenantContextOutcome: ...
 
 
 @runtime_checkable
@@ -97,4 +127,6 @@ __all__ = [
     "AuthorizationPort",
     "CommandSafetyPort",
     "DecisionOutcome",
+    "TenantContextOutcome",
+    "TenantContextPort",
 ]

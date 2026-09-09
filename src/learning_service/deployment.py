@@ -23,7 +23,11 @@ from typing import Any, Mapping
 
 from learning_service.config import LearningConfig
 from learning_service.engine import LearningEngine
-from learning_service.ports import AuthorizationPort, CommandSafetyPort
+from learning_service.ports import (
+    AuthorizationPort,
+    CommandSafetyPort,
+    TenantContextPort,
+)
 from learning_service.store import LearningStore
 
 
@@ -69,11 +73,16 @@ def build_deployment(
     store: LearningStore | None = None,
     with_http: bool = False,
     idempotency: CommandSafetyPort | None = None,
+    tenant_context: TenantContextPort | None = None,
 ) -> LearningDeployment:
     """Assemble one Learning boundary over the published client of IS-003.
 
     ``idempotency`` is the IS-005 command-safety port; when omitted the
     engine wires the IS-005 guard itself — no second idempotency mechanism.
+    ``tenant_context`` is the IS-001 tenant-context port consumed by the
+    create-course command, whose target does not exist yet; when omitted,
+    that command fails closed (a port that is not wired is a dependency that
+    cannot answer).
     """
     config = LearningConfig.from_mapping(configuration)
     learning_store = store or LearningStore()
@@ -82,6 +91,7 @@ def build_deployment(
         config=config,
         authorization=authorization,
         idempotency=idempotency,
+        tenant_context=tenant_context,
     )
     if seed_demo:
         learning_store.seed_demo()
