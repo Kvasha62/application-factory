@@ -1,18 +1,18 @@
-# SCS-001 Learning — Submission Read (Slice 1)
+# SCS-001 Learning — Teacher Submission Discovery (Slice 2)
 
 **Класс:** A — Business System / SCS
 **Уровень:** Level 0 — Modular Monolith
 **Версия компонента:** 0.1.0
 **Владелец данных:** `learning` (логическая схема `learning`)
-**Задача:** SCS-001 Slice 1 — prerequisite для Slice 2 / Issue #20
+**Задача:** SCS-001 Slice 2 — Issue #20 (на prerequisite среза 1)
 **Архитектурная основа:** `docs/ARCHITECTURE.md` v1.2.0 §5.3, §5.4, §6.1, §6.2,
 §26, §27, LAW-03, LAW-04, LAW-16, LAW-16a
 
-SCS-001 — бизнес-компонент, владелец учебных данных. Срез 1 публикует чтение
-отдельной работы:
+SCS-001 — бизнес-компонент, владелец учебных данных. Срез 2 добавляет к
+чтению отдельной работы из среза 1 ровно одну операцию — teacher discovery:
 
 ```text
-Subject → Submission read (this slice)
+Teacher → List one Assignment's submissions (this slice)
 ```
 
 Это не grading-платформа, не analytics и не progress-трекинг: компонент
@@ -37,8 +37,10 @@ owned-data операция выполняется только здесь, в �
 
 Порядок шагов опубликован (`api.enforcement_model.enforcement_chain`) и
 является частью поведения: каждый шаг может только отказать. Операция над
-данными (`serve_submission`) вызывается ровно один раз и только после
-полного прохождения цепочки.
+данными (`serve_submission` / `list_submissions_for_assignment`) вызывается
+ровно один раз и только после полного прохождения цепочки. Вопрос списку
+называет задание и его тенант из собственного хранилища — никогда из
+заявления вызывающей стороны.
 
 ## Модель данных
 
@@ -53,17 +55,22 @@ owned-data операция выполняется только здесь, в �
 | `created_at` / `updated_at` | метки времени |
 
 Работа принадлежит тому же тенанту, что и её задание — это инвариант
-хранилища, а не заявление вызывающей стороны. Оценок, комментариев,
-review-состояний, прогресса и Enrollment в срезе нет.
+хранилища, а не заявление вызывающей стороны. Ответ списка содержит только
+работы запрошенного задания в детерминированном порядке `submission_id`;
+пустое задание отвечает `{"items": []}`. Пагинации, сортировки, поиска и
+частичных наборов нет. Оценок, комментариев, review-состояний, прогресса и
+Enrollment в срезе нет.
 
 ## Публичный контракт
 
 - HTTP: `GET /api/v1/learning/submissions/{submission_id}` (операция
-  `learning.submissions.read`) — см. `contract/openapi.yaml` (servers:
-  `/api/v1/learning`, относительные пути) и
-  `contract/component_contract.json`;
-- уровень 0 (in-process): `learning_service.reader.LearningClient` — одна
-  операция чтения, значения туда и обратно.
+  `learning.submissions.read`, срез 1) и
+  `GET /api/v1/learning/assignments/{assignment_id}/submissions` (операция
+  `learning.submissions.list`, этот срез) — см.
+  `contract/openapi.yaml` (servers: `/api/v1/learning`, относительные пути)
+  и `contract/component_contract.json`;
+- уровень 0 (in-process): `learning_service.reader.LearningClient` — две
+  операции чтения, значения туда и обратно.
 
 `Authorization` несёт credential субъекта: компонент сам не проверяет
 никаких credentials. `X-Tenant-Id` — только cross-check (LAW-16a).
@@ -88,7 +95,7 @@ review-состояний, прогресса и Enrollment в срезе нет
 |---|---|---|
 | `401` | `AUTHENTICATION_REQUIRED` | `missing_identity`, `invalid_identity`, `unknown_identity` |
 | `403` | `AUTHORIZATION_DENIED` | опубликованные `DENY`-причины IS-003 без изменений; `owner_mismatch` |
-| `404` | `NOT_FOUND` | `submission_unknown` — решение не запрашивается |
+| `404` | `NOT_FOUND` | `assignment_unknown`, `submission_unknown` — решение не запрашивается |
 | `503` | `DEPENDENCY_UNAVAILABLE` | `authorization_unavailable` — зависимость не ответила или вне контракта |
 
 Статус выбирает код; стабильная внутренняя причина сохраняется в
@@ -118,6 +125,7 @@ review-состояний, прогресса и Enrollment в срезе нет
 
 | Файл | Что доказывает |
 |---|---|
-| `tests/test_learning_slice1.py` | чтение работы: успех, изоляция, отказы, аудит |
+| `tests/test_learning_slice1.py` | чтение работы: успех, изоляция, отказы, аудит (prerequisite) |
+| `tests/test_learning_slice2.py` | teacher discovery: успех, фильтрация, пустой список, изоляция, отказы, аудит |
 | `tests/test_learning_contract.py` | conformance контракта к живой реализации |
 | `tests/test_learning_boundary.py` | отсутствие обходов и второго механизма авторизации/тенанта |

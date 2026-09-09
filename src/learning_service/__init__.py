@@ -22,9 +22,12 @@ IS-001 through the IS-003 decision, and a caller-supplied ``tenant_id``
 is forwarded as a cross-check only (LAW-16, LAW-16a).
 
 Slice 1 publishes the single-submission read
-``GET /api/v1/learning/submissions/{submission_id}``. Errors use the
-approved SCS-001 envelope (``error.code`` / ``error.message`` /
-``error.details`` plus top-level ``request_id`` / ``correlation_id``).
+``GET /api/v1/learning/submissions/{submission_id}``. Slice 2 (Issue #20)
+adds exactly one business read operation — teacher submission discovery
+``GET /api/v1/learning/assignments/{assignment_id}/submissions`` — on top
+of it. Errors use the approved SCS-001 envelope (``error.code`` /
+``error.message`` / ``error.details`` plus top-level ``request_id`` /
+``correlation_id``).
 """
 
 COMPONENT_ID = "learning"

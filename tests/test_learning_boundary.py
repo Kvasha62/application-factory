@@ -1,4 +1,4 @@
-"""Boundary proof of SCS-001 Learning Slice 1.
+"""Boundary proof of SCS-001 Learning Slice 2.
 
 No new identity/tenant/authz mechanism was introduced:
 
@@ -6,8 +6,8 @@ No new identity/tenant/authz mechanism was introduced:
 * a dependency that answers nothing makes every access impossible;
 * the resource tenant in the authorization question is always the store's
   fact, never a caller claim;
-* the published surface offers exactly the enforced read operation and
-  reaches no internal;
+* the published surface offers exactly the two enforced read operations
+  and reaches no internal;
 * every published route refuses without an ALLOW;
 * only the approved error envelope is accepted — any other refusal shape
   fails closed.
@@ -29,11 +29,11 @@ from fastapi import FastAPI
 
 from learning_service import transport
 from learning_service.consumed import DENY_REASONS, DecisionAnswer, DependencyRefusal
-from learning_service.contracts import OPERATION_READ, OwnDenyReason
+from learning_service.contracts import OPERATION_LIST, OPERATION_READ, OwnDenyReason
 from learning_service.deployment import LearningDeployment, build_deployment
 from learning_service.engine import LearningEngine
 from learning_service.errors import AccessRefused, ContractViolation
-from learning_service.models import OwnedSubmission
+from learning_service.models import OwnedAssignment, OwnedSubmission
 from learning_service.reader import LearningClient
 from learning_service.store import LearningStore
 from tests.conftest import PLATFORM_ID
@@ -73,10 +73,16 @@ class CountingLearningStore(LearningStore):
     def __init__(self) -> None:
         super().__init__()
         self.served_reads = 0
+        self.served_lists = 0
 
     def serve_submission(self, submission_id: str) -> Any:
         served = super().serve_submission(submission_id)
         self.served_reads += 1
+        return served
+
+    def list_submissions_for_assignment(self, assignment_id: str) -> Any:
+        served = super().list_submissions_for_assignment(assignment_id)
+        self.served_lists += 1
         return served
 
 
@@ -189,15 +195,18 @@ def test_every_published_route_refuses_without_an_allow():
         for method in getattr(route, "methods", set())
         if route.path.startswith("/api/") and method in {"GET", "POST"}
     ]
-    assert resource_routes
+    assert len(resource_routes) == 2
 
     for method, path in resource_routes:
-        concrete = path.replace("{submission_id}", "sub_a1_1")
+        concrete = path.replace("{submission_id}", "sub_a1_1").replace(
+            "{assignment_id}", "asg_a1"
+        )
         response = client.get(concrete)
         assert response.status_code in {401, 403, 404, 422}, (method, path)
         body = envelope_of(response)
         assert body["error"]["code"] == "AUTHENTICATION_REQUIRED"
         assert "submission_id" not in response.json(), (method, path)
+        assert "items" not in response.json(), (method, path)
 
 
 def test_published_surface_is_exactly_the_contract_operations():
@@ -215,6 +224,7 @@ def test_published_surface_is_exactly_the_contract_operations():
         ("/health", "GET"),
         ("/ready", "GET"),
         ("/api/v1/learning/submissions/{submission_id}", "GET"),
+        ("/api/v1/learning/assignments/{assignment_id}/submissions", "GET"),
     }
 
 
@@ -229,7 +239,7 @@ def test_client_state_is_a_single_opaque_value():
     assert isinstance(state[0], str) and state[0]
 
     published = {name for name in dir(client) if not name.startswith("_")}
-    assert published == {"read_submission"}
+    assert published == {"read_submission", "list_submissions"}
 
 
 def test_client_object_graph_reaches_nothing_internal():
@@ -251,12 +261,16 @@ def test_revoked_channel_fails_closed():
 
     with pytest.raises(ContractViolation):
         client.read_submission(TEACHER_A, "sub_a1_1")
+    with pytest.raises(ContractViolation):
+        client.list_submissions(TEACHER_A, "asg_a1")
 
 
 def test_an_unknown_channel_handle_is_a_closed_channel():
     client = LearningClient("lrn-forged-handle")
     with pytest.raises(ContractViolation):
         client.read_submission(TEACHER_A, "sub_a1_1")
+    with pytest.raises(ContractViolation):
+        client.list_submissions(TEACHER_A, "asg_a1")
 
 
 def test_importing_the_published_surface_binds_no_transport_reference():
@@ -294,6 +308,8 @@ def test_a_legacy_detail_envelope_is_rejected_and_fails_closed():
         client = LearningClient(handle)
         with pytest.raises(ContractViolation):
             client.read_submission(TEACHER_A, "sub_a1_1")
+        with pytest.raises(ContractViolation):
+            client.list_submissions(TEACHER_A, "asg_a1")
     finally:
         transport.close_channel(handle)
 
@@ -311,6 +327,8 @@ def test_an_envelope_without_request_context_is_rejected():
         client = LearningClient(handle)
         with pytest.raises(ContractViolation):
             client.read_submission(TEACHER_A, "sub_a1_1")
+        with pytest.raises(ContractViolation):
+            client.list_submissions(TEACHER_A, "asg_a1")
     finally:
         transport.close_channel(handle)
 
@@ -330,6 +348,8 @@ def test_an_envelope_with_an_unknown_reason_is_rejected():
         client = LearningClient(handle)
         with pytest.raises(ContractViolation):
             client.read_submission(TEACHER_A, "sub_a1_1")
+        with pytest.raises(ContractViolation):
+            client.list_submissions(TEACHER_A, "asg_a1")
     finally:
         transport.close_channel(handle)
 
@@ -398,9 +418,12 @@ def test_a_silent_dependency_makes_every_access_impossible():
 
     with pytest.raises(AccessRefused):
         deployment.engine.read_submission(TEACHER_A, "sub_a1_1")
+    with pytest.raises(AccessRefused):
+        deployment.engine.list_submissions(TEACHER_A, "asg_a1")
 
     assert store.served_reads == 0
-    assert silent.calls, "every access attempt still went to the boundary"
+    assert store.served_lists == 0
+    assert len(silent.calls) == 2, "every access attempt still went to the boundary"
 
 
 @pytest.mark.parametrize("reason", sorted(DENY_REASONS))
@@ -412,17 +435,24 @@ def test_every_published_deny_keeps_the_owned_data_untouched(reason):
     with pytest.raises(AccessRefused) as refused:
         engine.read_submission(TEACHER_A, "sub_a1_1")
     assert refused.value.reason == reason
+    with pytest.raises(AccessRefused) as refused:
+        engine.list_submissions(TEACHER_A, "asg_a1")
+    assert refused.value.reason == reason
     assert store.served_reads == 0
+    assert store.served_lists == 0
 
 
-def test_an_allow_invokes_the_owned_data_operation_exactly_once():
+def test_an_allow_invokes_each_owned_data_operation_exactly_once():
     store = CountingLearningStore()
     deployment = learning_deployment(StubAuthorizationPort(ALLOW), store=store)
     engine = deployment.engine
 
     view, _, _ = engine.read_submission(TEACHER_A, "sub_a1_1")
     assert view.submission_id == "sub_a1_1"
+    views, _, _ = engine.list_submissions(TEACHER_A, "asg_a1")
+    assert [item.submission_id for item in views] == ["sub_a1_1", "sub_a1_2"]
     assert store.served_reads == 1
+    assert store.served_lists == 1
 
 
 def test_the_resource_tenant_is_never_taken_from_the_request():
@@ -433,11 +463,18 @@ def test_the_resource_tenant_is_never_taken_from_the_request():
         deployment.engine.read_submission(
             TEACHER_A, "sub_b1_1", claimed_tenant_id="ten_a"
         )
+    with pytest.raises(AccessRefused):
+        deployment.engine.list_submissions(
+            TEACHER_A, "asg_b1", claimed_tenant_id="ten_a"
+        )
 
-    question = port.calls[0]
-    assert question["resource_tenant_id"] == "ten_b"
-    assert question["claimed_tenant_id"] == "ten_a"
-    assert question["operation"] == OPERATION_READ
+    read_question, list_question = port.calls
+    assert read_question["resource_tenant_id"] == "ten_b"
+    assert read_question["claimed_tenant_id"] == "ten_a"
+    assert read_question["operation"] == OPERATION_READ
+    assert list_question["resource_tenant_id"] == "ten_b"
+    assert list_question["claimed_tenant_id"] == "ten_a"
+    assert list_question["operation"] == OPERATION_LIST
 
 
 def test_unknown_records_are_denied_without_asking_the_authority():
@@ -450,8 +487,14 @@ def test_unknown_records_are_denied_without_asking_the_authority():
     assert refused.value.reason == OwnDenyReason.SUBMISSION_UNKNOWN
     assert refused.value.status_code == 404
 
+    with pytest.raises(AccessRefused) as refused:
+        deployment.engine.list_submissions(TEACHER_A, "asg_missing")
+    assert refused.value.reason == OwnDenyReason.ASSIGNMENT_UNKNOWN
+    assert refused.value.status_code == 404
+
     assert port.calls == []
     assert store.served_reads == 0
+    assert store.served_lists == 0
 
 
 def test_a_foreign_owner_record_is_never_served():
@@ -470,12 +513,25 @@ def test_a_foreign_owner_record_is_never_served():
         updated_at="2026-09-08T00:00:00+00:00",
         owner_component="identity",
     )
+    store.assignments["asg_foreign"] = OwnedAssignment(
+        assignment_id="asg_foreign",
+        tenant_id="ten_a",
+        owner_component="identity",
+        status="PUBLISHED",
+        created_at="2026-09-08T00:00:00+00:00",
+        updated_at="2026-09-08T00:00:00+00:00",
+    )
 
     with pytest.raises(AccessRefused) as refused:
         deployment.engine.read_submission(TEACHER_A, "sub_foreign")
     assert refused.value.reason == "owner_mismatch"
 
+    with pytest.raises(AccessRefused) as refused:
+        deployment.engine.list_submissions(TEACHER_A, "asg_foreign")
+    assert refused.value.reason == "owner_mismatch"
+
     assert store.served_reads == 0
+    assert store.served_lists == 0
     assert port.calls == []
 
 
@@ -493,11 +549,20 @@ def test_nonauthoritative_answers_fail_closed():
             deployment.engine.read_submission(TEACHER_A, "sub_a1_1")
         assert refused.value.reason == OwnDenyReason.AUTHORIZATION_UNAVAILABLE
         assert refused.value.status_code == 503
+        with pytest.raises(AccessRefused) as refused:
+            deployment.engine.list_submissions(TEACHER_A, "asg_a1")
+        assert refused.value.reason == OwnDenyReason.AUTHORIZATION_UNAVAILABLE
+        assert refused.value.status_code == 503
 
 
 def test_operations_use_the_documented_grant_vocabulary():
     port = StubAuthorizationPort(ALLOW)
     deployment = learning_deployment(port, store=CountingLearningStore())
     deployment.engine.read_submission(TEACHER_A, "sub_a1_1")
-    assert [call["operation"] for call in port.calls] == [OPERATION_READ]
+    deployment.engine.list_submissions(TEACHER_A, "asg_a1")
+    assert [call["operation"] for call in port.calls] == [
+        OPERATION_READ,
+        OPERATION_LIST,
+    ]
     assert OPERATION_READ == "learning.submissions.read"
+    assert OPERATION_LIST == "learning.submissions.list"

@@ -1,9 +1,10 @@
 """Published consumer surface of the Learning component (SCS-001).
 
 A consumer receives exactly one object: :class:`LearningClient`. It offers
-the read operation of the published contract — read one submission — and
-returns an immutable :class:`learning_service.contracts.SubmissionView`
-or raises :class:`learning_service.errors.AccessRefused`.
+the read operations of the published contract — read one submission and
+list one Assignment's submissions — and returns immutable
+:class:`learning_service.contracts.SubmissionView` values or raises
+:class:`learning_service.errors.AccessRefused`.
 
 Its state is one value: an opaque contract-channel handle. No credential
 is bound to the client — the subject credential is supplied per access,
@@ -15,10 +16,10 @@ This module keeps no reference to the internal transport either — the
 executor is resolved at call time — so importing the published surface
 does not open a door to the channel table or to the application behind it.
 
-What the client cannot do is as important as what it can: it cannot list
-records, read the store, read the audit journal, register records or
-reach submissions except through the published operation — which is to
-say, without going through the enforcement chain.
+What the client cannot do is as important as what it can: it cannot read
+the store, read the audit journal, register records or reach submissions
+except through the published operations — which is to say, without going
+through the enforcement chain.
 
 Refusals arrive in the approved SCS-001 envelope (``error.code`` /
 ``error.message`` / ``error.details`` plus top-level ``request_id`` /
@@ -66,9 +67,9 @@ def _view_from(payload: Mapping[str, Any]) -> SubmissionView:
 class LearningClient:
     """Value-only access reader over the published learning contract.
 
-    ``GET /api/v1/learning/submissions/{submission_id}`` is the only
-    operation it performs; the exact same API is available to a remote
-    consumer.
+    It performs the two read operations of the published API — the
+    single-submission read and the teacher submission-discovery list; the
+    exact same API is available to a remote consumer.
 
     ``channel`` is the opaque handle of a contract channel opened by the
     provider. It is deliberately not a callable: a consumer holding values
@@ -112,6 +113,34 @@ class LearningClient:
             raise self._error(status, payload)
         return _view_from(payload)
 
+    def list_submissions(
+        self,
+        subject_credential: str | None,
+        assignment_id: str,
+        *,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> list[SubmissionView]:
+        """List one Assignment's submissions through the enforcement chain.
+
+        The teacher discovery operation of the published contract: an empty
+        Assignment answers an empty list, and a caller outside the
+        Assignment's tenant — or without the list grant — receives a
+        refusal, never a partial set.
+        """
+        status, payload = self._call(
+            "GET",
+            f"/api/v1/learning/assignments/{quote(assignment_id, safe='')}/submissions",
+            subject_credential=subject_credential,
+            claimed_tenant_id=claimed_tenant_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        if not 200 <= status < 300:
+            raise self._error(status, payload)
+        return _views_from(payload)
+
     # --------------------------------------------------------------- internals
     def _call(
         self,
@@ -150,6 +179,19 @@ class LearningClient:
             request_id=request_id,
             correlation_id=correlation_id,
         )
+
+
+def _views_from(payload: Mapping[str, Any]) -> list[SubmissionView]:
+    """Rebuild the published ``{items: [...]}`` list; anything else fails closed."""
+    try:
+        items = payload["items"]
+        if not isinstance(items, list):
+            raise ValueError("items must be a list")
+        return [_view_from(item) for item in items]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ContractViolation(
+            "the learning contract answered outside its published list model"
+        ) from exc
 
 
 def _refusal_of(payload: Mapping[str, Any]) -> tuple[str, str, str] | None:

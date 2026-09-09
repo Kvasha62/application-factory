@@ -6,10 +6,11 @@ directly (ARCHITECTURE.md §1.1, LAW-04). Level 0 consumers talk to this
 contract in-process through ``learning_service.transport`` and receive the
 value-only client from ``learning_service.reader``.
 
-The surface is deliberately narrow: the single-submission read behind the
-enforcement chain, plus health and readiness. There is no bulk export, no
-search, no pagination, no grading and no direct store path — no access
-path that bypasses the enforcement boundary exists to bypass with.
+The surface is deliberately narrow: the single-submission read and the
+teacher submission-discovery list behind the enforcement chain, plus
+health and readiness. There is no bulk export, no search, no pagination,
+no grading and no direct store path — no access path that bypasses the
+enforcement boundary exists to bypass with.
 
 ``Authorization`` carries the credential presented by the subject; this
 component verifies no credential itself — the decision dependency has it
@@ -40,6 +41,7 @@ __all__ = [
     "ERROR_CODES",
     "ErrorBody",
     "ErrorEnvelope",
+    "SubmissionListOut",
     "SubmissionOut",
     "create_app",
     "error_code_for",
@@ -57,6 +59,12 @@ class SubmissionOut(BaseModel):
     status: str
     created_at: str
     updated_at: str
+
+
+class SubmissionListOut(BaseModel):
+    """The published teacher-discovery representation: exactly ``{items: [...]}``."""
+
+    items: list[SubmissionOut]
 
 
 class ErrorBody(BaseModel):
@@ -109,7 +117,7 @@ _AUTHENTICATION_DENIALS = frozenset(
     {"missing_identity", "invalid_identity", "unknown_identity"}
 )
 
-_NOT_FOUND_REASONS = frozenset({"submission_unknown"})
+_NOT_FOUND_REASONS = frozenset({"assignment_unknown", "submission_unknown"})
 
 
 def error_code_for(reason: str) -> str:
@@ -225,6 +233,46 @@ def create_app(deployment: LearningDeployment) -> FastAPI:
             status=view.status,
             created_at=view.created_at,
             updated_at=view.updated_at,
+        )
+
+    @app.get(
+        "/api/v1/learning/assignments/{assignment_id}/submissions",
+        response_model=SubmissionListOut,
+    )
+    def list_submissions(
+        assignment_id: str,
+        authorization: str | None = Header(default=None),
+        x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+        x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
+    ) -> Any:
+        """List one Assignment's submissions — the read operation
+        ``learning.submissions.list`` (teacher discovery). An empty
+        Assignment answers 200 with ``{"items": []}``."""
+        try:
+            views, _, _ = engine.list_submissions(
+                _token(authorization),
+                assignment_id,
+                claimed_tenant_id=x_tenant_id,
+                request_id=x_request_id,
+                correlation_id=x_correlation_id,
+            )
+        except AccessRefused as exc:
+            return _refused(exc)
+        return SubmissionListOut(
+            items=[
+                SubmissionOut(
+                    submission_id=view.submission_id,
+                    assignment_id=view.assignment_id,
+                    student_identity_id=view.student_identity_id,
+                    attempt=view.attempt,
+                    content=dict(view.content),
+                    status=view.status,
+                    created_at=view.created_at,
+                    updated_at=view.updated_at,
+                )
+                for view in views
+            ]
         )
 
     return app

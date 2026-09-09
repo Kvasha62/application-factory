@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: SCS-001 Learning — Submission Read (Slice 1)
+  title: SCS-001 Learning — Teacher Submission Discovery (Slice 2)
   version: 0.1.0
   description: >-
     Граница владельца учебных данных одной Platform Instance. Компонент владеет
@@ -9,10 +9,11 @@ info:
     остаётся на границе владельца. Каждый доступ проходит фиксированную цепочку
     `ownership_boundary → authorization_decision → owned_data_operation`;
     решение по умолчанию — DENY, отказ зависимости закрывает доступ.
-    Срез 1 публикует чтение отдельной работы. Отказы используют утверждённый
-    конверт SCS-001: `error.code` / `error.message` / `error.details` плюс
-    `request_id` / `correlation_id` верхнего уровня; стабильная внутренняя
-    причина сохраняется в `error.details.reason`.
+    Срез 2 (Issue #20) добавляет к чтению отдельной работы из среза 1 ровно одну
+    операцию — teacher discovery списка работ задания. Отказы используют
+    утверждённый конверт SCS-001: `error.code` / `error.message` /
+    `error.details` плюс `request_id` / `correlation_id` верхнего уровня;
+    стабильная внутренняя причина сохраняется в `error.details.reason`.
 servers:
   - url: /api/v1/learning
     description: Learning API base path of one Platform Instance
@@ -97,6 +98,87 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /assignments/{assignment_id}/submissions:
+    get:
+      summary: List the submissions of one assignment (learning.submissions.list)
+      description: >-
+        Teacher discovery. `Authorization` несёт credential субъекта; он
+        проверяется в IS-001 внутри решения IS-003 — сам компонент credentials
+        не проверяет. `X-Tenant-Id` — только cross-check, передаётся как есть и
+        никогда не выбирает эффективный тенант (LAW-16a). Пустое задание
+        отвечает 200 с `{"items": []}`; грантованный учитель внутри тенанта
+        получает полный набор, любой иной исход — отказ в утверждённом
+        конверте, никогда частичный набор.
+      operationId: listSubmissions
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: assignment_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            доступ разрешён цепочкой контроля; возвращаются все работы задания в
+            детерминированном порядке submission_id; пустое задание отвечает
+            `{"items": []}`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmissionList"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`) либо запись принадлежит другому компоненту
+            (owner_mismatch); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            задание неизвестно этому владельцу (код NOT_FOUND,
+            assignment_unknown); решение у власти не запрашивается; отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /health:
     servers:
       - url: /
@@ -150,6 +232,18 @@ components:
           type: string
         updated_at:
           type: string
+    SubmissionList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Submission"
+          description: >-
+            работы задания в детерминированном порядке submission_id; пусто,
+            когда у задания нет работ
     Error:
       type: object
       additionalProperties: false
