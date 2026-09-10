@@ -1,8 +1,9 @@
 """Owned data of the Learning component (logical schema `learning`).
 
 This module is internal. No other component has direct access to it:
-assignments, submissions and the audit journal are reachable only through
-the published contract of this component (ARCHITECTURE.md §1.1, LAW-04).
+assignments, submissions, enrollments and the audit journal are reachable
+only through the published contract of this component (ARCHITECTURE.md §1.1,
+LAW-04).
 
 The store separates the two ways its data is touched, and the separation
 is the enforcement story of the component:
@@ -55,6 +56,7 @@ from learning_service.models import (
     AccessAuditEvent,
     OwnedAssignment,
     OwnedCourse,
+    OwnedEnrollment,
     OwnedLesson,
     OwnedModule,
     OwnedSubmission,
@@ -77,6 +79,11 @@ ASSIGNMENT_STATES: tuple[str, ...] = ("DRAFT", "PUBLISHED", "ARCHIVED")
 COURSE_STATES: tuple[str, ...] = ("DRAFT", "PUBLISHED", "ARCHIVED")
 MODULE_STATES: tuple[str, ...] = ("DRAFT", "PUBLISHED", "ARCHIVED")
 LESSON_STATES: tuple[str, ...] = ("DRAFT", "PUBLISHED", "ARCHIVED")
+
+#: Student Enrollment lifecycle of the first slice (ADR-0012): exactly one
+#: state. No INVITED, SUSPENDED, COMPLETED, CANCELLED, DELETED or EXPIRED
+#: state exists anywhere in this component.
+ENROLLMENT_STATES: tuple[str, ...] = ("ACTIVE",)
 
 
 class DomainRefusal(Exception):
@@ -102,10 +109,12 @@ class LearningStore:
     """In-memory owned storage of the Learning data and the audit journal.
 
     The store owns every record of the Learning logical schema: courses,
-    modules, lessons, assignments, submissions and the access audit journal.
-    The hierarchy invariants (Issue #31) are facts of this store, not claims
-    of a caller: every child is registered under an existing parent of the
-    same Tenant, or the registration is refused outright.
+    modules, lessons, assignments, submissions, enrollments and the access
+    audit journal. The hierarchy invariants (Issue #31) and the enrollment
+    duplicate invariant (ADR-0012) are facts of this store, not claims of a
+    caller: every child is registered under an existing parent of the same
+    Tenant, and every enrollment obeys the ACTIVE uniqueness of its Tenant —
+    or the registration is refused outright.
     """
 
     assignments: dict[str, OwnedAssignment] = field(default_factory=dict)
@@ -113,6 +122,7 @@ class LearningStore:
     courses: dict[str, OwnedCourse] = field(default_factory=dict)
     modules: dict[str, OwnedModule] = field(default_factory=dict)
     lessons: dict[str, OwnedLesson] = field(default_factory=dict)
+    enrollments: dict[str, OwnedEnrollment] = field(default_factory=dict)
     audit: list[AccessAuditEvent] = field(default_factory=list)
 
     #: One domain critical section per Course hierarchy (Issue #31). The
@@ -123,6 +133,18 @@ class LearningStore:
         default_factory=dict, repr=False, compare=False
     )
     _hierarchy_locks_guard: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
+
+    #: The domain critical section of enrollment registration (ADR-0012).
+    #: The duplicate check and the insertion of one registration form one
+    #: atomic decision, so two concurrent registrations of the same
+    #: Tenant + student + Course — different commands, different
+    #: ``Idempotency-Key`` values — can never both pass validation and
+    #: leave two ACTIVE records. This is Level-0 domain serialization
+    #: inside this component, not a second idempotency mechanism: IS-005
+    #: stays exactly-once per key, unchanged and outside this store.
+    _enrollments_guard: threading.Lock = field(
         default_factory=threading.Lock, repr=False, compare=False
     )
 
@@ -394,6 +416,101 @@ class LearningStore:
     def ownership_of_lesson(self, lesson_id: str) -> OwnedLesson | None:
         """Enforcement metadata for a lesson: existence and owner/tenant."""
         return self.lessons.get(lesson_id)
+
+    # --------------------------------------------------- student enrollment
+    def register_enrollment(self, enrollment: OwnedEnrollment) -> OwnedEnrollment:
+        """Register one owned enrollment; the duplicate invariant is enforced here.
+
+        Enrollment is Learning data: ``owner_component`` must be exactly this
+        component's value — ownership is singular and cannot be redefined. An
+        enrollment is registered only as ``ACTIVE``; no other lifecycle state
+        exists (ADR-0012). Within one Tenant at most one ``ACTIVE`` enrollment
+        may reference one student identity in one Course: a second registration
+        of that combination is a business conflict, not a second record. The
+        uniqueness of ``enrollment_id`` and the duplicate check execute under
+        the enrollments critical section, so no concurrent registration can
+        slip between them.
+
+        ``student_identity_id`` is stored as the opaque reference it is and is
+        never interpreted here (Identity owns the profile). The store answers
+        only its own data questions: whether the Course exists, whether it is
+        published, whether the caller may enroll at all — none of those is a
+        store question (ADR-0012; the command layers above decide).
+        """
+        if enrollment.owner_component != OWNER_COMPONENT:
+            raise ValueError(
+                f"an enrollment must be owned by {OWNER_COMPONENT!r}: "
+                "ownership is singular and cannot be redefined"
+            )
+        if not enrollment.enrollment_id or not str(enrollment.enrollment_id).strip():
+            raise ValueError("an enrollment must have an enrollment_id")
+        if not enrollment.tenant_id or not str(enrollment.tenant_id).strip():
+            raise ValueError("an enrollment must belong to exactly one tenant")
+        if not enrollment.course_id or not str(enrollment.course_id).strip():
+            raise ValueError("an enrollment must reference exactly one course")
+        if (
+            not enrollment.student_identity_id
+            or not str(enrollment.student_identity_id).strip()
+        ):
+            raise ValueError(
+                "an enrollment must reference exactly one student identity"
+            )
+        if enrollment.status not in ENROLLMENT_STATES:
+            raise ValueError(f"unknown enrollment status {enrollment.status!r}")
+        if enrollment.status != "ACTIVE":
+            # The vocabulary has one state and registration accepts only it:
+            # a second ACTIVE-looking state must never reach the store.
+            raise ValueError("an enrollment is registered only in ACTIVE")
+        with self._enrollments_guard:
+            if enrollment.enrollment_id in self.enrollments:
+                raise ValueError(
+                    f"enrollment {enrollment.enrollment_id!r} is already owned: "
+                    "ownership is singular and cannot be redefined"
+                )
+            if (
+                self.find_active_enrollment(
+                    tenant_id=enrollment.tenant_id,
+                    student_identity_id=enrollment.student_identity_id,
+                    course_id=enrollment.course_id,
+                )
+                is not None
+            ):
+                raise ValueError(
+                    "an ACTIVE enrollment for this student and course already "
+                    "exists in this tenant: duplicate enrollment is refused"
+                )
+            self.enrollments[enrollment.enrollment_id] = enrollment
+        return enrollment
+
+    def get_enrollment(self, enrollment_id: str) -> OwnedEnrollment | None:
+        """The owned enrollment by id, or ``None`` when this store has no record.
+
+        A lookup of the store's own data, answering existence only. Whether
+        the caller may see the record is the enforcement chain's question at
+        the component boundary — the store is not an authorization layer
+        (ARCHITECTURE.md §6.2) and decides nothing about any caller.
+        """
+        return self.enrollments.get(enrollment_id)
+
+    def find_active_enrollment(
+        self, *, tenant_id: str, student_identity_id: str, course_id: str
+    ) -> OwnedEnrollment | None:
+        """The ``ACTIVE`` enrollment of one student in one Course, or ``None``.
+
+        The lookup follows the store's own invariant: the (tenant, student,
+        course) triple is the duplicate key of registration, so an ``ACTIVE``
+        enrollment is found by exactly the combination that defines it — and
+        never by an interpretation of the opaque identity reference.
+        """
+        for enrollment in self.enrollments.values():
+            if (
+                enrollment.status == "ACTIVE"
+                and enrollment.tenant_id == tenant_id
+                and enrollment.student_identity_id == student_identity_id
+                and enrollment.course_id == course_id
+            ):
+                return enrollment
+        return None
 
     # -------------------------------------------------- authoring owned data
     def create_course(
@@ -747,6 +864,10 @@ class LearningStore:
         self.courses = {}
         self.modules = {}
         self.lessons = {}
+        # Enrollments reseed empty: this slice establishes the store and its
+        # invariants, and the fixed demo data deliberately states no business
+        # enrollment fact of its own.
+        self.enrollments = {}
         self.audit = []
 
         def add_course(

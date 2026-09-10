@@ -142,6 +142,34 @@ class OwnedSubmission:
 
 
 @dataclass(frozen=True, slots=True)
+class OwnedEnrollment:
+    """One student enrollment owned by this component (ADR-0012, Slice 1).
+
+    The business fact of enrollment is the participation of one student
+    identity in one Course within one Tenant. ``student_identity_id`` is an
+    opaque reference to the identity owned outside Learning (Identity owns
+    the profile); Learning stores the reference and never interprets it.
+    ``status`` is exactly ``ACTIVE`` — no other enrollment lifecycle state
+    exists in this slice. Within one Tenant at most one ``ACTIVE``
+    enrollment may exist for one student in one Course: the duplicate
+    protection of ADR-0012 is an invariant of this store's registration,
+    never a caller declaration. ``owner_component`` is singular by
+    construction: one value, one owner — ``learning``. Enrollment is not
+    part of the authored Course hierarchy: a Course does not contain its
+    enrollments; the two are related only by ``course_id``.
+    """
+
+    enrollment_id: str
+    course_id: str
+    tenant_id: str
+    student_identity_id: str
+    status: str
+    created_at: str
+    updated_at: str
+    owner_component: str
+
+
+@dataclass(frozen=True, slots=True)
 class ObservabilityContext:
     """Standard observability context (ARCHITECTURE.md §26 / ADR-0010 AMD-10).
 
