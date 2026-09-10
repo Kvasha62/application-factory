@@ -6,6 +6,7 @@
 **Исторический commit:** `19c8a5b1efe31d01b8b7044e197b11c44f7fa2f4`
 **Актуализация:** 2026-09-08 — Issue #6 (DOC-002): ратифицирован и включён в контур `docs/OPERATING_MODEL.md` как канонический операционный источник
 **Актуализация:** 2026-09-10 — состояние приведено в соответствие с фактическим репозиторием (реализация компонентов, Component Contracts, contract-test suite, Quality Gate, CI). История перехода к реализованному состоянию сохраняется, в том числе зафиксированное в ADR-0011 (раздел Ratification) отклонение последовательности «ратифицировать → реализовать» для среза 4 SCS-001
+**Актуализация:** 2026-09-10 — CI state уточнён по фактическому GitHub Actions run: Quality Gate workflow активен, а `main` (`2fd07176b7478198e630b844031e36e9dc9b46d9`) успешно прошёл Quality Gate. Branch protection/rulesets этим документом не подтверждаются.
 **Основание:** `docs/ARCHITECTURE.md` 1.2.0 + `docs/adr/ADR-0010-architecture-gap-review.md`
 
 ## 1. Назначение
@@ -35,7 +36,7 @@
 | Реализация компонентов | код соответствующего компонента (`src/`) | существует: 7 компонентов, Level 0 modular monolith, standalone-режим |
 | Component Contracts | `components/*/contract/` (component_contract.json + openapi.yaml) | существует: 7/7, machine-readable |
 | Contract-test suite | `tests/` (contract/boundary/conformance наборы) | существует: 730 тестов |
-| Quality Gate | `scripts/quality-gate.ps1` (локальный) + `.github/workflows/quality-gate.yml` (CI) | GREEN (закреплённые ruff 0.16.6 / black 26.5.1); CI-файл подготовлен и ожидает применения владельцем (sandbox не имеет права `workflows`) |
+| Quality Gate | `scripts/quality-gate.ps1` (локальный) + `.github/workflows/quality-gate.yml` (CI) | GREEN: CI workflow активен; `main` `2fd07176...` успешно прошёл Quality Gate |
 | Маршрутизация ответственности | `.github/CODEOWNERS` | существует |
 
 `docs/OPERATING_MODEL.md` — канонический операционный источник: он определяет, как команда (ChatGPT / Arena) работает через GitHub, и не создаёт архитектурных законов (Level A, §34.1 ARCHITECTURE.md; ADR не требуется). Архитектурным источником истины остаётся только `docs/ARCHITECTURE.md`, поэтому Operating Model не формирует второй архитектурный контур: при конфликте приоритет у ARCHITECTURE.md (см. §13 OPERATING_MODEL.md).
@@ -85,7 +86,7 @@ README синхронизирован с архитектурой 1.2.0 и бо�
 - `.github/CODEOWNERS` — существует;
 - Component Contracts — существуют (7/7);
 - contract-test suite — существует;
-- CI/conformance automation — подготовлена (`.github/workflows/quality-gate.yml`, готовый файл); применение в репозиторий ожидает действия владельца (sandbox-приложение не имеет права `workflows`).
+- CI/conformance automation — активна: `.github/workflows/quality-gate.yml` выполняется для pull request и push в `main`; текущий `main` успешно прошёл Quality Gate. Branch protection/rulesets в рамках этого baseline не утверждаются.
 
 Отсутствие необязательного артефакта не делает baseline `DIRTY`.
 
@@ -96,7 +97,7 @@ README синхронизирован с архитектурой 1.2.0 и бо�
 - 7 реализованных компонентов Level 0 (in-memory, standalone): `authorization`, `identity`, `tenant_authority`, `records`, `learning` (SCS-001, Slices 1–4), `saga`, `idempotency`;
 - Component Contracts (7/7) с OpenAPI-документами;
 - contract-test suite и поведенческие тесты (730 тестов: границы, tenant isolation, fail closed, idempotency, saga, audit, observability);
-- Quality Gate (локальный скрипт; CI-файл подготовлен) с закреплёнными версиями инструментов.
+- Quality Gate: локальный скрипт и активный CI workflow `.github/workflows/quality-gate.yml`; текущий `main` `2fd07176...` успешно прошёл Quality Gate.
 
 **По-прежнему не существует** (фабричные механизмы не введены, что допустимо в standalone/foundation-режиме §4.1):
 
