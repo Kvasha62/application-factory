@@ -2,8 +2,9 @@ openapi: 3.1.0
 info:
   title: >-
     SCS-001 Learning — Submission Read, Teacher Discovery, Review
-    (Slices 1–3) and Content Authoring (Slice 4)
-  version: 0.2.0
+    (Slices 1–3), Content Authoring (Slice 4) and Student Enrollment
+    (ADR-0012)
+  version: 0.3.0
   description: >-
     Граница владельца учебных данных одной Platform Instance. Компонент владеет
     tenant-scoped учебными данными (Course, Module, Lesson, Assignment,
@@ -25,7 +26,19 @@ info:
     комментариев. Каждая команда изменения состояния защищена IS-005
     (`Idempotency-Key` обязателен); публикация и архивация применяются
     атомарно ко всей иерархии; UNPUBLISH и UNARCHIVE отсутствуют;
-    опубликованная иерархия неизменяема (immutable). Отказы используют
+    опубликованная иерархия неизменяема (immutable). Student Enrollment
+    (ADR-0012) добавляет ровно две операции: self-enrollment студента в
+    опубликованный Course (`POST /enrollments`) и чтение собственного
+    Enrollment (`GET /enrollments/{course_id}`). Enrollment создаётся только
+    для проверенного субъекта запроса — тело команды называет Course и не
+    содержит идентичности, поэтому записать другого студента невозможно;
+    Course должен существовать, принадлежать тому же тенанту и быть
+    `PUBLISHED`; в одном тенанте у одного студента в одном Course не более
+    одного `ACTIVE` Enrollment. Чтение адресуется по Course и не принимает
+    идентификатор Enrollment, поэтому чужая запись недостижима и сам факт её
+    существования не раскрывается. Семантика чтения Course не изменена:
+    Enrollment не является prerequisite для `learning.courses.read`.
+    Отказы используют
     утверждённый конверт SCS-001: `error.code` / `error.message` /
     `error.details` плюс `request_id` / `correlation_id` верхнего уровня;
     стабильная внутренняя причина сохраняется в `error.details.reason`.
@@ -998,6 +1011,221 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /enrollments:
+    post:
+      summary: Enroll the verified subject in one owned course (learning.enrollments.create)
+      description: >-
+        Команда self-enrollment студента (ADR-0012). `Authorization` несёт
+        credential субъекта; он проверяется в IS-001 внутри цепочки — сам
+        компонент credentials не проверяет. `X-Tenant-Id` — только cross-check
+        (LAW-16a) и никогда не выбирает эффективный тенант. Тело команды
+        называет ровно один Course и не содержит идентичности:
+        `student_identity_id` создаваемого Enrollment — это проверенный
+        субъект запроса, поэтому операция по конструкции создаёт Enrollment
+        только для текущего студента. Course должен существовать у этого
+        владельца, принадлежать тому же эффективному тенанту и иметь статус
+        `PUBLISHED`; `DRAFT` и `ARCHIVED` отказываются как
+        INVALID_STATE_TRANSITION. В одном тенанте у одного студента в одном
+        Course может быть не более одного `ACTIVE` Enrollment — вторая попытка
+        другим ключом отказывается тем же кодом, а различие правила видно в
+        `details` записи аудита. `Idempotency-Key` обязателен: команда
+        доставляется через IS-005 — точный повтор возвращает тот же результат
+        без второй записи, изменение binding даёт IDEMPOTENCY_CONFLICT.
+        Новый Enrollment создаётся в `ACTIVE` — единственном состоянии этого
+        среза. Семантика чтения Course не изменяется.
+      operationId: createEnrollment
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+          description: >-
+            обязателен для команды изменения состояния; доставляется через
+            IS-005 — повтор с тем же ключом не создаёт второй записи, а
+            изменение binding даёт IDEMPOTENCY_CONFLICT
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrollmentCreate"
+      responses:
+        "201":
+          description: >-
+            Enrollment создан в `ACTIVE` ровно один раз либо повторён
+            идемпотентно; возвращается представление Enrollment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Enrollment"
+        "400":
+          description: >-
+            отсутствует обязательный Idempotency-Key (код
+            IDEMPOTENCY_KEY_REQUIRED; причина в `error.details.reason`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`), включая resource_tenant_mismatch при
+            Course другого тенанта и tenant_mismatch при несовпадении
+            cross-check, либо owner_mismatch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            Course неизвестен этому владельцу (код NOT_FOUND, course_unknown);
+            решение у власти не запрашивается; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            доменный отказ после ALLOW (код INVALID_STATE_TRANSITION,
+            invalid_state_transition): Course не `PUBLISHED` либо у этого
+            студента в этом Course уже есть `ACTIVE` Enrollment; какое именно
+            правило сработало, записано в аудит. Тем же статусом отвечает
+            IDEMPOTENCY_CONFLICT при ключе, использованном с другим binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            запрос не соответствует опубликованной схеме (код INVALID_REQUEST,
+            malformed_request) — в том числе тело, пытающееся назвать
+            `student_identity_id` или любое иное поле: схема его запрещает, и
+            запрос отклоняется до вызова обработчика; эффект не применён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость (identity или authorization) не ответила либо ответила
+            вне опубликованного контракта (код DEPENDENCY_UNAVAILABLE):
+            доступ закрыт; эффект не применён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /enrollments/{course_id}:
+    get:
+      summary: Read the verified subject's own enrollment in one course (learning.enrollments.read)
+      description: >-
+        Чтение собственного Enrollment проверенного субъекта (ADR-0012).
+        Параметр пути — **Course**: операция адресурует Enrollment вызывающей
+        стороны по тому Course, к которому он относится, и не принимает
+        идентификатор Enrollment. Запись выбирается ровно тройкой, которая её
+        определяет (эффективный тенант, проверенный субъект, Course), поэтому
+        чужой Enrollment недостижим по конструкции, а не пост-проверкой, и сам
+        факт его существования не раскрывается: «не записан» и «не твой» дают
+        один и тот же 404 `enrollment_unknown`. Никаких списков, roster и
+        учительских представлений эта операция не публикует. `X-Tenant-Id` —
+        только cross-check (LAW-16a). Семантика чтения Course не изменена:
+        эта операция читает Enrollment, а не иерархию.
+      operationId: readEnrollment
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: course_id
+          required: true
+          schema:
+            type: string
+          description: Course, собственный Enrollment в котором читает субъект
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            доступ разрешён цепочкой контроля; возвращается собственный
+            Enrollment субъекта в этом Course
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Enrollment"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`), включая resource_tenant_mismatch при
+            Course другого тенанта, либо owner_mismatch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            Course неизвестен этому владельцу (код NOT_FOUND, course_unknown)
+            либо у этого субъекта нет в нём собственного `ACTIVE` Enrollment
+            (код NOT_FOUND, enrollment_unknown); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /health:
     servers:
       - url: /
@@ -1237,6 +1465,46 @@ components:
         instructions:
           type: string
           description: инструкции не длиннее 4096 символов
+    Enrollment:
+      type: object
+      additionalProperties: false
+      required: [enrollment_id, course_id, student_identity_id, status, created_at, updated_at]
+      properties:
+        enrollment_id:
+          type: string
+          description: непрозрачный идентификатор записи о зачислении
+        course_id:
+          type: string
+          description: Course, в котором студент зачислен
+        student_identity_id:
+          type: string
+          description: >-
+            непрозрачная ссылка на проверенную идентичность студента — того
+            субъекта, которого установила цепочка контроля; профиль вне
+            Learning. Никогда не является значением, присланным вызывающей
+            стороной: ни одна операция этого контракта не принимает идентичность
+        status:
+          type: string
+          enum: [ACTIVE]
+          description: >-
+            жизненный цикл Enrollment этого среза — ровно одно состояние;
+            INVITED, SUSPENDED, COMPLETED, CANCELLED, DELETED и EXPIRED
+            отсутствуют (ADR-0012)
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    EnrollmentCreate:
+      type: object
+      additionalProperties: false
+      required: [course_id]
+      properties:
+        course_id:
+          type: string
+          description: >-
+            Course, в который зачисляется проверенный субъект. Тело команды
+            намеренно не содержит идентичности: любое дополнительное поле
+            (включая `student_identity_id`) отклоняется опубликованной схемой
     Error:
       type: object
       additionalProperties: false

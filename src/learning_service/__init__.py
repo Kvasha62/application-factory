@@ -34,13 +34,23 @@ Issue #31) establishes the upstream hierarchy of the same flow —
 create course/module/lesson/assignment, the Course-level atomic commands
 publish and archive, and the hierarchy read ``GET /courses/{course_id}``;
 every state-changing command is guarded by IS-005, and a Student reads
-published hierarchies only. Errors use the approved SCS-001 envelope
+published hierarchies only. Student Enrollment (ADR-0012) adds exactly two
+operations on the same chain — the student self-enrollment
+``POST /api/v1/learning/enrollments`` (``learning.enrollments.create``,
+guarded by IS-005) and the read of the student's own Enrollment
+``GET /api/v1/learning/enrollments/{course_id}``
+(``learning.enrollments.read``). Neither command accepts an identity: the
+student of an Enrollment is always the verified subject, an Enrollment is
+created only into a ``PUBLISHED`` Course of the same effective tenant, and one
+student holds at most one ``ACTIVE`` Enrollment per Course within a tenant.
+Enrollment is not a prerequisite for the published Course read — that
+semantics is unchanged. Errors use the approved SCS-001 envelope
 (``error.code`` / ``error.message`` / ``error.details`` plus top-level
 ``request_id`` / ``correlation_id``).
 """
 
 COMPONENT_ID = "learning"
-COMPONENT_VERSION = "0.2.0"
+COMPONENT_VERSION = "0.3.0"
 COMPONENT_CLASS = "business_system"
 SCS_ID = "SCS-001"
 

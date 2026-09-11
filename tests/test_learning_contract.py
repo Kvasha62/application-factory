@@ -148,6 +148,8 @@ def test_contract_declares_the_required_shapes():
         "learning.courses.archive",
         "learning.courses.read",
         "learning.courses.read_unpublished",
+        "learning.enrollments.create",
+        "learning.enrollments.read",
     ]
 
     ownership = data["data_ownership"]
@@ -230,7 +232,8 @@ def test_published_api_matches_the_implementation_in_both_directions():
     }
     assert contract_operations <= declared
     # Exactly the two submission reads, the review command, the seven
-    # content-authoring operations plus health/readiness.
+    # content-authoring operations, the two student-enrollment operations
+    # (ADR-0012) plus health/readiness.
     assert contract_operations == {
         ("/api/v1/learning/submissions/{submission_id}", "get"),
         ("/api/v1/learning/assignments/{assignment_id}/submissions", "get"),
@@ -242,6 +245,8 @@ def test_published_api_matches_the_implementation_in_both_directions():
         ("/api/v1/learning/lessons/{lesson_id}/assignments", "post"),
         ("/api/v1/learning/courses/{course_id}/publish", "post"),
         ("/api/v1/learning/courses/{course_id}/archive", "post"),
+        ("/api/v1/learning/enrollments", "post"),
+        ("/api/v1/learning/enrollments/{course_id}", "get"),
     }
 
 
@@ -262,6 +267,8 @@ def test_declared_enforcement_chain_and_model_match_the_engine():
         "publish_course",
         "archive_course",
         "course_hierarchy",
+        "create_enrollment",
+        "find_active_enrollment",
     ]
     assert set(model["own_deny_reasons"]) == OWN_DENY_REASONS
     assert set(model["submission_states"]) == set(SUBMISSION_STATES)

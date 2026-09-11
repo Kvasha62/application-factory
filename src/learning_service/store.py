@@ -144,8 +144,15 @@ class LearningStore:
     #: leave two ACTIVE records. This is Level-0 domain serialization
     #: inside this component, not a second idempotency mechanism: IS-005
     #: stays exactly-once per key, unchanged and outside this store.
-    _enrollments_guard: threading.Lock = field(
-        default_factory=threading.Lock, repr=False, compare=False
+    #:
+    #: Reentrant, so the enroll command's own effect can hold the section
+    #: across its whole critical sequence — Course state rule, duplicate
+    #: check, insertion — while ``register_enrollment`` re-acquires it on
+    #: the same thread. A thread enrolls in at most one Course at a time
+    #: and never takes a hierarchy lock while holding this one, so the
+    #: ordering stays acyclic and cannot deadlock.
+    _enrollments_guard: threading.RLock = field(
+        default_factory=threading.RLock, repr=False, compare=False
     )
 
     # ------------------------------------------------------------------ static
@@ -511,6 +518,75 @@ class LearningStore:
             ):
                 return enrollment
         return None
+
+    def create_enrollment(
+        self,
+        *,
+        tenant_id: str,
+        course_id: str,
+        student_identity_id: str,
+        now: str,
+    ) -> OwnedEnrollment:
+        """The owned-data creation effect of the enroll command (ADR-0012).
+
+        Called only from inside the owned-data step of the enforcement chain,
+        so every caller-level question — who the subject is, which Tenant is
+        effective, whether this subject may enroll at all — is already decided
+        and is passed in as a fact. What is left is this store's own data
+        rules, re-evaluated here so that no observation made before the
+        critical section is load-bearing:
+
+        * the Course must exist here (``KeyError`` when it vanished);
+        * the effective Tenant must be the Course's own Tenant — the
+          Enrollment belongs to both and they are the same fact;
+        * it must be ``PUBLISHED`` — a ``DRAFT`` or ``ARCHIVED`` Course
+          accepts no enrollment;
+        * the (tenant, student, course) triple must not already hold an
+          ``ACTIVE`` enrollment.
+
+        A violated rule raises :class:`DomainRefusal`, never a second record.
+        The whole sequence — state rule, duplicate check, insertion — runs
+        inside the enrollments critical section, which ``register_enrollment``
+        re-enters on the same thread, so two concurrent commands with two
+        different ``Idempotency-Key`` values can never both pass the duplicate
+        check. A new enrollment is created ``ACTIVE``, the only state of this
+        slice, in the Tenant of the chain — never a caller claim.
+        """
+        with self._enrollments_guard:
+            course = self.courses.get(course_id)
+            if course is None:
+                raise KeyError(course_id)
+            if course.tenant_id != tenant_id:
+                # The Enrollment belongs to the Course's Tenant and to the
+                # effective Tenant of the chain — the same fact stated twice.
+                # A disagreement is an internal inconsistency of the chain,
+                # not a request this store could answer (cf. register_module).
+                raise ValueError(
+                    "an enrollment must belong to the same tenant as its course"
+                )
+            if course.status != "PUBLISHED":
+                raise DomainRefusal("invalid_state_transition")
+            if (
+                self.find_active_enrollment(
+                    tenant_id=tenant_id,
+                    student_identity_id=student_identity_id,
+                    course_id=course_id,
+                )
+                is not None
+            ):
+                raise DomainRefusal("invalid_state_transition")
+            return self.register_enrollment(
+                OwnedEnrollment(
+                    enrollment_id=_new_id("enr"),
+                    course_id=course_id,
+                    tenant_id=tenant_id,
+                    student_identity_id=student_identity_id,
+                    status="ACTIVE",
+                    created_at=now,
+                    updated_at=now,
+                    owner_component=OWNER_COMPONENT,
+                )
+            )
 
     # -------------------------------------------------- authoring owned data
     def create_course(

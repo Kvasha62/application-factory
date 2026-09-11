@@ -1,18 +1,19 @@
-# SCS-001 Learning — Submission Read, Teacher Submission Discovery, Review и Learning Content Authoring (Slices 1–4)
+# SCS-001 Learning — Submission Read, Teacher Submission Discovery, Review, Learning Content Authoring и Student Enrollment (Slices 1–4 + ADR-0012)
 
 **Класс:** A — Business System / SCS
 **Уровень:** Level 0 — Modular Monolith
-**Версия компонента:** 0.2.0
+**Версия компонента:** 0.3.0
 **Владелец данных:** `learning` (логическая схема `learning`)
-**Задача:** SCS-001 Slice 1 (prerequisite) + Slice 2 — Issue #20 + Slice 3 — Issue #24 + Slice 4 — Issue #31
+**Задача:** SCS-001 Slice 1 (prerequisite) + Slice 2 — Issue #20 + Slice 3 — Issue #24 + Slice 4 — Issue #31 + Student Enrollment — ADR-0012
 **Архитектурная основа:** `docs/ARCHITECTURE.md` v1.2.0 §5.3, §5.4, §6.1, §6.2,
-§6.5, §26, §27, LAW-03, LAW-04, LAW-16, LAW-16a; ADR-0011
+§6.5, §26, §27, LAW-03, LAW-04, LAW-16, LAW-16a; ADR-0011; ADR-0012
 
 SCS-001 — бизнес-компонент, владелец учебных данных. Срез 1 публикует чтение
 отдельной работы, срез 2 добавляет teacher discovery — список работ задания,
 срез 3 добавляет ровно одну команду изменения состояния — review работы
 учителем, срез 4 добавляет иерархию содержания над существующим потоком —
-Course → Module → Lesson → Assignment (Issue #31):
+Course → Module → Lesson → Assignment (Issue #31), Student Enrollment
+(ADR-0012) добавляет зачисление студента в опубликованный Course:
 
 ```text
 Subject → Submission read (срез 1)
@@ -22,6 +23,8 @@ Teacher → Create Course / Module / Lesson / Assignment (срез 4)
 Teacher → Publish Course (атомарно, вся иерархия) (срез 4)
 Teacher → Archive Course (атомарно, вся иерархия) (срез 4)
 Student → Read published Course hierarchy (срез 4)
+Student → Enroll self in a PUBLISHED Course (ADR-0012)
+Student → Read own Enrollment in a Course (ADR-0012)
 ```
 
 Это не grading-платформа, не analytics, не progress-трекинг, не LMS с
@@ -125,8 +128,10 @@ Learning Boundary (этот компонент)
 работы запрошенного задания в детерминированном порядке `submission_id`;
 пустое задание отвечает `{"items": []}`. Пагинации, сортировки, поиска и
 частичных наборов нет. Оценок, комментариев,
-review-состояний, прогресса, Enrollment, сущностей Review/Evaluation/Grade/
+review-состояний, прогресса, сущностей Review/Evaluation/Grade/
 Feedback/LearningResult в компоненте нет: review — это ровно два nullable поля.
+Enrollment (ADR-0012) — отдельная собственная запись компонента, а не поле
+Submission: модель работы им не изменяется.
 
 ### Content hierarchy (срез 4)
 
@@ -143,6 +148,42 @@ Feedback/LearningResult в компоненте нет: review — это ров
 детерминированном порядке (`position`, затем идентификатор). Тенант и
 владелец в публикуемых представлениях не раскрываются.
 
+### Enrollment (ADR-0012)
+
+| Сущность | Поля | Lifecycle |
+|---|---|---|
+| `Enrollment` | `enrollment_id`, `course_id`, `tenant_id`, `student_identity_id`, `status`, `created_at`, `updated_at` | ровно `ACTIVE` |
+
+`Enrollment` — бизнес-факт участия одной идентичности студента в одном Course
+внутри одного тенанта. Публикуемое представление — шесть бизнес-полей без
+тенанта и владельца. `student_identity_id` — непрозрачная ссылка на
+проверенный субъект (профиль владеет Identity); Learning хранит ссылку и её не
+интерпретирует. Enrollment не входит в авторскую иерархию: Course не содержит
+своих зачислений, их связывает только `course_id`.
+
+Семантика среза:
+
+- **только self-enrollment** — команда не принимает идентичность, поэтому
+  `student_identity_id` всегда равен проверенному субъекту запроса; записать
+  другого студента невозможно по конструкции. Teacher/admin-зачисления,
+  приглашений, bulk и cohort нет;
+- **Course** — должен существовать у этого владельца, принадлежать тому же
+  эффективному тенанту и быть `PUBLISHED`; `DRAFT` и `ARCHIVED` отказываются;
+- **защита от дубля** — в одном тенанте у одного студента в одном Course не
+  более одного `ACTIVE` Enrollment; проверка и вставка — одно атомарное
+  решение внутри критической секции хранилища, поэтому две конкурентные
+  команды с разными ключами не могут обе пройти;
+- **чтение** — только собственный Enrollment, адресуется по Course и не
+  принимает идентификатор Enrollment: чужая запись недостижима, а факт её
+  существования не раскрывается («не записан» и «не твой» — один и тот же
+  `enrollment_unknown`). Списков, roster и учительских представлений нет;
+- **Course Read не изменён** — Enrollment не является ни prerequisite, ни
+  барьером для `learning.courses.read` ни в одну из сторон.
+
+Unenrollment, отмены, приостановки, завершения, срока действия, prerequisites,
+ограничения мест, листы ожидания, оплата, уведомления, прогресс и оценка в
+этот срез не входят (ADR-0012, явные не-цели).
+
 ## Публичный контракт
 
 - HTTP: `GET /api/v1/learning/submissions/{submission_id}` (операция
@@ -154,16 +195,20 @@ Feedback/LearningResult в компоненте нет: review — это ров
   `POST /courses`, `GET /courses/{course_id}`,
   `POST /courses/{course_id}/modules`, `POST /modules/{module_id}/lessons`,
   `POST /lessons/{lesson_id}/assignments`, `POST /courses/{course_id}/publish`,
-  `POST /courses/{course_id}/archive` — см. `contract/openapi.yaml`
+  `POST /courses/{course_id}/archive` — плюс две операции Student Enrollment
+  (ADR-0012): `POST /enrollments` (операция `learning.enrollments.create`) и
+  `GET /enrollments/{course_id}` (операция `learning.enrollments.read`) —
+  см. `contract/openapi.yaml`
   (servers: `/api/v1/learning`, относительные пути) и
   `contract/component_contract.json`;
 - уровень 0 (in-process): `learning_service.reader.LearningClient` — те же
-  десять операций, значения туда и обратно.
+  двенадцать операций, значения туда и обратно (`enroll()` и
+  `read_enrollment()` — опубликованные методы Enrollment).
 
 `Authorization` несёт credential субъекта: компонент сам не проверяет
 никаких credentials. `X-Tenant-Id` — только cross-check (LAW-16a), он никогда
 не выбирает эффективный тенант команды. `Idempotency-Key` обязателен для всех
-шести команд изменения состояния и доставляется через IS-005.
+семи команд изменения состояния и доставляется через IS-005.
 
 ## Отказы
 
@@ -186,8 +231,8 @@ Feedback/LearningResult в компоненте нет: review — это ров
 | `400` | `IDEMPOTENCY_KEY_REQUIRED` | `idempotency_key_required` — команда без ключа |
 | `401` | `AUTHENTICATION_REQUIRED` | `missing_identity`, `invalid_identity`, `unknown_identity` |
 | `403` | `AUTHORIZATION_DENIED` | опубликованные `DENY`-причины IS-003 без изменений; `owner_mismatch` |
-| `404` | `NOT_FOUND` | `assignment_unknown`, `submission_unknown`, `course_unknown`, `module_unknown`, `lesson_unknown` — решение не запрашивается |
-| `409` | `INVALID_STATE_TRANSITION` | `invalid_state_transition` — review только для `SUBMITTED`; создание только под `DRAFT`-родителя; publish только для `DRAFT`; archive только для `PUBLISHED` |
+| `404` | `NOT_FOUND` | `assignment_unknown`, `submission_unknown`, `course_unknown`, `module_unknown`, `lesson_unknown` — решение не запрашивается; `enrollment_unknown` — у субъекта нет собственного `ACTIVE` Enrollment в этом Course |
+| `409` | `INVALID_STATE_TRANSITION` | `invalid_state_transition` — review только для `SUBMITTED`; создание только под `DRAFT`-родителя; publish только для `DRAFT`; archive только для `PUBLISHED`; enrollment только в `PUBLISHED` Course и не более одного `ACTIVE` на студента и Course (какое правило сработало — в `details` записи аудита) |
 | `409` | `ALREADY_REVIEWED` | `already_reviewed` — факт review неизменяем; другой ключ не перезаписывает первый review |
 | `409` | `IDEMPOTENCY_CONFLICT` | `idempotency_conflict` — ключ уже использован с другим binding |
 | `422` | `VALIDATION_ERROR` | `validation_error` — payload не проходит правила команды (пустой/длинный title, отрицательный position) |
@@ -225,6 +270,7 @@ Feedback/LearningResult в компоненте нет: review — это ров
 | `lessons` | `tenant-scoped` | ровно один Module того же тенанта; регистрация только в `DRAFT` |
 | `assignments` | `tenant-scoped` | ровно один владелец; регистрация явная; срез 4 добавляет `lesson_id`/`title`/`instructions` |
 | `submissions` | `tenant-scoped` | родитель и тенант проверяются при регистрации; review fact — два nullable поля |
+| `enrollments` | `tenant-scoped` | один Course и один тенант; `student_identity_id` — непрозрачная ссылка; только `ACTIVE`; не более одного `ACTIVE` на (тенант, студент, Course) |
 | `access_audit` | `platform-scoped` | append-only журнал каждой попытки доступа |
 
 ## Тесты
