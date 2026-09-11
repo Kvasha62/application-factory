@@ -94,7 +94,7 @@ README синхронизирован с архитектурой 1.2.0 и бо�
 
 **Существует (факт на момент этой актуализации):**
 
-- 7 реализованных компонентов Level 0 (in-memory, standalone): `authorization`, `identity`, `tenant_authority`, `records`, `learning` (SCS-001: Slices 1–4 по ADR-0011 + Student Enrollment по ADR-0012, компонент версии 0.3.0), `saga`, `idempotency`;
+- 7 реализованных компонентов Level 0 (in-memory, standalone): `authorization`, `identity`, `tenant_authority`, `records`, `learning` (SCS-001: Submission read, Teacher Submission Discovery, Teacher Review и Learning Content Authoring — граница авторинга ратифицирована ADR-0011; Student Enrollment определён ADR-0012; компонент версии 0.3.0), `saga`, `idempotency`;
 - Component Contracts (7/7) с OpenAPI-документами;
 - contract-test suite и поведенческие тесты (811 тестов: границы, tenant isolation, fail closed, idempotency, saga, audit, observability, enrollment);
 - Quality Gate: локальный скрипт и активный CI workflow `.github/workflows/quality-gate.yml`; текущий `main` `de13ab3...` успешно прошёл Quality Gate (run `34582747555`).
