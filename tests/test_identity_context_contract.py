@@ -10,8 +10,6 @@ read grants nothing.
 
 from __future__ import annotations
 
-import gc
-
 import pytest
 
 from identity_service import COMPONENT_VERSION
@@ -131,11 +129,20 @@ def test_a_dropped_context_client_revokes_its_channel():
     instance = monolith()
     before = identity_transport.channel_count()
     client = build_client(instance.identity_app)
-    assert identity_transport.channel_count() == before + 1
     handle = client._channel
+    assert identity_transport.channel_count() == before + 1
+    # While the client lives, its channel serves the published contract.
+    assert client.resolve_context("token-human-a").identity_id == "idn_human_a"
+
     del client
-    gc.collect()
-    assert identity_transport.channel_count() == before
+
+    # The dropped client revoked its own channel, and a revoked channel fails
+    # closed. The comparison is about this handle and not about
+    # ``channel_count()``: that figure is process-global, so channels of
+    # compositions an earlier test dropped would be counted here too, and the
+    # assertion would measure when the collector last ran instead of this
+    # revocation. The client holds only its handle, so dropping it revokes the
+    # channel deterministically — no collection is needed to observe it.
     with pytest.raises(ContractViolation):
         identity_transport.call_contract(handle, "GET", "/api/v1/context", (), None)
 
