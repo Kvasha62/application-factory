@@ -169,8 +169,9 @@ proposition.
 
 - A Cart holds the offers a buyer has selected but has not yet bought. It is
   tenant-scoped and bound to a `buyer_identity_id`.
-- Unlike the Order, the Cart is *not* a commercial fact. It may change, be
-  emptied, or be abandoned without any commercial consequence.
+- Unlike the Order — whose purchase facts are immutable once created — the
+  Cart is *not* a commercial fact. It may change, be emptied, or be abandoned
+  without any commercial consequence.
 - Carts are working state of the buying process; their exact retention rules
   are implementation-level decisions.
 
@@ -178,8 +179,8 @@ proposition.
 
 - Checkout is the operation that converts the selected contents of a Cart
   into an Order: it validates the selected offers and their current prices,
-  applies tenant/authorization/idempotency rules, and produces the immutable
-  commercial fact.
+  applies tenant/authorization/idempotency rules, and produces the Order,
+  fixing its immutable purchase facts at creation.
 - **No persistent Checkout entity is created.** Checkout is a command with an
   effect (Order creation), not a long-lived object. Introducing a persistent
   checkout/document state would require a proven business need and a separate
@@ -187,8 +188,21 @@ proposition.
 
 **Order** — the central commercial fact.
 
-- An Order records, immutably in business terms, what a specific buyer bought
-  in a specific tenant, at which captured prices, and in which payment state.
+- An Order records the commercial facts of what a specific buyer bought in a
+  specific tenant, at which captured prices. These **purchase facts — the
+  buyer, the tenant, the bought positions (OrderLines), the captured prices
+  and the other commercial facts of the purchase — are immutable after
+  creation**.
+- The **payment state** is deliberately not among those frozen facts: it is a
+  mutable lifecycle/result associated with the Order and may change after
+  creation (see Payment State below). Conceptually:
+
+```text
+Order
+├── purchase facts — immutable after creation
+└── payment state  — mutable lifecycle/result
+```
+
 - The Order is the authoritative commercial record of Commerce. Later changes
   to the catalog (Product, Offer, current Price) do not rewrite it.
 
@@ -212,6 +226,12 @@ This must be read as the strictest constraint of this ADR.
 the commercial state/result of payment associated with an Order — a recorded
 business fact owned by Commerce ("this order is unpaid / paid"), not a
 separate component, process or integration surface.
+
+Payment state is the **mutable part** of an Order. It may progress through a
+payment lifecycle — for example from a not-yet-paid state to a paid result
+(`PENDING_PAYMENT → PAID` as an illustration; the exact state set is an
+implementation-level decision). A payment-state change alters only this
+lifecycle/result; it never alters the immutable purchase facts of the Order.
 
 Consequently, this ADR forbids, within the MVP:
 
@@ -384,9 +404,9 @@ scopes:
 | `offers` | `tenant-scoped` | sellable propositions; exactly one Product of the same tenant |
 | `prices` | `tenant-scoped` | price concept of a sellable proposition; current price may change, history preserved per snapshot rules |
 | `carts` | `tenant-scoped` | mutable pre-order state of one buyer |
-| `orders` | `tenant-scoped` | central commercial fact; immutable in business terms after creation |
-| `order_lines` | `tenant-scoped` | positions with price snapshot at order time |
-| payment state | `tenant-scoped` | commercial state/result bound to an Order (storage form is an implementation-level decision) |
+| `orders` | `tenant-scoped` | central commercial fact; its purchase facts (buyer, tenant, positions, captured prices) are immutable after creation |
+| `order_lines` | `tenant-scoped` | positions with an immutable price snapshot at order time (purchase facts) |
+| payment state | `tenant-scoped` | mutable lifecycle/result associated with an Order; changes never touch the Order's immutable purchase facts (storage form is an implementation-level decision) |
 | commerce audit | `platform-scoped` | append-only record, same pattern as existing components |
 
 The logical schema and owner name (`commerce`) are fixed at component
@@ -488,12 +508,17 @@ A future Commerce implementation is conformant with this ADR only if:
    `Product.price` and no extra pricing machinery.
 4. Cart is mutable pre-order state; Checkout is a command/process; no
    persistent Checkout entity exists.
-5. Order and OrderLine are immutable commercial facts in business terms;
-   OrderLines carry a price snapshot at order time.
-6. Changing a current Price (or Product/Offer) never mutates a historical
-   Order.
-7. Payment is a Commerce-owned state/result bound to an Order; no Payment
-   Service, no payment provider integration, no gateway imitation exists.
+5. Order purchase facts (buyer, tenant, positions, captured prices) are
+   immutable after Order creation; OrderLine purchase facts and their price
+   snapshots are immutable; the payment state may change after creation as a
+   mutable lifecycle/result associated with the Order.
+6. Changing a current Price (or Product/Offer) never mutates the purchase
+   facts of a historical Order; the current catalog price never overwrites a
+   historical OrderLine price snapshot.
+7. Payment is a Commerce-owned state/result associated with an Order; it is
+   mutable and independent of the Order's immutable purchase facts; no
+   Payment Service, no payment provider integration, no gateway imitation
+   exists.
 8. Buyer is referenced by an opaque `buyer_identity_id` into the existing
    Identity; no second user/customer-profile service and no copied identity
    internals exist.
