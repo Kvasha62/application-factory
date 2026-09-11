@@ -1,7 +1,8 @@
 # ADR-0013 — Commerce Product Boundary
 
-**Status:** `PROPOSED` — ожидает архитектурного ревью (ChatGPT) и отдельной ратификации владельца проекта
+**Status:** `RATIFIED` — принято владельцем проекта 2026-09-11
 **Date:** 2026-09-11
+**Ratified:** 2026-09-11
 **Level:** D — domain/architecture boundary decision
 **Initiated by:** Issue #53
 
@@ -600,8 +601,10 @@ Adoption path:
 
 ```text
 ADR-0013 PROPOSED (this document)
-    → architectural review (ChatGPT)
-    → owner ratification
+    → architectural review (ChatGPT) — completed: one mandatory semantic
+      correction (immutable Order purchase facts vs mutable payment state),
+      then APPROVE
+    → owner ratification — completed 2026-09-11
     → separate implementation Issue(s) for the Commerce MVP slice(s)
     → component creation: Component Contract + OpenAPI first,
       then implementation, contract tests and Quality Gate
@@ -634,16 +637,16 @@ identifies a genuine conflict with ratified law.
 
 ## Ratification
 
-**This ADR is `PROPOSED`. It is not ratified.**
+RATIFIED by the project owner (`@Kvasha62`) on 2026-09-11.
 
-It awaits (1) architectural review by ChatGPT and (2) separate ratification
-by the project owner. Until both have happened and the change is merged,
-this document is a proposal, not project law; it does not authorize any
-Commerce implementation, and no Commerce implementation Issue may be treated
-as authorized by this document alone.
+The ratification follows the completed architectural review: the initial
+ChatGPT review required one semantic correction — the separation of the
+immutable purchase facts of an Order from the mutable payment state
+associated with it — the correction was applied, and the architectural
+re-review returned APPROVE.
 
-Ratification, when it happens, will be recorded by the project owner in this
-section. It will confirm the decision as written; it will not change
-`docs/ARCHITECTURE.md` v1.2.0 RATIFIED and will not bump the architecture
-version, as this ADR explicitly states. Nothing in this section may be
-construed as the owner's approval.
+This ratification confirms the decision as written. It does not change
+`docs/ARCHITECTURE.md` v1.2.0 RATIFIED, does not bump the architecture
+version, and does not authorize any implementation by itself: implementation
+work on Commerce requires a separate Issue, per the adoption path above and
+the project's operating model.
