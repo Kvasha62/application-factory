@@ -38,6 +38,7 @@ from learning_service.contracts import (
     PUBLISHED_DENY_REASONS,
     AssignmentView,
     CourseView,
+    EnrollmentView,
     LessonView,
     ModuleView,
     SubmissionView,
@@ -389,6 +390,69 @@ class LearningClient:
             raise self._error(status, payload)
         return _course_from(payload)
 
+    # ---------------------------------------------------- student enrollment
+    def enroll(
+        self,
+        subject_credential: str | None,
+        *,
+        course_id: str,
+        idempotency_key: str | None,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> EnrollmentView:
+        """Enroll the verified subject in one Course through the enforcement chain.
+
+        ``idempotency_key`` is mandatory and delivered through IS-005: an exact
+        replay returns the recorded Enrollment without a second effect, and a
+        changed binding is refused. The command takes a Course and no identity:
+        the student of the Enrollment is the verified subject of the chain, so
+        a consumer cannot enroll another identity — ``claimed_tenant_id`` stays
+        a cross-check and can never select the effective tenant.
+        """
+        status, payload = self._call(
+            "POST",
+            "/api/v1/learning/enrollments",
+            subject_credential=subject_credential,
+            claimed_tenant_id=claimed_tenant_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
+            body={"course_id": course_id},
+        )
+        if not 200 <= status < 300:
+            raise self._error(status, payload)
+        return _enrollment_from(payload)
+
+    def read_enrollment(
+        self,
+        subject_credential: str | None,
+        course_id: str,
+        *,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> EnrollmentView:
+        """Read the verified subject's own Enrollment in one Course.
+
+        The Course identifies the record: the operation accepts no enrollment
+        identifier, so another student's Enrollment is unreachable through it
+        and its existence is never disclosed — "never enrolled" and "not yours"
+        are the same refusal. A caller outside the Course's Tenant, or without
+        the read grant, receives a refusal, never a record.
+        """
+        status, payload = self._call(
+            "GET",
+            f"/api/v1/learning/enrollments/{quote(course_id, safe='')}",
+            subject_credential=subject_credential,
+            claimed_tenant_id=claimed_tenant_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        if not 200 <= status < 300:
+            raise self._error(status, payload)
+        return _enrollment_from(payload)
+
     # --------------------------------------------------------------- internals
     def _call(
         self,
@@ -537,6 +601,23 @@ def _course_from(payload: Mapping[str, Any]) -> CourseView:
     except (KeyError, TypeError, ValueError) as exc:
         raise ContractViolation(
             "the learning contract answered outside its published course model"
+        ) from exc
+
+
+def _enrollment_from(payload: Mapping[str, Any]) -> EnrollmentView:
+    """Rebuild the published enrollment value; an outside answer fails closed."""
+    try:
+        return EnrollmentView(
+            enrollment_id=_text_field(payload, "enrollment_id"),
+            course_id=_text_field(payload, "course_id"),
+            student_identity_id=_text_field(payload, "student_identity_id"),
+            status=_text_field(payload, "status"),
+            created_at=_text_field(payload, "created_at"),
+            updated_at=_text_field(payload, "updated_at"),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ContractViolation(
+            "the learning contract answered outside its published enrollment model"
         ) from exc
 
 

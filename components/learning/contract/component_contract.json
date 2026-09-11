@@ -1,10 +1,10 @@
 {
   "component_id": "learning",
   "scs_id": "SCS-001",
-  "component_version": "0.2.0",
+  "component_version": "0.3.0",
   "class": "business_system",
   "maturity_level": "level_0_modular_monolith",
-  "task": "SCS-001 Slices 1-4 — Submission Read, Teacher Submission Discovery (Issue #20), Teacher Submission Review (Issue #24), Learning Content Authoring (Issue #31)",
+  "task": "SCS-001 Slices 1-4 — Submission Read, Teacher Submission Discovery (Issue #20), Teacher Submission Review (Issue #24), Learning Content Authoring (Issue #31), Student Enrollment (ADR-0012)",
   "learning_boundary": {
     "role": "Data Ownership / Learning Boundary",
     "invariants": [
@@ -19,7 +19,10 @@
       "L-009 a list answer contains only submissions of the requested Assignment, or is a refusal — there is no partial cross-assignment or cross-tenant set",
       "L-010 every child of the content hierarchy belongs to exactly one parent of the same Tenant: no orphan and no cross-tenant Module, Lesson or Assignment exists (Issue #31)",
       "L-011 publication and archive are Course-level commands that flip the whole hierarchy atomically or nothing at all; there is no UNPUBLISH and no UNARCHIVE",
-      "L-012 a published hierarchy is immutable: no editing, reordering, revisioning or child creation under a non-DRAFT parent"
+      "L-012 a published hierarchy is immutable: no editing, reordering, revisioning or child creation under a non-DRAFT parent",
+      "L-013 an Enrollment is created only by its own student: the command carries no identity field, so student_identity_id is always the verified subject of the chain and never a caller claim (ADR-0012)",
+      "L-014 within one Tenant at most one ACTIVE Enrollment exists for one student in one Course, and an Enrollment is created only into a PUBLISHED Course of that same Tenant",
+      "L-015 Enrollment is not a prerequisite for Course Read: the published-course read semantics are unchanged by enrollment, in either direction"
     ],
     "enforcement_chain": [
       "ownership_boundary",
@@ -72,6 +75,26 @@
         "instructions"
       ],
       "note": "The existing Assignment model is extended, not replaced: lesson_id, title and instructions anchor the same assignment identity the submission flow serves. tenant_id and owner_component are store facts of every record, never caller claims."
+    },
+    "enrollment_model": {
+      "enrollment": [
+        "enrollment_id",
+        "course_id",
+        "tenant_id",
+        "student_identity_id",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "published_view": [
+        "enrollment_id",
+        "course_id",
+        "student_identity_id",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "note": "Enrollment is the business fact that one student identity participates in one Course within one Tenant (ADR-0012). tenant_id and owner_component are store facts of the record and are not published in the view. student_identity_id is the opaque reference to the verified subject — Identity owns the profile, Learning stores and never interprets the reference. Enrollment is not part of the authored Course hierarchy: a Course does not contain its enrollments, the two are related only by course_id."
     }
   },
   "api": {
@@ -171,6 +194,26 @@
         "authorization_operation": "learning.courses.read for a PUBLISHED course (Teachers and Students); learning.courses.read_unpublished for a DRAFT or ARCHIVED course (Teachers) — the Course's own stored state selects the question, exactly as the resource's own Tenant does",
         "idempotency": "natural",
         "idempotency_note": "A read changes no state beyond the append-only audit journal."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/learning/enrollments",
+        "openapi_path": "/enrollments",
+        "purpose": "enroll the verified subject in one owned PUBLISHED Course of its effective tenant; the new Enrollment is created ACTIVE",
+        "authorization_operation": "learning.enrollments.create",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: the Idempotency-Key header is mandatory, an exact replay returns the recorded Enrollment without a second effect, and a changed binding (payload, identity, tenant, operation, target) is refused as IDEMPOTENCY_CONFLICT. The IS-005 resource binding is the Course; the tenant binding is the effective tenant of the chain.",
+        "note": "The body names the Course and nothing else: there is no student_identity_id field to supply, so by construction the command creates the caller's own Enrollment and nobody else's (ADR-0012). The Course must exist here, belong to the same effective tenant and be PUBLISHED; at most one ACTIVE Enrollment exists per student and Course within a tenant."
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/learning/enrollments/{course_id}",
+        "openapi_path": "/enrollments/{course_id}",
+        "purpose": "read the verified subject's own Enrollment in one Course",
+        "authorization_operation": "learning.enrollments.read",
+        "idempotency": "natural",
+        "idempotency_note": "A read changes no state beyond the append-only audit journal.",
+        "note": "The path parameter is the Course, not an enrollment identifier: the record is selected by (effective tenant, verified subject, course), so another student's Enrollment is unreachable through this operation by construction and its existence is never disclosed — never enrolled and not yours are the same enrollment_unknown refusal. No roster, participant list or teacher view is published."
       }
     ],
     "enforcement_model": {
@@ -190,7 +233,9 @@
         "create_assignment",
         "publish_course",
         "archive_course",
-        "course_hierarchy"
+        "course_hierarchy",
+        "create_enrollment",
+        "find_active_enrollment"
       ],
       "own_deny_reasons": [
         "assignment_unknown",
@@ -198,6 +243,7 @@
         "course_unknown",
         "module_unknown",
         "lesson_unknown",
+        "enrollment_unknown",
         "owner_mismatch",
         "authorization_unavailable",
         "invalid_state_transition",
@@ -248,6 +294,18 @@
         "hierarchy_read": "GET /courses/{course_id} serves the nested navigation chain in deterministic order (position, then id); the question asked of IS-003 depends on the Course's own stored state — learning.courses.read for PUBLISHED (Teachers and Students), learning.courses.read_unpublished otherwise (Teachers)",
         "student_reads": "a Student reads published hierarchies of the own effective tenant only; archived and draft content is not available through the published-content read",
         "assignment_extension": "the existing Assignment identity is preserved: lesson_id, title and instructions are added to anchor the hierarchy; the submission flow semantics are unchanged"
+      },
+      "enrollment_states": [
+        "ACTIVE"
+      ],
+      "student_enrollment": {
+        "semantics": "Enrollment is the business fact that one student identity participates in one Course within one Tenant (ADR-0012). It is not progress, completion, grading, a seat reservation or a permission: it records participation and nothing else.",
+        "self_enrollment_only": "the command carries no identity field, so student_identity_id is always the verified subject of the chain; teacher/admin enrollment, invitations, bulk and cohort enrollment do not exist in this slice",
+        "state_rule": "an Enrollment is created only into a Course that exists here, belongs to the same effective tenant and is PUBLISHED; a DRAFT or ARCHIVED Course is refused as invalid_state_transition, and the audit record states course_not_published in details",
+        "duplicate_protection": "within one Tenant at most one ACTIVE Enrollment exists for one student in one Course: a second command with a different Idempotency-Key is refused as invalid_state_transition with duplicate_active_enrollment in the audit details, never a second record; the check and the insertion are one atomic decision inside the store's enrollment critical section",
+        "idempotency": "IS-005 guard; Idempotency-Key mandatory; exact replay returns the recorded Enrollment without a second effect; changed binding is refused as idempotency_conflict. A refused effect records nothing, so the same key may succeed once the domain rule is satisfied.",
+        "read": "the read is limited to the authenticated student's own Enrollment and is addressed by Course: no enrollment identifier is accepted, so another student's record is unreachable and its existence is never disclosed (never enrolled and not yours are the same enrollment_unknown). No roster, participant listing or teacher/admin enrollment view exists.",
+        "course_read_unchanged": "Enrollment is neither a prerequisite nor a barrier for the published Course read: learning.courses.read semantics are unchanged in both directions"
       }
     },
     "refusal_semantics": {
@@ -323,7 +381,7 @@
         "400": "idempotency_key_required",
         "401": "missing_identity, invalid_identity, unknown_identity",
         "403": "tenant_mismatch, tenant_unknown, platform_ownership_mismatch, resource_tenant_unknown, resource_tenant_mismatch, tenant_not_active, tenant_suspended, tenant_deletion_requested, tenant_deleted, permission_not_granted, authority_unavailable, missing_tenant_context, owner_mismatch",
-        "404": "course_unknown, module_unknown, lesson_unknown, assignment_unknown, submission_unknown",
+        "404": "course_unknown, module_unknown, lesson_unknown, assignment_unknown, submission_unknown, enrollment_unknown",
         "409": "invalid_state_transition, already_reviewed, idempotency_conflict",
         "503": "authorization_unavailable",
         "422": "validation_error"
@@ -497,6 +555,11 @@
         "note": "Every submission belongs to exactly one assignment and to the same Tenant; student_identity_id is an opaque reference — no student profile/account data is stored here. reviewed_by / reviewed_at are opaque review facts set by the first successful review and immutable thereafter; no Review/Evaluation/Grade/Feedback/LearningResult entity exists."
       },
       {
+        "name": "enrollments",
+        "scope": "tenant-scoped",
+        "note": "Every enrollment belongs to exactly one Course and to exactly one Tenant, and references one student identity as an opaque reference — no student profile/account data is stored here. Lifecycle is exactly ACTIVE; within one Tenant at most one ACTIVE enrollment exists for one student in one Course, and an enrollment is created only into a PUBLISHED Course of that same Tenant. Enrollment is not part of the authored Course hierarchy: a Course does not contain its enrollments."
+      },
+      {
         "name": "access_audit",
         "scope": "platform-scoped",
         "note": "Append-only journal of every access attempt — served or refused — with request/correlation and actor/tenant context where known."
@@ -504,7 +567,7 @@
     ],
     "notes": [
       "This component owns no identity, no permission grant, no tenant registry and no tenant state: those belong to identity, authorization and tenant_authority and are read through their published contracts.",
-      "The submission model is the business model of Slices 1-3 (submission_id, assignment_id, student_identity_id, attempt, content, status, created_at, updated_at, reviewed_by, reviewed_at) with lifecycle DRAFT → SUBMITTED; no grading, comments, review states, progress or enrollment exist. Review is exactly the fact that a submitted submission was checked, recorded in the two nullable review fields.",
+      "The submission model is the business model of Slices 1-3 (submission_id, assignment_id, student_identity_id, attempt, content, status, created_at, updated_at, reviewed_by, reviewed_at) with lifecycle DRAFT → SUBMITTED; no grading, comments, review states or progress exist. Review is exactly the fact that a submitted submission was checked, recorded in the two nullable review fields. Enrollment (ADR-0012) is a separate owned record, not a field of Submission: the submission model is unchanged by it.",
       "The content hierarchy (Issue #31) is registered, never declared by a caller: the store refuses orphan and cross-tenant children, and publication re-validates the whole hierarchy before the first write (defence in depth)."
     ]
   },
@@ -571,10 +634,12 @@
       "learning.courses.publish",
       "learning.courses.archive",
       "learning.courses.read",
-      "learning.courses.read_unpublished"
+      "learning.courses.read_unpublished",
+      "learning.enrollments.create",
+      "learning.enrollments.read"
     ],
     "authentication_does_not_imply_authorization": true,
-    "note": "ALLOW from IS-003 is not direct data access: the data owner remains the final enforcement boundary (ARCHITECTURE.md §6.2). A decision that cannot be obtained is a denial. The authoring commands each carry their own grant (learning.courses.create, learning.modules.create, learning.lessons.create, learning.assignments.create, learning.courses.publish, learning.courses.archive): a Teacher is the subject that holds them, a Student the subject that holds the published-content read — no RBAC or policy logic exists inside Learning. The hierarchy read asks learning.courses.read for a published Course and learning.courses.read_unpublished otherwise; the Course's own stored state selects the question."
+    "note": "ALLOW from IS-003 is not direct data access: the data owner remains the final enforcement boundary (ARCHITECTURE.md §6.2). A decision that cannot be obtained is a denial. The authoring commands each carry their own grant (learning.courses.create, learning.modules.create, learning.lessons.create, learning.assignments.create, learning.courses.publish, learning.courses.archive): a Teacher is the subject that holds them, a Student the subject that holds the published-content read — no RBAC or policy logic exists inside Learning. The hierarchy read asks learning.courses.read for a published Course and learning.courses.read_unpublished otherwise; the Course's own stored state selects the question. Student Enrollment (ADR-0012) adds exactly two grants, learning.enrollments.create and learning.enrollments.read, decided by the same chain: the subject that holds them is the Student that may self-enroll and read its own Enrollment. Both questions name the Course and its own Tenant from this store, so a cross-tenant Course is refused by the decision itself; no second identity, tenant, authorization or idempotency mechanism is introduced."
   },
   "compatibility_policy": {
     "api": "additive-minor-breaking-major",
@@ -584,7 +649,8 @@
     "enforcement_chain": "reordering or removing a step is a breaking change: the order is part of the published behaviour",
     "resource_model": "adding a field to the submission representation is a minor change; changing the ten published fields is a breaking change",
     "error_envelope": "the approved envelope shape is part of the contract; changing error/code/message/details/request_id/correlation_id is a breaking change",
-    "lifecycle": "submission lifecycle is exactly DRAFT → SUBMITTED; adding grading/review states is a breaking change; review does not add a lifecycle state"
+    "lifecycle": "submission lifecycle is exactly DRAFT → SUBMITTED; adding grading/review states is a breaking change; review does not add a lifecycle state",
+    "enrollment": "Student Enrollment (ADR-0012) is additive: 0.2.0 -> 0.3.0 adds two operations, two schemas, one refusal reason and one dataset without changing any existing operation, reason or representation. The enrollment lifecycle is exactly ACTIVE; adding enrollment lifecycle states, unenrollment, rosters or teacher/admin enrollment would be a new architectural decision, not a minor change."
   },
   "dependencies": [
     {

@@ -41,6 +41,14 @@ from tests.conftest import PLATFORM_ID
 
 TEACHER_A = "token-human-a"
 
+#: Schema-readable command bodies, one per POST collection route: with a body
+#: the published schema can read, a request without a credential must be
+#: refused by the enforcement chain (401) and not by the schema (422).
+_SCHEMA_READABLE_BODIES = {
+    "/api/v1/learning/courses": {"title": "t", "description": "d"},
+    "/api/v1/learning/enrollments": {"course_id": "crs_a1"},
+}
+
 STATE_DUNDERS = {"__closure__", "__func__", "__self__", "__defaults__", "__dict__"}
 
 FORBIDDEN_NAMES = (
@@ -209,7 +217,7 @@ def test_every_published_route_refuses_without_an_allow():
         for method in getattr(route, "methods", set())
         if route.path.startswith("/api/") and method in {"GET", "POST"}
     ]
-    assert len(resource_routes) == 10
+    assert len(resource_routes) == 12
 
     substitutions = {
         "{submission_id}": "sub_a1_1",
@@ -223,10 +231,10 @@ def test_every_published_route_refuses_without_an_allow():
         for placeholder, demo_id in substitutions.items():
             concrete = concrete.replace(placeholder, demo_id)
         kwargs = {}
-        if method == "POST" and path == "/api/v1/learning/courses":
+        if method == "POST" and path in _SCHEMA_READABLE_BODIES:
             # A schema-readable command body: without a credential the refusal
             # must still come from the chain (401), not from the schema (422).
-            kwargs["json"] = {"title": "t", "description": "d"}
+            kwargs["json"] = _SCHEMA_READABLE_BODIES[path]
         response = getattr(client, method.lower())(concrete, **kwargs)
         assert response.status_code in {401, 403, 404, 422, 503}, (method, path)
         body = envelope_of(response)
@@ -274,6 +282,8 @@ def test_published_surface_is_exactly_the_contract_operations():
         ("/api/v1/learning/lessons/{lesson_id}/assignments", "POST"),
         ("/api/v1/learning/courses/{course_id}/publish", "POST"),
         ("/api/v1/learning/courses/{course_id}/archive", "POST"),
+        ("/api/v1/learning/enrollments", "POST"),
+        ("/api/v1/learning/enrollments/{course_id}", "GET"),
     }
 
 
@@ -301,6 +311,8 @@ def test_client_state_is_a_single_opaque_value():
         "create_assignment",
         "publish_course",
         "archive_course",
+        "enroll",
+        "read_enrollment",
     }
 
 

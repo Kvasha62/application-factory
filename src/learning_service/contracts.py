@@ -75,6 +75,15 @@ OPERATION_COURSE_ARCHIVE = "learning.courses.archive"
 OPERATION_COURSE_READ = "learning.courses.read"
 OPERATION_COURSE_READ_UNPUBLISHED = "learning.courses.read_unpublished"
 
+#: The Student Enrollment grant vocabulary (ADR-0012, Enrollment Slice 2).
+#: One command, one grant, one question per access: the subject that holds
+#: ``learning.enrollments.create`` is the Student that may self-enroll — no
+#: role logic exists inside Learning. The command is state-changing and is
+#: therefore guarded by IS-005. The read is the student's own Enrollment and
+#: changes no state beyond the append-only audit journal.
+OPERATION_ENROLLMENT_CREATE = "learning.enrollments.create"
+OPERATION_ENROLLMENT_READ = "learning.enrollments.read"
+
 
 class OwnDenyReason:
     """Reasons of this component's own enforcement boundary (closed set).
@@ -83,6 +92,11 @@ class OwnDenyReason:
     ``submission_unknown`` — no such submission is owned here.
     ``course_unknown`` / ``module_unknown`` / ``lesson_unknown`` — no such
     course, module or lesson is owned here.
+    ``enrollment_unknown`` — the verified subject has no ``ACTIVE``
+    Enrollment of its own in that Course. The read names no enrollment
+    identifier, so this one reason covers both "never enrolled" and "not
+    yours": whose enrollment exists here is never disclosed (ADR-0012 read
+    semantics).
     ``owner_mismatch`` — a record whose single owner is another component
     can never be served through this boundary.
     ``authorization_unavailable`` — the decision dependency did not answer,
@@ -91,7 +105,10 @@ class OwnDenyReason:
     ``SUBMITTED`` submission may be reviewed and review never changes the
     lifecycle state; a child is created only under a ``DRAFT`` parent;
     publication applies only to a structurally valid ``DRAFT`` hierarchy;
-    archive applies only to a ``PUBLISHED`` hierarchy.
+    archive applies only to a ``PUBLISHED`` hierarchy; an Enrollment is
+    created only into a ``PUBLISHED`` Course, and one Student in one Course
+    holds at most one ``ACTIVE`` Enrollment (ADR-0012). The audit record of
+    such a refusal states in ``details`` which domain rule fired.
     ``already_reviewed`` — a domain refusal after an ALLOW: the review fact
     is immutable, so a review command against an already reviewed submission
     (a different command, i.e. a different ``Idempotency-Key``) can never
@@ -110,6 +127,7 @@ class OwnDenyReason:
     COURSE_UNKNOWN = "course_unknown"
     MODULE_UNKNOWN = "module_unknown"
     LESSON_UNKNOWN = "lesson_unknown"
+    ENROLLMENT_UNKNOWN = "enrollment_unknown"
     OWNER_MISMATCH = "owner_mismatch"
     AUTHORIZATION_UNAVAILABLE = "authorization_unavailable"
     INVALID_STATE_TRANSITION = "invalid_state_transition"
@@ -127,6 +145,7 @@ OWN_DENY_REASONS: frozenset[str] = frozenset(
         OwnDenyReason.COURSE_UNKNOWN,
         OwnDenyReason.MODULE_UNKNOWN,
         OwnDenyReason.LESSON_UNKNOWN,
+        OwnDenyReason.ENROLLMENT_UNKNOWN,
         OwnDenyReason.OWNER_MISMATCH,
         OwnDenyReason.AUTHORIZATION_UNAVAILABLE,
         OwnDenyReason.INVALID_STATE_TRANSITION,
@@ -234,6 +253,28 @@ class CourseView:
     modules: tuple[ModuleView, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class EnrollmentView:
+    """The published representation of one student Enrollment (ADR-0012).
+
+    Exactly the six business fields — ``enrollment_id``, ``course_id``,
+    ``student_identity_id``, ``status``, ``created_at``, ``updated_at`` —
+    and nothing else. No tenant or owner data is exposed: the view is the
+    value an allowed command returns, immutable and granting nothing by
+    existing. ``student_identity_id`` is the opaque reference to the
+    *verified subject* the enforcement chain established — never a value a
+    caller supplied — and ``status`` is exactly ``ACTIVE``, the only
+    enrollment state of this slice.
+    """
+
+    enrollment_id: str
+    course_id: str
+    student_identity_id: str
+    status: str
+    created_at: str
+    updated_at: str
+
+
 __all__ = [
     "OPERATION_ASSIGNMENT_CREATE",
     "OPERATION_COURSE_ARCHIVE",
@@ -241,6 +282,8 @@ __all__ = [
     "OPERATION_COURSE_PUBLISH",
     "OPERATION_COURSE_READ",
     "OPERATION_COURSE_READ_UNPUBLISHED",
+    "OPERATION_ENROLLMENT_CREATE",
+    "OPERATION_ENROLLMENT_READ",
     "OPERATION_LESSON_CREATE",
     "OPERATION_LIST",
     "OPERATION_MODULE_CREATE",
@@ -260,6 +303,7 @@ __all__ = [
     "ConfigurationError",
     "ContractViolation",
     "CourseView",
+    "EnrollmentView",
     "LessonView",
     "ModuleView",
     "OwnDenyReason",

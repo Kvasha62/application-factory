@@ -44,6 +44,8 @@ __all__ = [
     "AssignmentOut",
     "CourseCreateIn",
     "CourseOut",
+    "EnrollmentCreateIn",
+    "EnrollmentOut",
     "ErrorBody",
     "ErrorEnvelope",
     "LessonCreateIn",
@@ -169,6 +171,38 @@ class AssignmentCreateIn(BaseModel):
     instructions: str
 
 
+class EnrollmentOut(BaseModel):
+    """The published enrollment representation: the six fields, nothing else.
+
+    No tenant or owner data is exposed. ``student_identity_id`` is the opaque
+    reference to the *verified subject* the enforcement chain established —
+    it is never a value the caller supplied, because no request of this
+    contract carries one.
+    """
+
+    enrollment_id: str
+    course_id: str
+    student_identity_id: str
+    status: str
+    created_at: str
+    updated_at: str
+
+
+class EnrollmentCreateIn(BaseModel):
+    """The enroll command payload — the Course to enroll in, and nothing else.
+
+    ``extra="forbid"`` is the point: a body that tries to name a
+    ``student_identity_id`` (or any other field) is refused by the published
+    schema before any handler runs, so the command cannot be used to enroll
+    another identity. The student of the Enrollment is always the verified
+    subject of the request.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    course_id: str
+
+
 class ErrorBody(BaseModel):
     """The ``error`` object of the approved SCS-001 envelope."""
 
@@ -246,6 +280,7 @@ _NOT_FOUND_REASONS = frozenset(
         "course_unknown",
         "module_unknown",
         "lesson_unknown",
+        "enrollment_unknown",
     }
 )
 
@@ -732,5 +767,85 @@ def create_app(deployment: LearningDeployment) -> FastAPI:
         except AccessRefused as exc:
             return _refused(exc)
         return _course_out(view)
+
+    # ------------------------------------------------- student enrollment API
+    def _enrollment_out(view: Any) -> EnrollmentOut:
+        return EnrollmentOut(
+            enrollment_id=view.enrollment_id,
+            course_id=view.course_id,
+            student_identity_id=view.student_identity_id,
+            status=view.status,
+            created_at=view.created_at,
+            updated_at=view.updated_at,
+        )
+
+    @app.post(
+        "/api/v1/learning/enrollments",
+        response_model=EnrollmentOut,
+        status_code=201,
+    )
+    def create_enrollment(
+        payload: EnrollmentCreateIn,
+        authorization: str | None = Header(default=None),
+        x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
+    ) -> Any:
+        """Enroll the verified subject in one owned Course — the command
+        ``learning.enrollments.create``.
+
+        ``Idempotency-Key`` is mandatory: the command is a state-changing
+        command delivered through IS-005, so an exact replay returns the
+        recorded result without a second Enrollment and a changed binding is
+        refused. The body names the Course and nothing else — there is no
+        ``student_identity_id`` field to supply, so by construction this
+        operation creates the caller's own Enrollment and nobody else's. The
+        effective tenant comes from the verified identity through the
+        published chain; ``X-Tenant-Id`` is a cross-check only (LAW-16a)."""
+        try:
+            view, _, _ = engine.enroll(
+                _token(authorization),
+                payload.course_id,
+                claimed_tenant_id=x_tenant_id,
+                idempotency_key=idempotency_key,
+                request_id=x_request_id,
+                correlation_id=x_correlation_id,
+            )
+        except AccessRefused as exc:
+            return _refused(exc)
+        return _enrollment_out(view)
+
+    @app.get(
+        "/api/v1/learning/enrollments/{course_id}",
+        response_model=EnrollmentOut,
+    )
+    def read_enrollment(
+        course_id: str,
+        authorization: str | None = Header(default=None),
+        x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+        x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+        x_correlation_id: str | None = Header(default=None, alias="X-Correlation-Id"),
+    ) -> Any:
+        """Serve the verified subject's own Enrollment in one Course — the read
+        operation ``learning.enrollments.read``.
+
+        The path parameter is the **Course**: this operation addresses the
+        caller's Enrollment by the Course it refers to, so no enrollment
+        identifier is accepted and another student's record cannot be named —
+        not even to learn that it exists ("never enrolled" and "not yours"
+        answer the same ``enrollment_unknown``). Nothing here touches the
+        published Course read, which serves the hierarchy."""
+        try:
+            view, _, _ = engine.read_enrollment(
+                _token(authorization),
+                course_id,
+                claimed_tenant_id=x_tenant_id,
+                request_id=x_request_id,
+                correlation_id=x_correlation_id,
+            )
+        except AccessRefused as exc:
+            return _refused(exc)
+        return _enrollment_out(view)
 
     return app

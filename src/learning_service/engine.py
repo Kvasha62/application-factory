@@ -60,6 +60,8 @@ from learning_service.contracts import (
     OPERATION_COURSE_PUBLISH,
     OPERATION_COURSE_READ,
     OPERATION_COURSE_READ_UNPUBLISHED,
+    OPERATION_ENROLLMENT_CREATE,
+    OPERATION_ENROLLMENT_READ,
     OPERATION_LESSON_CREATE,
     OPERATION_LIST,
     OPERATION_MODULE_CREATE,
@@ -67,6 +69,7 @@ from learning_service.contracts import (
     OPERATION_REVIEW,
     AssignmentView,
     CourseView,
+    EnrollmentView,
     LessonView,
     ModuleView,
     OwnDenyReason,
@@ -78,6 +81,7 @@ from learning_service.models import (
     ObservabilityContext,
     OwnedAssignment,
     OwnedCourse,
+    OwnedEnrollment,
     OwnedLesson,
     OwnedModule,
     OwnedSubmission,
@@ -115,6 +119,7 @@ _NOT_FOUND_REASONS = frozenset(
         OwnDenyReason.COURSE_UNKNOWN,
         OwnDenyReason.MODULE_UNKNOWN,
         OwnDenyReason.LESSON_UNKNOWN,
+        OwnDenyReason.ENROLLMENT_UNKNOWN,
     }
 )
 
@@ -283,6 +288,18 @@ def _view_of(submission: OwnedSubmission) -> SubmissionView:
         updated_at=submission.updated_at,
         reviewed_by=submission.reviewed_by,
         reviewed_at=submission.reviewed_at,
+    )
+
+
+def _enrollment_view_of(enrollment: OwnedEnrollment) -> EnrollmentView:
+    """Build the published enrollment value: the business fields, nothing else."""
+    return EnrollmentView(
+        enrollment_id=enrollment.enrollment_id,
+        course_id=enrollment.course_id,
+        student_identity_id=enrollment.student_identity_id,
+        status=enrollment.status,
+        created_at=enrollment.created_at,
+        updated_at=enrollment.updated_at,
     )
 
 
@@ -1641,6 +1658,388 @@ class LearningEngine:
             claimed_tenant_id=claimed_tenant_id,
         )
         return (_course_view_of(served, modules, lessons, assignments), obs, event)
+
+    # ---------------------------------------------------- student enrollment
+    def enroll(
+        self,
+        subject_credential: str | None,
+        course_id: str,
+        *,
+        claimed_tenant_id: str | None = None,
+        idempotency_key: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> tuple[EnrollmentView, ObservabilityContext, AccessAuditEvent]:
+        """Enroll the verified subject in one owned Course — the command
+        ``learning.enrollments.create`` (ADR-0012).
+
+        The enforced chain is the published one, and every step can only deny:
+        the Course must exist here and be owned by this component; IS-003
+        decides the command against the Course's own Tenant, which is what
+        makes a cross-tenant Course a refusal rather than an enrollment; the
+        IS-005 guard then executes the creation effect exactly once, and the
+        two business rules of the slice — only a ``PUBLISHED`` Course accepts
+        an enrollment, and one Student in one Course holds at most one
+        ``ACTIVE`` enrollment — live inside that effect, so an exact replay
+        returns the recorded result even if the Course has meanwhile changed.
+
+        The student of the Enrollment is the *verified subject* the decision
+        states, and the command carries no identity field: by construction
+        this operation can only ever create the caller's own Enrollment.
+        No second identity, tenant, authorization, idempotency or audit
+        mechanism is involved.
+        """
+        action = OPERATION_ENROLLMENT_CREATE
+        obs = self.observability(
+            tenant_id=None,
+            subject_id=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+
+        # --- step 1: the ownership boundary of this component ----------------
+        course = self.store.ownership_of_course(course_id)
+        if course is None:
+            raise self._refuse(
+                OwnDenyReason.COURSE_UNKNOWN,
+                action=action,
+                obs=obs,
+                subject_id=None,
+                tenant_id=None,
+                resource_id=course_id,
+                resource_tenant_id=None,
+                assignment_id=None,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+            )
+        if course.owner_component != COMPONENT_ID:
+            raise self._refuse(
+                OwnDenyReason.OWNER_MISMATCH,
+                action=action,
+                obs=obs,
+                subject_id=None,
+                tenant_id=None,
+                resource_id=course_id,
+                resource_tenant_id=course.tenant_id,
+                assignment_id=None,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+                details={"stated_owner": course.owner_component},
+            )
+
+        # --- step 2: the decision of IS-003 through the port ------------------
+        answer_obs, subject_id, tenant_id = self._decide(
+            subject_credential,
+            operation=action,
+            resource_type="course",
+            resource_id=course_id,
+            resource_tenant_id=course.tenant_id,
+            claimed_tenant_id=claimed_tenant_id,
+            obs=obs,
+            action=action,
+            assignment_id=None,
+            submission_id=None,
+        )
+        obs = answer_obs
+
+        # The student identity of the Enrollment is the verified subject of
+        # the decision and nothing else — the command accepts no identity
+        # claim, so a caller cannot enroll another identity. A decision that
+        # states no subject cannot say whose Enrollment this would be, and a
+        # decision whose Tenant is not the Course's own Tenant is not an
+        # authoritative answer for this resource: both fail closed.
+        if not subject_id:
+            raise self._refuse(
+                OwnDenyReason.AUTHORIZATION_UNAVAILABLE,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                tenant_id=tenant_id,
+                resource_id=course_id,
+                resource_tenant_id=course.tenant_id,
+                assignment_id=None,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+                details={"refused": "subject_identity_unavailable"},
+            )
+        if tenant_id != course.tenant_id:
+            raise self._refuse(
+                OwnDenyReason.AUTHORIZATION_UNAVAILABLE,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                tenant_id=tenant_id,
+                resource_id=course_id,
+                resource_tenant_id=course.tenant_id,
+                assignment_id=None,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+                details={"refused": "tenant_context_disagreement"},
+            )
+
+        # --- step 3: the owned-data operation, and only here ------------------
+        if not idempotency_key:
+            raise self._refuse(
+                OwnDenyReason.IDEMPOTENCY_KEY_REQUIRED,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                tenant_id=tenant_id,
+                resource_id=course_id,
+                resource_tenant_id=course.tenant_id,
+                assignment_id=None,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+            )
+
+        fingerprint = _payload_fingerprint(action, {"course_id": course_id})
+        try:
+            created = self.idempotency.execute(
+                idempotency_key,
+                identity=subject_id,
+                tenant_id=tenant_id,
+                operation=action,
+                resource=course_id,
+                fingerprint=fingerprint,
+                request_id=obs.request_id,
+                correlation_id=obs.correlation_id,
+                effect=lambda: self.store.create_enrollment(
+                    tenant_id=tenant_id,
+                    course_id=course_id,
+                    student_identity_id=subject_id,
+                    now=self.clock(),
+                ),
+            )
+        except IdempotencyConflict:
+            raise self._refuse(
+                OwnDenyReason.IDEMPOTENCY_CONFLICT,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                tenant_id=tenant_id,
+                resource_id=course_id,
+                resource_tenant_id=course.tenant_id,
+                assignment_id=None,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+                details={"idempotency_key": idempotency_key},
+            )
+        except KeyError:
+            raise self._refuse(
+                OwnDenyReason.COURSE_UNKNOWN,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                tenant_id=tenant_id,
+                resource_id=course_id,
+                resource_tenant_id=course.tenant_id,
+                assignment_id=None,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+                details={"refused": "vanished_after_decision"},
+            )
+        except DomainRefusal as exc:
+            # The publication rule and the duplicate invariant refuse with the
+            # same published reason; the audit record states which of the two
+            # fired, so a duplicate protection refusal stays distinguishable
+            # and observable (ADR-0012) without widening the vocabulary.
+            duplicate = (
+                self.store.find_active_enrollment(
+                    tenant_id=tenant_id,
+                    student_identity_id=subject_id,
+                    course_id=course_id,
+                )
+                is not None
+            )
+            current = self.store.ownership_of_course(course_id)
+            raise self._refuse(
+                exc.reason,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                tenant_id=tenant_id,
+                resource_id=course_id,
+                resource_tenant_id=course.tenant_id,
+                assignment_id=None,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+                details={
+                    "kind": "domain_refusal",
+                    "domain_rule": (
+                        "duplicate_active_enrollment"
+                        if duplicate
+                        else "course_not_published"
+                    ),
+                    "course_status": None if current is None else current.status,
+                },
+            )
+
+        event = self.audit(
+            action=action,
+            decision=ALLOW,
+            reason=PERMITTED,
+            obs=obs,
+            subject_id=subject_id,
+            tenant_id=tenant_id,
+            resource_id=created.enrollment_id,
+            resource_tenant_id=created.tenant_id,
+            assignment_id=None,
+            submission_id=None,
+            claimed_tenant_id=claimed_tenant_id,
+            details={"course_id": created.course_id},
+        )
+        return (_enrollment_view_of(created), obs, event)
+
+    def read_enrollment(
+        self,
+        subject_credential: str | None,
+        course_id: str,
+        *,
+        claimed_tenant_id: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> tuple[EnrollmentView, ObservabilityContext, AccessAuditEvent]:
+        """Serve the verified subject's own Enrollment in one Course — the read
+        operation ``learning.enrollments.read`` (ADR-0012).
+
+        The same fixed chain, and the same ownership property the create
+        command has, only stronger: the operation accepts a Course and no
+        enrollment identifier at all, so the record it can serve is selected
+        by exactly the triple that defines it — the effective Tenant of the
+        chain, the *verified subject* of the decision, and the Course. Another
+        student's Enrollment is therefore unreachable through this operation
+        by construction, not by a comparison made afterwards, and its
+        existence is never disclosed: "never enrolled" and "not yours" are the
+        same refusal.
+
+        The Course must exist here and be owned by this component, and IS-003
+        decides the read against the Course's own Tenant, which is what makes
+        a cross-tenant read a refusal. Nothing about the published Course read
+        (``learning.courses.read``) is touched: this operation reads the
+        Enrollment, never the hierarchy.
+        """
+        action = OPERATION_ENROLLMENT_READ
+        obs = self.observability(
+            tenant_id=None,
+            subject_id=None,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+
+        # --- step 1: the ownership boundary of this component ----------------
+        course = self.store.ownership_of_course(course_id)
+        if course is None:
+            raise self._refuse(
+                OwnDenyReason.COURSE_UNKNOWN,
+                action=action,
+                obs=obs,
+                subject_id=None,
+                tenant_id=None,
+                resource_id=course_id,
+                resource_tenant_id=None,
+                assignment_id=None,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+            )
+        if course.owner_component != COMPONENT_ID:
+            raise self._refuse(
+                OwnDenyReason.OWNER_MISMATCH,
+                action=action,
+                obs=obs,
+                subject_id=None,
+                tenant_id=None,
+                resource_id=course_id,
+                resource_tenant_id=course.tenant_id,
+                assignment_id=None,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+                details={"stated_owner": course.owner_component},
+            )
+
+        # --- step 2: the decision of IS-003 through the port ------------------
+        answer_obs, subject_id, tenant_id = self._decide(
+            subject_credential,
+            operation=action,
+            resource_type="course",
+            resource_id=course_id,
+            resource_tenant_id=course.tenant_id,
+            claimed_tenant_id=claimed_tenant_id,
+            obs=obs,
+            action=action,
+            assignment_id=None,
+            submission_id=None,
+        )
+        obs = answer_obs
+
+        # Whose Enrollment this would be is the verified subject of the
+        # decision and nothing else. A decision stating no subject cannot
+        # select a record, and a decision whose Tenant is not the Course's own
+        # Tenant is not authoritative for this resource: both fail closed.
+        if not subject_id:
+            raise self._refuse(
+                OwnDenyReason.AUTHORIZATION_UNAVAILABLE,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                tenant_id=tenant_id,
+                resource_id=course_id,
+                resource_tenant_id=course.tenant_id,
+                assignment_id=None,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+                details={"refused": "subject_identity_unavailable"},
+            )
+        if tenant_id != course.tenant_id:
+            raise self._refuse(
+                OwnDenyReason.AUTHORIZATION_UNAVAILABLE,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                tenant_id=tenant_id,
+                resource_id=course_id,
+                resource_tenant_id=course.tenant_id,
+                assignment_id=None,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+                details={"refused": "tenant_context_disagreement"},
+            )
+
+        # --- step 3: the owned-data operation, and only here ------------------
+        enrollment = self.store.find_active_enrollment(
+            tenant_id=tenant_id,
+            student_identity_id=subject_id,
+            course_id=course_id,
+        )
+        if enrollment is None:
+            raise self._refuse(
+                OwnDenyReason.ENROLLMENT_UNKNOWN,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                tenant_id=tenant_id,
+                resource_id=course_id,
+                resource_tenant_id=course.tenant_id,
+                assignment_id=None,
+                submission_id=None,
+                claimed_tenant_id=claimed_tenant_id,
+                details={"refused": "no_enrollment_of_this_subject"},
+            )
+
+        event = self.audit(
+            action=action,
+            decision=ALLOW,
+            reason=PERMITTED,
+            obs=obs,
+            subject_id=subject_id,
+            tenant_id=tenant_id,
+            resource_id=enrollment.enrollment_id,
+            resource_tenant_id=enrollment.tenant_id,
+            assignment_id=None,
+            submission_id=None,
+            claimed_tenant_id=claimed_tenant_id,
+            details={"course_id": enrollment.course_id},
+        )
+        return (_enrollment_view_of(enrollment), obs, event)
 
     def refuse_unreadable_request(
         self,
