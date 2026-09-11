@@ -411,7 +411,9 @@
         "create_lesson",
         "create_assignment",
         "publish_course",
-        "archive_course"
+        "archive_course",
+        "enroll",
+        "read_enrollment"
       ],
       "returns": [
         "learning_service.contracts.SubmissionView",
@@ -419,7 +421,8 @@
         "learning_service.contracts.CourseView",
         "learning_service.contracts.ModuleView",
         "learning_service.contracts.LessonView",
-        "learning_service.contracts.AssignmentView"
+        "learning_service.contracts.AssignmentView",
+        "learning_service.contracts.EnrollmentView"
       ],
       "errors": [
         "learning_service.errors.AccessRefused — the access did not happen; the reason is one of the published refusal reasons (401/403/404/503), carried in error.details.reason, with the request_id/correlation_id of the refusal",
