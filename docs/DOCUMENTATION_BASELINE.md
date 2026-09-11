@@ -1,12 +1,12 @@
 # DOCUMENTATION_BASELINE.md
 
 **Статус:** `CLEAN`
-**Дата:** 2026-09-10
+**Дата:** 2026-09-11
 **Ветка создания:** `chore/phase-0-repository-cleanup` (ветка впоследствии удалена)
 **Исторический commit:** `19c8a5b1efe31d01b8b7044e197b11c44f7fa2f4`
 **Актуализация:** 2026-09-08 — Issue #6 (DOC-002): ратифицирован и включён в контур `docs/OPERATING_MODEL.md` как канонический операционный источник
 **Актуализация:** 2026-09-10 — состояние приведено в соответствие с фактическим репозиторием (реализация компонентов, Component Contracts, contract-test suite, Quality Gate, CI). История перехода к реализованному состоянию сохраняется, в том числе зафиксированное в ADR-0011 (раздел Ratification) отклонение последовательности «ратифицировать → реализовать» для среза 4 SCS-001
-**Актуализация:** 2026-09-10 — CI state уточнён по фактическому GitHub Actions run: Quality Gate workflow активен, а `main` (`42b4cd2a2e4894395f4fbfc5d57af4e086bcf4d9`) успешно прошёл Quality Gate. Branch protection/rulesets этим документом не подтверждаются.
+**Актуализация:** 2026-09-11 — Issue #49 (Foundation Health Review): фактические показатели приведены к текущему `main` (`de13ab39c65ffe83e11c0f15b0f90ccacdeb5d2a`), который успешно прошёл Quality Gate (GitHub Actions run `34582747555`, 2026-09-11); количество тестов уточнено по фактическому прогону suite; отражено появление ADR-0012 и состояние SCS-001 после Student Enrollment. Проверены как актуальные: `docs/ARCHITECTURE.md` 1.2.0, `docs/OPERATING_MODEL.md` 1.0.0, `docs/GIT_OPERATING_PROTOCOL.md` 1.1.4, ADR-0010/0011/0012. Архитектура, ADR, Component Contracts и код не изменялись. Branch protection/rulesets этим документом не подтверждаются.
 **Основание:** `docs/ARCHITECTURE.md` 1.2.0 + `docs/adr/ADR-0010-architecture-gap-review.md`
 
 ## 1. Назначение
@@ -28,15 +28,15 @@
 | Область | Источник | Статус |
 |---|---|---|
 | Архитектурный закон | `docs/ARCHITECTURE.md` | RATIFIED 1.2.0 |
-| Архитектурные решения | `docs/adr/` | ACTIVE (ADR-0010 RATIFIED 2026-09-08; ADR-0011 RATIFIED 2026-09-10) |
+| Архитектурные решения | `docs/adr/` | ACTIVE (ADR-0010 RATIFIED 2026-09-08; ADR-0011 RATIFIED 2026-09-10; ADR-0012 RATIFIED 2026-09-10) |
 | Текущее ADR конституционного изменения | `docs/adr/ADR-0010-architecture-gap-review.md` | RATIFIED |
 | Документационный baseline | `docs/DOCUMENTATION_BASELINE.md` | CLEAN |
 | Операционная модель | `docs/OPERATING_MODEL.md` | RATIFIED 1.0.0 |
 | Проектная ориентация | `README.md` | ALIGNED |
 | Реализация компонентов | код соответствующего компонента (`src/`) | существует: 7 компонентов, Level 0 modular monolith, standalone-режим |
 | Component Contracts | `components/*/contract/` (component_contract.json + openapi.yaml) | существует: 7/7, machine-readable |
-| Contract-test suite | `tests/` (contract/boundary/conformance наборы) | существует: 730 тестов |
-| Quality Gate | `scripts/quality-gate.ps1` (локальный) + `.github/workflows/quality-gate.yml` (CI) | GREEN: CI workflow активен; `main` `42b4cd2...` успешно прошёл Quality Gate |
+| Contract-test suite | `tests/` (contract/boundary/conformance наборы) | существует: 811 тестов |
+| Quality Gate | `scripts/quality-gate.ps1` (локальный) + `.github/workflows/quality-gate.yml` (CI) | GREEN: CI workflow активен; `main` `de13ab3...` успешно прошёл Quality Gate (run `34582747555`) |
 | Маршрутизация ответственности | `.github/CODEOWNERS` | существует |
 
 `docs/OPERATING_MODEL.md` — канонический операционный источник: он определяет, как команда (ChatGPT / Arena) работает через GitHub, и не создаёт архитектурных законов (Level A, §34.1 ARCHITECTURE.md; ADR не требуется). Архитектурным источником истины остаётся только `docs/ARCHITECTURE.md`, поэтому Operating Model не формирует второй архитектурный контур: при конфликте приоритет у ARCHITECTURE.md (см. §13 OPERATING_MODEL.md).
@@ -94,10 +94,10 @@ README синхронизирован с архитектурой 1.2.0 и бо�
 
 **Существует (факт на момент этой актуализации):**
 
-- 7 реализованных компонентов Level 0 (in-memory, standalone): `authorization`, `identity`, `tenant_authority`, `records`, `learning` (SCS-001, Slices 1–4), `saga`, `idempotency`;
+- 7 реализованных компонентов Level 0 (in-memory, standalone): `authorization`, `identity`, `tenant_authority`, `records`, `learning` (SCS-001: Submission read, Teacher Submission Discovery, Teacher Review и Learning Content Authoring — граница авторинга ратифицирована ADR-0011; Student Enrollment определён ADR-0012; компонент версии 0.3.0), `saga`, `idempotency`;
 - Component Contracts (7/7) с OpenAPI-документами;
-- contract-test suite и поведенческие тесты (730 тестов: границы, tenant isolation, fail closed, idempotency, saga, audit, observability);
-- Quality Gate: локальный скрипт и активный CI workflow `.github/workflows/quality-gate.yml`; текущий `main` `42b4cd2...` успешно прошёл Quality Gate.
+- contract-test suite и поведенческие тесты (811 тестов: границы, tenant isolation, fail closed, idempotency, saga, audit, observability, enrollment);
+- Quality Gate: локальный скрипт и активный CI workflow `.github/workflows/quality-gate.yml`; текущий `main` `de13ab3...` успешно прошёл Quality Gate (run `34582747555`).
 
 **По-прежнему не существует** (фабричные механизмы не введены, что допустимо в standalone/foundation-режиме §4.1):
 
