@@ -1,10 +1,14 @@
-"""SCS-002 Commerce Stage 2 — skeleton construction and the live slice.
+"""SCS-002 Commerce Stage 3 — skeleton construction and the product slice.
 
 Create and read one owned Product against the fully composed Platform
 Instance (IS-001 + IS-002 + IS-003 + Commerce): construction, success,
 tenant isolation, the approved error envelope, idempotent replay and
 conflict, and audit. This module also defines the shared composition
-helper used by the contract and boundary tests.
+helper used by the catalog, cart, checkout, order, contract and boundary
+tests: subjects A and B hold every Stage 3 grant in their own Tenants;
+subject C holds the product-read grant plus the cart/checkout/pay
+mutation grants, so both the read-grant denial and the same-tenant buyer
+isolation are exercisable.
 """
 
 from __future__ import annotations
@@ -20,6 +24,14 @@ from authorization_service.store import CONSUMER_PERMISSIONS
 from commerce_service import COMPONENT_ID, COMPONENT_VERSION, OWNER_COMPONENT
 from commerce_service.adapters import authorization_port, tenant_context_port
 from commerce_service.contracts import (
+    OPERATION_CART_CREATE,
+    OPERATION_CART_READ,
+    OPERATION_CART_UPDATE,
+    OPERATION_CHECKOUT_CREATE,
+    OPERATION_OFFER_CREATE,
+    OPERATION_ORDER_PAY,
+    OPERATION_ORDER_READ,
+    OPERATION_PRICE_CREATE,
     OPERATION_PRODUCT_CREATE,
     OPERATION_PRODUCT_READ,
     PUBLISHED_DENY_REASONS,
@@ -53,8 +65,10 @@ def commerce_harness(store: CommerceStore | None = None) -> CommerceHarness:
     """Compose IS-001/IS-002/IS-003 plus Commerce for one test.
 
     Grants are the composition root's job (IS-003 publishes no grant API).
-    Subjects A and B hold both product grants in their own Tenants; subject
-    C holds the read grant only, so the create denial is exercisable.
+    Subjects A and B hold every Stage 3 grant in their own Tenants; subject
+    C holds the product-read grant plus the cart/checkout/pay mutation
+    grants, so both the read-grant denial and the same-tenant buyer
+    isolation are exercisable.
     """
     instance = monolith()
     # Commerce's own service identity for asking IS-003.
@@ -67,6 +81,27 @@ def commerce_harness(store: CommerceStore | None = None) -> CommerceHarness:
     instance.authorization.store.grant("ten_a", "idn_human_a", OPERATION_PRODUCT_READ)
     instance.authorization.store.grant("ten_b", "idn_human_b", OPERATION_PRODUCT_READ)
     instance.authorization.store.grant("ten_a", "idn_human_c", OPERATION_PRODUCT_READ)
+    for operation in (
+        OPERATION_OFFER_CREATE,
+        OPERATION_PRICE_CREATE,
+        OPERATION_CART_CREATE,
+        OPERATION_CART_READ,
+        OPERATION_CART_UPDATE,
+        OPERATION_CHECKOUT_CREATE,
+        OPERATION_ORDER_READ,
+        OPERATION_ORDER_PAY,
+    ):
+        instance.authorization.store.grant("ten_a", "idn_human_a", operation)
+        instance.authorization.store.grant("ten_b", "idn_human_b", operation)
+    # Subject C is a second buyer of Tenant A with the mutation grants but
+    # no cart/order read grants: same-tenant buyer isolation is exercisable
+    # through buyer_mismatch while the read-grant denial stays provable.
+    for operation in (
+        OPERATION_CART_UPDATE,
+        OPERATION_CHECKOUT_CREATE,
+        OPERATION_ORDER_PAY,
+    ):
+        instance.authorization.store.grant("ten_a", "idn_human_c", operation)
     commerce = build_commerce(
         {"platform_id": instance.authority.current_platform_id, "environment": "test"},
         authorization=authorization_port(
@@ -102,7 +137,7 @@ def create_payload(name="Skeleton product") -> dict:
 def test_component_identity_is_stable():
     assert COMPONENT_ID == "commerce"
     assert OWNER_COMPONENT == "commerce"
-    assert COMPONENT_VERSION == "0.1.0"
+    assert COMPONENT_VERSION == "0.2.0"
 
 
 def test_health_and_readiness_answer():
@@ -112,7 +147,7 @@ def test_health_and_readiness_answer():
     assert health.json() == {
         "status": "ok",
         "component_id": "commerce",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "platform_id": PLATFORM_ID,
     }
     ready = http.get("/ready")

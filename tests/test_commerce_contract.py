@@ -6,8 +6,10 @@ the `servers: /api/v1/commerce` prefix plus relative OpenAPI paths),
 declared reason codes against the reasons the engine produces, the
 declared enforcement chain against the engine's chain, the approved error
 envelope against real refusals, declared configuration against the loader,
-and the declared refusal semantics against real requests. Stage 2
-publishes exactly two operations: create and read one owned Product.
+and the declared refusal semantics against real requests. Stage 3
+publishes twelve operations: create and read one owned Product, define
+one Offer, set one Price, open/read/mutate one owned Cart, checkout,
+read one owned Order and record its payment.
 """
 
 from __future__ import annotations
@@ -144,6 +146,14 @@ def test_contract_declares_the_required_shapes():
     assert authz["operations_guarded"] == [
         "commerce.products.create",
         "commerce.products.read",
+        "commerce.offers.create",
+        "commerce.prices.create",
+        "commerce.carts.create",
+        "commerce.carts.read",
+        "commerce.carts.update",
+        "commerce.checkout.create",
+        "commerce.orders.read",
+        "commerce.orders.pay",
     ]
 
     ownership = data["data_ownership"]
@@ -200,7 +210,25 @@ def test_openapi_uses_servers_and_relative_paths():
     paths_section = text.split("paths:", 1)[1]
     assert "/products:" in paths_section
     assert "/products/{product_id}:" in paths_section
-    assert "/api/v1/commerce/products" not in paths_section
+    assert "/offers:" in paths_section
+    assert "/prices:" in paths_section
+    assert "/carts:" in paths_section
+    assert "/carts/{cart_id}:" in paths_section
+    assert "/carts/{cart_id}/items:" in paths_section
+    assert "/carts/{cart_id}/items/{offer_id}/quantity:" in paths_section
+    assert "/carts/{cart_id}/items/{offer_id}/remove:" in paths_section
+    assert "/checkout:" in paths_section
+    assert "/orders/{order_id}:" in paths_section
+    assert "/orders/{order_id}/pay:" in paths_section
+    for absolute in (
+        "/api/v1/commerce/products",
+        "/api/v1/commerce/offers",
+        "/api/v1/commerce/prices",
+        "/api/v1/commerce/carts",
+        "/api/v1/commerce/checkout",
+        "/api/v1/commerce/orders",
+    ):
+        assert absolute not in paths_section, absolute
 
 
 def test_published_api_matches_the_implementation_in_both_directions():
@@ -224,6 +252,16 @@ def test_published_api_matches_the_implementation_in_both_directions():
     assert declared == {
         ("/api/v1/commerce/products", "post"),
         ("/api/v1/commerce/products/{product_id}", "get"),
+        ("/api/v1/commerce/offers", "post"),
+        ("/api/v1/commerce/prices", "post"),
+        ("/api/v1/commerce/carts", "post"),
+        ("/api/v1/commerce/carts/{cart_id}", "get"),
+        ("/api/v1/commerce/carts/{cart_id}/items", "post"),
+        ("/api/v1/commerce/carts/{cart_id}/items/{offer_id}/quantity", "post"),
+        ("/api/v1/commerce/carts/{cart_id}/items/{offer_id}/remove", "post"),
+        ("/api/v1/commerce/checkout", "post"),
+        ("/api/v1/commerce/orders/{order_id}", "get"),
+        ("/api/v1/commerce/orders/{order_id}/pay", "post"),
         ("/health", "get"),
         ("/ready", "get"),
     }
@@ -233,11 +271,21 @@ def test_published_api_matches_the_implementation_in_both_directions():
         for operation in data["api"]["operations"]
     }
     assert contract_operations <= declared
-    # Exactly the two product operations of Stage 2; health/readiness live
-    # in the OpenAPI document and the app, not in the operations list.
+    # Exactly the twelve business operations of Stage 3; health/readiness
+    # live in the OpenAPI document and the app, not in the operations list.
     assert contract_operations == {
         ("/api/v1/commerce/products", "post"),
         ("/api/v1/commerce/products/{product_id}", "get"),
+        ("/api/v1/commerce/offers", "post"),
+        ("/api/v1/commerce/prices", "post"),
+        ("/api/v1/commerce/carts", "post"),
+        ("/api/v1/commerce/carts/{cart_id}", "get"),
+        ("/api/v1/commerce/carts/{cart_id}/items", "post"),
+        ("/api/v1/commerce/carts/{cart_id}/items/{offer_id}/quantity", "post"),
+        ("/api/v1/commerce/carts/{cart_id}/items/{offer_id}/remove", "post"),
+        ("/api/v1/commerce/checkout", "post"),
+        ("/api/v1/commerce/orders/{order_id}", "get"),
+        ("/api/v1/commerce/orders/{order_id}/pay", "post"),
     }
 
 
@@ -250,6 +298,16 @@ def test_declared_enforcement_chain_and_model_match_the_engine():
     assert model["owned_data_operations"] == [
         "create_product",
         "serve_product",
+        "create_offer",
+        "create_price",
+        "create_cart",
+        "add_to_cart",
+        "set_cart_line_quantity",
+        "remove_cart_line",
+        "cart_contents",
+        "checkout_cart",
+        "order_contents",
+        "set_payment_state",
     ]
     assert set(model["own_deny_reasons"]) == OWN_DENY_REASONS
     assert set(model["product_states"]) == set(PRODUCT_STATES)
@@ -274,6 +332,14 @@ def test_declared_refusal_vocabulary_matches_the_published_reasons():
     assert "permission_not_granted" in declared
     assert "resource_tenant_mismatch" in declared
     assert "product_unknown" in declared
+    assert "offer_unknown" in declared
+    assert "price_unknown" in declared
+    assert "cart_unknown" in declared
+    assert "order_unknown" in declared
+    assert "cart_line_unknown" in declared
+    assert "buyer_mismatch" in declared
+    assert "cart_empty" in declared
+    assert "invalid_state_transition" in declared
 
 
 # ------------------------------------------------------- approved error envelope
@@ -385,35 +451,70 @@ def test_every_documented_refusal_status_is_produced_with_the_envelope():
             headers={"authorization": f"Bearer {SUBJECT_A}"},
         )
 
+    def scenario_409_state():
+        http = commerce_harness(store=CommerceStore()).http()
+        headers = {"authorization": f"Bearer {SUBJECT_A}"}
+        product = http.post(
+            "/api/v1/commerce/products",
+            headers={**headers, "idempotency-key": "contract-409-state-p"},
+            json=create_payload(),
+        ).json()
+        offer = http.post(
+            "/api/v1/commerce/offers",
+            headers={**headers, "idempotency-key": "contract-409-state-o"},
+            json={"product_id": product["product_id"], "name": "Offer"},
+        ).json()
+        priced = http.post(
+            "/api/v1/commerce/prices",
+            headers={**headers, "idempotency-key": "contract-409-state-pr"},
+            json={"offer_id": offer["offer_id"], "amount": 100, "currency": "EUR"},
+        )
+        assert priced.status_code == 201
+        cart = http.post(
+            "/api/v1/commerce/carts",
+            headers={**headers, "idempotency-key": "contract-409-state-c"},
+        ).json()
+        added = http.post(
+            f"/api/v1/commerce/carts/{cart['cart_id']}/items",
+            headers={**headers, "idempotency-key": "contract-409-state-a"},
+            json={"offer_id": offer["offer_id"], "quantity": 1},
+        )
+        assert added.status_code == 200
+        order = http.post(
+            "/api/v1/commerce/checkout",
+            headers={**headers, "idempotency-key": "contract-409-state-co"},
+            json={"cart_id": cart["cart_id"]},
+        ).json()
+        paid = http.post(
+            f"/api/v1/commerce/orders/{order['order_id']}/pay",
+            headers={**headers, "idempotency-key": "contract-409-state-pay1"},
+        )
+        assert paid.status_code == 200
+        return http.post(
+            f"/api/v1/commerce/orders/{order['order_id']}/pay",
+            headers={**headers, "idempotency-key": "contract-409-state-pay2"},
+        )
+
     scenarios = {
-        400: [scenario_400],
-        401: [scenario_401],
-        403: [scenario_403],
-        404: [scenario_404],
-        409: [scenario_409],
-        422: [scenario_422],
-        503: [scenario_503],
+        400: [(scenario_400, "IDEMPOTENCY_KEY_REQUIRED")],
+        401: [(scenario_401, "AUTHENTICATION_REQUIRED")],
+        403: [(scenario_403, "AUTHORIZATION_DENIED")],
+        404: [(scenario_404, "NOT_FOUND")],
+        409: [
+            (scenario_409, "IDEMPOTENCY_CONFLICT"),
+            (scenario_409_state, "INVALID_STATE_TRANSITION"),
+        ],
+        422: [(scenario_422, "VALIDATION_ERROR")],
+        503: [(scenario_503, "DEPENDENCY_UNAVAILABLE")],
     }
     assert set(refused) == {str(status) for status in scenarios}
-    expected_codes = {
-        400: "IDEMPOTENCY_KEY_REQUIRED",
-        401: "AUTHENTICATION_REQUIRED",
-        403: "AUTHORIZATION_DENIED",
-        404: "NOT_FOUND",
-        409: "IDEMPOTENCY_CONFLICT",
-        422: "VALIDATION_ERROR",
-        503: "DEPENDENCY_UNAVAILABLE",
-    }
     for status, calls in scenarios.items():
-        for scenario in calls:
+        for scenario, expected_code in calls:
             response = scenario()
             assert response.status_code == status, (status, response.text)
             body = envelope_of(response)
-            assert body["error"]["code"] == expected_codes[status]
-            assert (
-                body["error"]["message"]
-                == ERROR_CODES[expected_codes[status]]["message"]
-            )
+            assert body["error"]["code"] == expected_code
+            assert body["error"]["message"] == ERROR_CODES[expected_code]["message"]
             documented = {r.strip() for r in refused[str(status)].split(",")}
             assert body["error"]["details"]["reason"] in documented
 
@@ -569,16 +670,200 @@ def test_no_payment_customer_or_checkout_entities_exist():
     assert "amount" not in product_fields
 
 
-def test_no_later_slice_endpoints_exist_in_openapi():
+def test_no_out_of_scope_endpoints_exist_in_openapi():
     text = openapi_text()
     paths_section = text.split("paths:", 1)[1].split("components:", 1)[0]
     for forbidden in (
-        "\n  /offers",
-        "\n  /prices",
-        "\n  /carts",
-        "\n  /checkout",
-        "\n  /orders",
         "\n  /payment",
         "\n  /refund",
+        "\n  /subscription",
+        "\n  /coupon",
+        "\n  /discount",
+        "\n  /promo",
+        "\n  /loyalty",
+        "\n  /shipping",
+        "\n  /warehouse",
+        "\n  /marketplace",
+        "\n  /analytics",
+        "\n  /marketing",
+        "\n  /customers",
+        "\n  /users",
+        "\n  /profiles",
     ):
         assert forbidden not in paths_section, forbidden
+
+
+# ------------------------------------------------- stage 3 operation contract
+def test_stage3_operations_are_declared_in_openapi():
+    text = openapi_text()
+    assert "operationId: createOffer" in text
+    assert "operationId: createPrice" in text
+    assert "operationId: createCart" in text
+    assert "operationId: readCart" in text
+    assert "operationId: addCartItem" in text
+    assert "operationId: setCartItemQuantity" in text
+    assert "operationId: removeCartItem" in text
+    assert "operationId: checkout" in text
+    assert "operationId: readOrder" in text
+    assert "operationId: payOrder" in text
+    for grant in (
+        "commerce.offers.create",
+        "commerce.prices.create",
+        "commerce.carts.create",
+        "commerce.carts.read",
+        "commerce.carts.update",
+        "commerce.checkout.create",
+        "commerce.orders.read",
+        "commerce.orders.pay",
+    ):
+        assert grant in text, grant
+    assert "INVALID_STATE_TRANSITION" in text
+
+
+def test_stage3_operations_are_declared_in_the_component_contract():
+    data = contract()
+    operations = {
+        (operation["method"], operation["path"]): operation
+        for operation in data["api"]["operations"]
+    }
+    expected = {
+        ("POST", "/api/v1/commerce/offers"): (
+            "commerce.offers.create",
+            "required",
+            "/offers",
+        ),
+        ("POST", "/api/v1/commerce/prices"): (
+            "commerce.prices.create",
+            "required",
+            "/prices",
+        ),
+        ("POST", "/api/v1/commerce/carts"): (
+            "commerce.carts.create",
+            "required",
+            "/carts",
+        ),
+        ("GET", "/api/v1/commerce/carts/{cart_id}"): (
+            "commerce.carts.read",
+            "natural",
+            "/carts/{cart_id}",
+        ),
+        ("POST", "/api/v1/commerce/carts/{cart_id}/items"): (
+            "commerce.carts.update",
+            "required",
+            "/carts/{cart_id}/items",
+        ),
+        ("POST", "/api/v1/commerce/carts/{cart_id}/items/{offer_id}/quantity"): (
+            "commerce.carts.update",
+            "required",
+            "/carts/{cart_id}/items/{offer_id}/quantity",
+        ),
+        ("POST", "/api/v1/commerce/carts/{cart_id}/items/{offer_id}/remove"): (
+            "commerce.carts.update",
+            "required",
+            "/carts/{cart_id}/items/{offer_id}/remove",
+        ),
+        ("POST", "/api/v1/commerce/checkout"): (
+            "commerce.checkout.create",
+            "required",
+            "/checkout",
+        ),
+        ("GET", "/api/v1/commerce/orders/{order_id}"): (
+            "commerce.orders.read",
+            "natural",
+            "/orders/{order_id}",
+        ),
+        ("POST", "/api/v1/commerce/orders/{order_id}/pay"): (
+            "commerce.orders.pay",
+            "required",
+            "/orders/{order_id}/pay",
+        ),
+    }
+    assert set(expected) <= set(operations)
+    for key, (grant, idempotency, openapi_path) in expected.items():
+        declared = operations[key]
+        assert declared["authorization_operation"] == grant, key
+        assert declared["idempotency"] == idempotency, key
+        assert declared["openapi_path"] == openapi_path, key
+
+
+def test_stage3_response_shapes_match_openapi_schema():
+    harness = commerce_harness(store=CommerceStore())
+    http = harness.http()
+    headers = {"authorization": f"Bearer {SUBJECT_A}"}
+
+    def post(path, key, payload=None):
+        request = {"headers": {**headers, "idempotency-key": key}}
+        if payload is not None:
+            request["json"] = payload
+        response = http.post(path, **request)
+        assert response.status_code in (200, 201), response.text
+        return response.json()
+
+    product = post("/api/v1/commerce/products", "shape-p", create_payload())
+    offer = post(
+        "/api/v1/commerce/offers",
+        "shape-o",
+        {"product_id": product["product_id"], "name": "Shape offer"},
+    )
+    price = post(
+        "/api/v1/commerce/prices",
+        "shape-pr",
+        {"offer_id": offer["offer_id"], "amount": 1999, "currency": "EUR"},
+    )
+    cart = post("/api/v1/commerce/carts", "shape-c")
+    cart = post(
+        f"/api/v1/commerce/carts/{cart['cart_id']}/items",
+        "shape-a",
+        {"offer_id": offer["offer_id"], "quantity": 2},
+    )
+    order = post("/api/v1/commerce/checkout", "shape-co", {"cart_id": cart["cart_id"]})
+    text = openapi_text()
+    cases = [
+        (
+            offer,
+            (
+                "offer_id",
+                "product_id",
+                "name",
+                "status",
+                "created_by",
+                "created_at",
+                "updated_at",
+            ),
+        ),
+        (price, ("price_id", "offer_id", "amount", "currency", "created_at")),
+        (
+            cart,
+            ("cart_id", "buyer_identity_id", "created_at", "updated_at", "items"),
+        ),
+        (
+            cart["items"][0],
+            ("offer_id", "product_id", "quantity"),
+        ),
+        (
+            order,
+            (
+                "order_id",
+                "buyer_identity_id",
+                "payment_state",
+                "created_at",
+                "updated_at",
+                "lines",
+            ),
+        ),
+        (
+            order["lines"][0],
+            (
+                "order_line_id",
+                "offer_id",
+                "product_id",
+                "amount",
+                "currency",
+                "quantity",
+            ),
+        ),
+    ]
+    for item, fields in cases:
+        for field in fields:
+            assert field in text, field
+            assert field in item, field

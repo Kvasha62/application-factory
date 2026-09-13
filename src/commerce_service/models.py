@@ -170,10 +170,12 @@ class OwnedOrderLine:
 
     Each line captures one bought proposition with a **price snapshot at
     order time**: ``amount``/``currency`` are copied values, never a
-    reference to the current catalog. ``offer_id``/``product_id`` identify
-    what was bought and remain meaningful even if the current catalog
-    changes — a historical line is never recomputed from it. The line is
-    frozen at creation together with the rest of the purchase facts.
+    reference to the current catalog. ``quantity`` is how many units of
+    the proposition were bought at the snapshot price. ``offer_id``/
+    ``product_id`` identify what was bought and remain meaningful even if
+    the current catalog changes — a historical line is never recomputed
+    from it. The line is frozen at creation together with the rest of the
+    purchase facts.
     """
 
     order_line_id: str
@@ -184,6 +186,7 @@ class OwnedOrderLine:
     product_id: str
     amount: int
     currency: str
+    quantity: int
 
 
 @dataclass(frozen=True, slots=True)

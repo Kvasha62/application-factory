@@ -30,19 +30,19 @@ is forwarded as a cross-check only (LAW-16, LAW-16a).
 
 Stage 2 (Issue #55) establishes the component: identity, Component
 Contract, OpenAPI, the domain/storage foundation for all six MVP record
-types plus the payment state, and the enforcement-chain plumbing. The
-live surface is exactly two operations — create one owned Product
-(``POST /api/v1/commerce/products``) and read one owned Product
-(``GET /api/v1/commerce/products/{product_id}``) — proving the chain,
-the IS-005 guard, the audit journal and the published client. Offer,
-Price, Cart, Checkout, Order and payment-state commands arrive in later
-slices; their models and store invariants already exist. Errors use the
-approved SCS-002 envelope (``error.code`` / ``error.message`` /
-``error.details`` plus top-level ``request_id`` / ``correlation_id``).
+types plus the payment state, and the enforcement-chain plumbing. Stage 3
+implements the Commerce business logic on that foundation: the live
+surface is twelve operations — create and read one owned Product, define
+one Offer, set one Price, open/read/mutate one owned Cart (add, set
+quantity, remove), checkout, read one owned Order and record its payment
+— behind the same enforcement chain, the IS-005 guard, the audit journal
+and the published client. Errors use the approved SCS-002 envelope
+(``error.code`` / ``error.message`` / ``error.details`` plus top-level
+``request_id`` / ``correlation_id``).
 """
 
 COMPONENT_ID = "commerce"
-COMPONENT_VERSION = "0.1.0"
+COMPONENT_VERSION = "0.2.0"
 COMPONENT_CLASS = "business_system"
 SCS_ID = "SCS-002"
 

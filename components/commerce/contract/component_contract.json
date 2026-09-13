@@ -1,10 +1,10 @@
 {
   "component_id": "commerce",
   "scs_id": "SCS-002",
-  "component_version": "0.1.0",
+  "component_version": "0.2.0",
   "class": "business_system",
   "maturity_level": "level_0_modular_monolith",
-  "task": "SCS-002 Commerce MVP — Stage 2 skeleton (Issue #55, ADR-0013): component identity, Component Contract and OpenAPI, domain/storage foundation for Product → Offer → Price, Cart, Order/OrderLine and payment state, and the enforcement-chain plumbing. Live operations: create and read one owned Product.",
+  "task": "SCS-002 Commerce MVP — Stage 3 business logic (Issue #55, ADR-0013): the full commerce contour on the Stage 2 skeleton — catalog (Product → Offer → Price), mutable Cart, checkout as a business command, immutable Order purchase facts with the mutable payment state — behind the same enforcement chain, IS-005 guard, audit journal and published client. Live operations: twelve — create and read one owned Product, define one Offer, set one Price, open/read/mutate one owned Cart, checkout, read one owned Order, record its payment.",
   "commerce_boundary": {
     "role": "Data Ownership / Commerce Boundary",
     "invariants": [
@@ -76,6 +76,96 @@
         "authorization_operation": "commerce.products.read",
         "idempotency": "natural",
         "idempotency_note": "A read changes no state beyond the append-only audit journal."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/commerce/offers",
+        "openapi_path": "/offers",
+        "purpose": "define one sellable proposition of an existing Product of the effective tenant; a new Offer is created ACTIVE",
+        "authorization_operation": "commerce.offers.create",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: the Idempotency-Key header is mandatory, an exact replay returns the recorded result without a second effect, and a changed binding (payload, identity, tenant, operation) is refused as IDEMPOTENCY_CONFLICT. The command has no pre-existing target: the IS-005 resource binding is empty, and the tenant binding is the effective tenant of the chain."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/commerce/prices",
+        "openapi_path": "/prices",
+        "purpose": "append one price to the price history of an existing Offer of the effective tenant; the new record never rewrites a past one",
+        "authorization_operation": "commerce.prices.create",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: the Idempotency-Key header is mandatory, an exact replay returns the recorded result without a second effect, and a changed binding (payload, identity, tenant, operation) is refused as IDEMPOTENCY_CONFLICT. The command has no pre-existing target: the IS-005 resource binding is empty, and the tenant binding is the effective tenant of the chain."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/commerce/carts",
+        "openapi_path": "/carts",
+        "purpose": "open one cart for the verified subject in the effective tenant; the command carries no body and a new cart holds no lines",
+        "authorization_operation": "commerce.carts.create",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: the Idempotency-Key header is mandatory, an exact replay returns the recorded result without a second effect, and a changed binding (identity, tenant, operation) is refused as IDEMPOTENCY_CONFLICT. The command has no pre-existing target: the IS-005 resource binding is empty, and the tenant binding is the effective tenant of the chain."
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/commerce/carts/{cart_id}",
+        "openapi_path": "/carts/{cart_id}",
+        "purpose": "serve one owned cart of the verified subject after the enforcement chain allowed the access",
+        "authorization_operation": "commerce.carts.read",
+        "idempotency": "natural",
+        "idempotency_note": "A read changes no state beyond the append-only audit journal."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/commerce/carts/{cart_id}/items",
+        "openapi_path": "/carts/{cart_id}/items",
+        "purpose": "add one offer of the cart's Tenant to the subject's own cart; a repeated offer increments its line",
+        "authorization_operation": "commerce.carts.update",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: the Idempotency-Key header is mandatory, an exact replay returns the recorded cart without a second effect, and a changed binding (cart, offer, quantity, identity, tenant, operation) is refused as IDEMPOTENCY_CONFLICT. The IS-005 resource binding is the cart."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/commerce/carts/{cart_id}/items/{offer_id}/quantity",
+        "openapi_path": "/carts/{cart_id}/items/{offer_id}/quantity",
+        "purpose": "set the quantity of one existing cart line of the subject's own cart to an absolute positive value",
+        "authorization_operation": "commerce.carts.update",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: the Idempotency-Key header is mandatory, an exact replay returns the recorded cart without a second effect, and a changed binding (cart, offer, quantity, identity, tenant, operation) is refused as IDEMPOTENCY_CONFLICT. The IS-005 resource binding is the cart."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/commerce/carts/{cart_id}/items/{offer_id}/remove",
+        "openapi_path": "/carts/{cart_id}/items/{offer_id}/remove",
+        "purpose": "remove one existing line from the subject's own cart",
+        "authorization_operation": "commerce.carts.update",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: the Idempotency-Key header is mandatory, an exact replay returns the recorded cart without a second effect, and a changed binding (cart, offer, identity, tenant, operation) is refused as IDEMPOTENCY_CONFLICT. The IS-005 resource binding is the cart."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/commerce/checkout",
+        "openapi_path": "/checkout",
+        "purpose": "convert one owned cart of the verified subject into an order: validate the selected offers and their current prices, create the Order with immutable purchase facts, consume the cart lines, and set PENDING_PAYMENT",
+        "authorization_operation": "commerce.checkout.create",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: the Idempotency-Key header is mandatory, an exact replay returns the recorded order without a second order, and a changed binding (cart, identity, tenant, operation) is refused as IDEMPOTENCY_CONFLICT. The IS-005 resource binding is the cart. Concurrent checkouts of the same cart are serialized in the cart's domain critical section: the second one refuses with cart_empty."
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/commerce/orders/{order_id}",
+        "openapi_path": "/orders/{order_id}",
+        "purpose": "serve one owned order of the verified subject after the enforcement chain allowed the access",
+        "authorization_operation": "commerce.orders.read",
+        "idempotency": "natural",
+        "idempotency_note": "A read changes no state beyond the append-only audit journal."
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/commerce/orders/{order_id}/pay",
+        "openapi_path": "/orders/{order_id}/pay",
+        "purpose": "record one PENDING_PAYMENT order of the verified subject as paid; the only payment-state move that exists",
+        "authorization_operation": "commerce.orders.pay",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: the Idempotency-Key header is mandatory, an exact replay returns the recorded order without a second move, and a changed binding (order, identity, tenant, operation) is refused as IDEMPOTENCY_CONFLICT. The IS-005 resource binding is the order. Concurrent payments of the same order are serialized in the order's domain critical section: only the first PENDING_PAYMENT → PAID move succeeds."
       }
     ],
     "enforcement_model": {
@@ -87,11 +177,29 @@
       ],
       "owned_data_operations": [
         "create_product",
-        "serve_product"
+        "serve_product",
+        "create_offer",
+        "create_price",
+        "create_cart",
+        "add_to_cart",
+        "set_cart_line_quantity",
+        "remove_cart_line",
+        "cart_contents",
+        "checkout_cart",
+        "order_contents",
+        "set_payment_state"
       ],
       "own_deny_reasons": [
         "product_unknown",
+        "offer_unknown",
+        "price_unknown",
+        "cart_unknown",
+        "order_unknown",
+        "cart_line_unknown",
         "owner_mismatch",
+        "buyer_mismatch",
+        "cart_empty",
+        "invalid_state_transition",
         "authorization_unavailable",
         "idempotency_key_required",
         "idempotency_conflict",
@@ -105,14 +213,14 @@
       "product_catalog": {
         "boundary": "Product → Offer → Price: an Offer links exactly one Product to a sellable proposition within the same Tenant, and a Price is a first-class price concept attached to the sellable proposition; collapsing the boundary to Product.price is not allowed",
         "product": "a new Product is created ACTIVE in the effective tenant of the verified identity; catalog lifecycle transitions arrive in a later slice",
-        "offer_and_price": "Offer and Price models and their store invariants (same-tenant parentage, no orphans, append-only price history) exist in this slice; their commands arrive in a later slice and are undeclared surface until then",
-        "cart_and_order": "Cart, Order and OrderLine models, the price-snapshot shape and the payment-state vocabulary (PENDING_PAYMENT → PAID) exist in this slice; cart, checkout, order and payment-state commands arrive in later slices and are undeclared surface until then",
+        "offer_and_price": "define-offer and set-price are live commands: an Offer is defined under an existing Product of the effective tenant, a Price is appended to the price history of an existing Offer of the effective tenant; parentage stays same-tenant and history stays append-only",
+        "cart_and_order": "open/read/mutate cart, checkout, read order and record payment are live commands: a subject reaches only its own carts and orders; checkout converts the selected offers at their current prices into immutable purchase facts, consumes the cart lines and sets PENDING_PAYMENT; only the PENDING_PAYMENT → PAID move exists",
         "no_checkout_entity": "Checkout is a business command, not an entity: no persistent Checkout record exists and none is planned without a proven need and a separate decision",
         "no_payment_service": "payment is the mutable commercial state/result bound to an Order and owned by Commerce; no Payment Service, no provider integration and no gateway imitation exist"
       }
     },
     "refusal_semantics": {
-      "principle": "a refusal is data with a stable machine-readable code and reason, audited with request_id and correlation_id; nothing about this surface can be mistaken for a served product",
+      "principle": "a refusal is data with a stable machine-readable code and reason, audited with request_id and correlation_id; nothing about this surface can be mistaken for a served record",
       "envelope": {
         "shape": {
           "error": {
@@ -134,18 +242,23 @@
           "AUTHORIZATION_DENIED": {
             "status": 403,
             "message": "Operation is not permitted.",
-            "reasons": "tenant_mismatch, tenant_unknown, platform_ownership_mismatch, resource_tenant_unknown, resource_tenant_mismatch, tenant_not_active, tenant_suspended, tenant_deletion_requested, tenant_deleted, permission_not_granted, authority_unavailable, missing_tenant_context, owner_mismatch"
+            "reasons": "tenant_mismatch, tenant_unknown, platform_ownership_mismatch, resource_tenant_unknown, resource_tenant_mismatch, tenant_not_active, tenant_suspended, tenant_deletion_requested, tenant_deleted, permission_not_granted, authority_unavailable, missing_tenant_context, owner_mismatch, buyer_mismatch"
           },
           "NOT_FOUND": {
             "status": 404,
             "message": "Requested resource was not found.",
-            "reasons": "product_unknown"
+            "reasons": "product_unknown, offer_unknown, price_unknown, cart_unknown, order_unknown, cart_line_unknown"
           },
           "INVALID_REQUEST": {
             "status": 422,
             "message": "Request does not match the published contract.",
             "reasons": "malformed_request",
             "note": "defence in depth: the schema handler refuses a request the published contract cannot read (e.g. a command body with a missing field, a wrong type or a declared-unknown field) before any handler runs; the stable reason is malformed_request"
+          },
+          "INVALID_STATE_TRANSITION": {
+            "status": 409,
+            "message": "Operation is not valid for the current state.",
+            "reasons": "invalid_state_transition, cart_empty"
           },
           "IDEMPOTENCY_KEY_REQUIRED": {
             "status": 400,
@@ -173,13 +286,13 @@
       "refused": {
         "400": "idempotency_key_required",
         "401": "missing_identity, invalid_identity, unknown_identity",
-        "403": "tenant_mismatch, tenant_unknown, platform_ownership_mismatch, resource_tenant_unknown, resource_tenant_mismatch, tenant_not_active, tenant_suspended, tenant_deletion_requested, tenant_deleted, permission_not_granted, authority_unavailable, missing_tenant_context, owner_mismatch",
-        "404": "product_unknown",
-        "409": "idempotency_conflict",
+        "403": "tenant_mismatch, tenant_unknown, platform_ownership_mismatch, resource_tenant_unknown, resource_tenant_mismatch, tenant_not_active, tenant_suspended, tenant_deletion_requested, tenant_deleted, permission_not_granted, authority_unavailable, missing_tenant_context, owner_mismatch, buyer_mismatch",
+        "404": "product_unknown, offer_unknown, price_unknown, cart_unknown, order_unknown, cart_line_unknown",
+        "409": "idempotency_conflict, invalid_state_transition, cart_empty",
         "503": "authorization_unavailable",
         "422": "validation_error"
       },
-      "served": "HTTP 200/201 with the published product representation — produced only by the owned-data operation at the end of the enforcement chain"
+      "served": "HTTP 200/201 with the published representation — product, offer, price, cart or order — produced only by the owned-data operation at the end of the enforcement chain"
     },
     "consumer_surface": {
       "module": "commerce_service.reader",
@@ -196,10 +309,26 @@
       ],
       "operations": [
         "create_product",
-        "read_product"
+        "read_product",
+        "create_offer",
+        "create_price",
+        "create_cart",
+        "read_cart",
+        "add_cart_item",
+        "set_cart_item_quantity",
+        "remove_cart_item",
+        "checkout",
+        "read_order",
+        "pay_order"
       ],
       "returns": [
-        "commerce_service.contracts.ProductView"
+        "commerce_service.contracts.ProductView",
+        "commerce_service.contracts.OfferView",
+        "commerce_service.contracts.PriceView",
+        "commerce_service.contracts.CartView",
+        "commerce_service.contracts.CartLineView",
+        "commerce_service.contracts.OrderView",
+        "commerce_service.contracts.OrderLineView"
       ],
       "errors": [
         "commerce_service.errors.AccessRefused — the access did not happen; the reason is one of the published refusal reasons (400/401/403/404/409/422/503), carried in error.details.reason, with the request_id/correlation_id of the refusal",
@@ -213,8 +342,8 @@
         "importing the published module binds no reference to commerce_service.transport — its namespace holds no module object, no channel table and no transport type",
         "an unknown or revoked channel handle raises ContractViolation, so there is no permissive fallback and a handle cannot be guessed",
         "every access runs through the same routing, enforcement chain and audit code that serves an HTTP request",
-        "there is no product listing, bulk export, search, pagination or raw-store operation: the published create command and the single read are the only access paths, and both are enforced",
-        "the create command owns no second idempotency mechanism: it is delivered to the IS-005 guard, which decides between executing, replaying and refusing a conflict"
+        "there is no product listing, bulk export, search, pagination or raw-store operation: the twelve published operations are the only access paths, and all are enforced",
+        "the state-changing commands own no second idempotency mechanism: each is delivered to the IS-005 guard, which decides between executing, replaying and refusing a conflict"
       ],
       "composition_root_only": [
         "commerce_service.deployment (CommerceDeployment: engine, store, configuration)",
@@ -248,7 +377,7 @@
         "operations": [
           "decide"
         ],
-        "note": "The access decision is read per access and never cached. The resource's owning Tenant stated in the question comes from this component's own store — or, for the create command whose target does not exist yet, from the effective tenant of the verified identity — never from a caller claim (LAW-16a).",
+        "note": "The access decision is read per access and never cached. The resource's owning Tenant stated in the question comes from this component's own store — or, for the create commands whose targets do not exist yet, from the effective tenant of the verified identity — never from a caller claim (LAW-16a).",
         "dependency_isolation": "No module of commerce imports authorization_service, identity_service or tenant_authority: the published client is adapted at the composition boundary and only values owned by this component reach the enforcement logic (ARCHITECTURE.md 1.1, 6.1, LAW-04)."
       },
       {
@@ -263,7 +392,7 @@
         "operations": [
           "resolve_context"
         ],
-        "note": "Consumed by exactly one command — create-product — whose target does not exist yet, so the resource Tenant of its authorization question can only be the effective tenant of the verified identity (the chain Identity -> effective tenant -> Authorization -> Commerce ownership boundary). The adapter is structural over the published client, like its sibling for IS-003; the composition root wires it, and no module of commerce imports identity_service. No second identity or tenant mechanism exists: the port carries the answer of IS-001 and nothing else."
+        "note": "Consumed by exactly the four create commands — product, offer, price, cart — whose targets do not exist yet, so the resource Tenant of their authorization questions can only be the effective tenant of the verified identity (the chain Identity -> effective tenant -> Authorization -> Commerce ownership boundary). The adapter is structural over the published client, like its sibling for IS-003; the composition root wires it, and no module of commerce imports identity_service. No second identity or tenant mechanism exists: the port carries the answer of IS-001 and nothing else."
       }
     ]
   },
@@ -272,7 +401,7 @@
     "status": "declared_only",
     "published": [],
     "consumed": [],
-    "note": "SCS-002 Stage 2 publishes no inter-component events and does not simulate a broker. The access audit journal is owned data, not a public event contract."
+    "note": "SCS-002 Stage 3 publishes no inter-component events and does not simulate a broker. The access audit journal is owned data, not a public event contract."
   },
   "data_export_cdc": {
     "status": "declared_only",
@@ -342,7 +471,7 @@
       {
         "name": "order_lines",
         "scope": "tenant-scoped",
-        "note": "One bought position per line with an immutable price snapshot at order time (copied amount/currency plus the Product/Offer references); never recomputed from the current catalog; no update operation exists."
+        "note": "One bought position per line with an immutable price snapshot at order time (copied amount/currency/quantity plus the Product/Offer references); never recomputed from the current catalog; no update operation exists."
       },
       {
         "name": "payment_state",
@@ -413,10 +542,18 @@
     "tenant_context_source": "identity",
     "operations_guarded": [
       "commerce.products.create",
-      "commerce.products.read"
+      "commerce.products.read",
+      "commerce.offers.create",
+      "commerce.prices.create",
+      "commerce.carts.create",
+      "commerce.carts.read",
+      "commerce.carts.update",
+      "commerce.checkout.create",
+      "commerce.orders.read",
+      "commerce.orders.pay"
     ],
     "authentication_does_not_imply_authorization": true,
-    "note": "ALLOW from IS-003 is not direct data access: the data owner remains the final enforcement boundary (ARCHITECTURE.md §6.2). A decision that cannot be obtained is a denial. The two operations of this slice each carry their own grant — no role or policy logic exists inside Commerce. The create command has no pre-existing target, so its authorization question names the effective tenant of the verified identity resolved through IS-001; no second identity, tenant, authorization or idempotency mechanism is introduced."
+    "note": "ALLOW from IS-003 is not direct data access: the data owner remains the final enforcement boundary (ARCHITECTURE.md §6.2). A decision that cannot be obtained is a denial. The ten operations of this slice each carry their own grant — no role or policy logic exists inside Commerce. The four create commands have no pre-existing target, so their authorization questions name the effective tenant of the verified identity resolved through IS-001; no second identity, tenant, authorization or idempotency mechanism is introduced."
   },
   "compatibility_policy": {
     "api": "additive-minor-breaking-major",
@@ -426,7 +563,7 @@
     "enforcement_chain": "reordering or removing a step is a breaking change: the order is part of the published behaviour",
     "product_model": "adding a field to the product representation is a minor change; changing the eight published fields is a breaking change",
     "error_envelope": "the approved envelope shape is part of the contract; changing error/code/message/details/request_id/correlation_id is a breaking change",
-    "catalog_growth": "adding Offer, Price, Cart, Order and payment-state operations is additive: new operations, schemas, reasons and grants without changing any existing operation, reason or representation. The product lifecycle is exactly ACTIVE; adding product lifecycle states or transitions is a new architectural decision, not a silent change."
+    "catalog_growth": "Stage 3 grew the surface additively (0.1.0 → 0.2.0): new Offer, Price, Cart, Checkout, Order and payment-state operations, schemas, reasons and grants without changing any existing operation, reason or representation — the policy this entry states for further growth. The product lifecycle is exactly ACTIVE; adding product lifecycle states or transitions is a new architectural decision, not a silent change."
   },
   "dependencies": [
     {
@@ -441,16 +578,16 @@
       "version_range": ">=0.1.0,<0.2.0",
       "kind": "internal-consumer-surface",
       "contract": "components/idempotency/contract/component_contract.json",
-      "direction": "commerce -> idempotency (exactly-once delivery of the create-product command)",
-      "note": "SCS-002 implements no second idempotency mechanism: the create command identity (operation, payload fingerprint) is delivered to IS-005, which decides between executing, replaying and refusing a conflict."
+      "direction": "commerce -> idempotency (exactly-once delivery of the state-changing commands)",
+      "note": "SCS-002 implements no second idempotency mechanism: every state-changing command identity (operation, payload fingerprint) is delivered to IS-005, which decides between executing, replaying and refusing a conflict."
     },
     {
       "component_id": "identity",
       "version_range": ">=0.3.0,<0.4.0",
       "kind": "api",
       "contract": "components/identity/contract/component_contract.json",
-      "direction": "commerce -> identity (tenant context of the verified subject for the create-product command)",
-      "note": "Consumed only because the create-product command has no pre-existing resource whose Tenant the store could state. The effective tenant still comes from IS-001 and from nowhere else; a caller-supplied tenant_id remains a cross-check (LAW-16a)."
+      "direction": "commerce -> identity (tenant context of the verified subject for the create commands without a target)",
+      "note": "Consumed only because the four create commands have no pre-existing resource whose Tenant the store could state. The effective tenant still comes from IS-001 and from nowhere else; a caller-supplied tenant_id remains a cross-check (LAW-16a)."
     }
   ]
 }

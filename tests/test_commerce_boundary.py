@@ -1,4 +1,4 @@
-"""Behavioral proof of the Commerce component boundary (SCS-002 Stage 2).
+"""Behavioral proof of the Commerce component boundary (SCS-002 Stage 3).
 
 No module of ``commerce_service`` imports another component's service
 package: the published clients are adapted at the composition boundary
@@ -160,7 +160,20 @@ def test_published_client_exposes_only_the_published_operations():
         for name, member in inspect.getmembers(CommerceClient, inspect.isfunction)
         if not name.startswith("_")
     }
-    assert methods == {"create_product", "read_product"}
+    assert methods == {
+        "create_product",
+        "read_product",
+        "create_offer",
+        "create_price",
+        "create_cart",
+        "read_cart",
+        "add_cart_item",
+        "set_cart_item_quantity",
+        "remove_cart_item",
+        "checkout",
+        "read_order",
+        "pay_order",
+    }
 
 
 def test_published_client_holds_an_opaque_handle_and_nothing_else():

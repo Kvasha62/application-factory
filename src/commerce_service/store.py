@@ -12,7 +12,10 @@ is the enforcement story of the component:
   enforcement metadata: whether a record exists here and who its single
   owner is. The engine reads them to form the question it asks IS-003;
   they serve nothing to a caller;
-* :meth:`CommerceStore.create_product`, :meth:`CommerceStore.serve_product`
+* :meth:`CommerceStore.create_product`, :meth:`CommerceStore.create_offer`,
+  :meth:`CommerceStore.create_price`, :meth:`CommerceStore.create_cart`,
+  the cart-line mutations, :meth:`CommerceStore.cart_contents`,
+  :meth:`CommerceStore.checkout_cart`, :meth:`CommerceStore.order_contents`
   and :meth:`CommerceStore.set_payment_state` — the owned-data operations
   themselves. The engine calls them only after the enforcement chain
   produced an ``ALLOW``.
@@ -63,6 +66,10 @@ OFFER_STATES: tuple[str, ...] = ("ACTIVE",)
 #: Order. Exactly these two states; a payment-state change never touches
 #: the immutable purchase facts.
 PAYMENT_STATES: tuple[str, ...] = ("PENDING_PAYMENT", "PAID")
+
+#: The only payment-state moves that exist: recording a pending order as
+#: paid. No backward move and no second recording exist.
+_PAYMENT_TRANSITIONS: dict[str, tuple[str, ...]] = {"PENDING_PAYMENT": ("PAID",)}
 
 #: Payload content rules shared by the catalog records.
 NAME_MAX = 512
@@ -120,6 +127,22 @@ class CommerceStore:
         default_factory=threading.Lock, repr=False, compare=False
     )
 
+    #: One domain critical section per Cart: every mutation of one Cart —
+    #: the three line commands and the checkout that consumes the lines —
+    #: is serialized against every other mutation of the same Cart, so two
+    #: concurrent commands with different Idempotency-Keys can never
+    #: interleave between the lines read and the write. In particular two
+    #: concurrent checkouts of the same Cart cannot both pass the non-empty
+    #: check: the first one consumes the lines and the second one refuses
+    #: with ``cart_empty``. Level-0 domain serialization, not a second
+    #: idempotency mechanism.
+    _cart_locks: dict[str, threading.RLock] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+    _cart_locks_guard: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
+
     # ------------------------------------------------------------------ static
     @staticmethod
     def _text(value: object, *, what: str, max_length: int) -> str:
@@ -141,6 +164,20 @@ class CommerceStore:
     def order_section(self, order_id: str) -> Iterator[None]:
         """Hold the domain critical section of one Order."""
         with self._order_lock(order_id):
+            yield
+
+    def _cart_lock(self, cart_id: str) -> threading.RLock:
+        with self._cart_locks_guard:
+            lock = self._cart_locks.get(cart_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._cart_locks[cart_id] = lock
+            return lock
+
+    @contextmanager
+    def cart_section(self, cart_id: str) -> Iterator[None]:
+        """Hold the domain critical section of one Cart."""
+        with self._cart_lock(cart_id):
             yield
 
     # ------------------------------------------------------------ registration
@@ -340,9 +377,260 @@ class CommerceStore:
             )
         )
 
+    def create_offer(
+        self,
+        *,
+        tenant_id: str,
+        product_id: str,
+        name: str,
+        created_by: str,
+        now: str,
+    ) -> OwnedOffer:
+        """The owned-data creation effect of the define-offer command.
+
+        The Tenant is the effective tenant of the verified identity as
+        stated by the enforcement chain — never a caller claim. The parent
+        Product must exist here and belong to that same Tenant, or the
+        registration is refused. A new offer is created ``ACTIVE``.
+        """
+        return self.register_offer(
+            OwnedOffer(
+                offer_id=_new_id("off"),
+                product_id=product_id,
+                tenant_id=tenant_id,
+                owner_component=OWNER_COMPONENT,
+                name=name,
+                status="ACTIVE",
+                created_by=created_by,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    def create_price(
+        self,
+        *,
+        tenant_id: str,
+        offer_id: str,
+        amount: int,
+        currency: str,
+        now: str,
+    ) -> OwnedPrice:
+        """The owned-data creation effect of the set-price command.
+
+        The Tenant is the effective tenant of the verified identity as
+        stated by the enforcement chain — never a caller claim. The parent
+        Offer must exist here and belong to that same Tenant. The new
+        record is appended to the price history; no past record is touched.
+        """
+        return self.register_price(
+            OwnedPrice(
+                price_id=_new_id("prc"),
+                offer_id=offer_id,
+                tenant_id=tenant_id,
+                owner_component=OWNER_COMPONENT,
+                amount=amount,
+                currency=currency,
+                created_at=now,
+            )
+        )
+
+    def create_cart(
+        self,
+        *,
+        tenant_id: str,
+        buyer_identity_id: str,
+        now: str,
+    ) -> OwnedCart:
+        """The owned-data creation effect of the open-cart command.
+
+        The Tenant is the effective tenant of the verified identity and
+        the buyer is the verified subject itself, both as stated by the
+        enforcement chain — never caller claims. A new cart holds no lines.
+        """
+        return self.register_cart(
+            OwnedCart(
+                cart_id=_new_id("crt"),
+                tenant_id=tenant_id,
+                owner_component=OWNER_COMPONENT,
+                buyer_identity_id=buyer_identity_id,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
     def serve_product(self, product_id: str) -> OwnedProduct:
         """Serve one owned product. Raises ``KeyError`` when it is gone."""
         return self.products[product_id]
+
+    def add_to_cart(
+        self, cart_id: str, offer_id: str, *, quantity: int, now: str
+    ) -> OwnedCartLine:
+        """Add one offer to a cart, incrementing the line when present.
+
+        The Cart and the Offer must both exist here and belong to the same
+        Tenant. Adding an offer that is already selected increments its
+        line — a second line for the same (Cart, Offer) never exists. The
+        whole sequence runs inside the Cart's domain critical section.
+        """
+        if isinstance(quantity, bool) or not isinstance(quantity, int):
+            raise DomainRefusal("quantity_invalid")
+        if quantity < 1:
+            raise DomainRefusal("quantity_invalid")
+        with self.cart_section(cart_id):
+            cart = self.carts.get(cart_id)
+            if cart is None:
+                raise DomainRefusal("cart_unknown")
+            offer = self.offers.get(offer_id)
+            if offer is None:
+                raise DomainRefusal("offer_unknown")
+            if offer.tenant_id != cart.tenant_id:
+                raise DomainRefusal("tenant_mismatch")
+            key = (cart_id, offer_id)
+            existing = self.cart_lines.get(key)
+            if existing is None:
+                line = OwnedCartLine(
+                    cart_id=cart_id,
+                    offer_id=offer_id,
+                    tenant_id=cart.tenant_id,
+                    owner_component=OWNER_COMPONENT,
+                    quantity=quantity,
+                )
+            else:
+                line = replace(existing, quantity=existing.quantity + quantity)
+            self.cart_lines[key] = line
+            self.carts[cart_id] = replace(cart, updated_at=now)
+            return line
+
+    def set_cart_line_quantity(
+        self, cart_id: str, offer_id: str, *, quantity: int, now: str
+    ) -> OwnedCartLine:
+        """Set the quantity of one cart line to an absolute value.
+
+        The line must exist: setting the quantity of a line that was never
+        added is a refusal, not an insertion. Zero does not delete — the
+        explicit remove operation deletes. Runs inside the Cart's section.
+        """
+        if isinstance(quantity, bool) or not isinstance(quantity, int):
+            raise DomainRefusal("quantity_invalid")
+        if quantity < 1:
+            raise DomainRefusal("quantity_invalid")
+        with self.cart_section(cart_id):
+            cart = self.carts.get(cart_id)
+            if cart is None:
+                raise DomainRefusal("cart_unknown")
+            key = (cart_id, offer_id)
+            existing = self.cart_lines.get(key)
+            if existing is None:
+                raise DomainRefusal("cart_line_unknown")
+            line = replace(existing, quantity=quantity)
+            self.cart_lines[key] = line
+            self.carts[cart_id] = replace(cart, updated_at=now)
+            return line
+
+    def remove_cart_line(self, cart_id: str, offer_id: str, *, now: str) -> None:
+        """Remove one offer from a cart. The line must exist.
+
+        Runs inside the Cart's domain critical section.
+        """
+        with self.cart_section(cart_id):
+            cart = self.carts.get(cart_id)
+            if cart is None:
+                raise DomainRefusal("cart_unknown")
+            key = (cart_id, offer_id)
+            if key not in self.cart_lines:
+                raise DomainRefusal("cart_line_unknown")
+            del self.cart_lines[key]
+            self.carts[cart_id] = replace(cart, updated_at=now)
+
+    def cart_contents(self, cart_id: str) -> tuple[OwnedCart, list[OwnedCartLine]]:
+        """Serve one owned cart with its lines. Raises ``KeyError`` when gone."""
+        return (self.carts[cart_id], self.lines_of_cart(cart_id))
+
+    def order_contents(self, order_id: str) -> tuple[OwnedOrder, list[OwnedOrderLine]]:
+        """Serve one owned order with its lines. Raises ``KeyError`` when gone."""
+        return (self.orders[order_id], self.lines_of_order(order_id))
+
+    def current_price(self, offer_id: str) -> OwnedPrice | None:
+        """The current price of one offer: the latest registered record.
+
+        Prices are append-only history; the current price is the latest
+        registration, ordered by (created_at, price_id) for determinism.
+        ``None`` when the offer has no price at all.
+        """
+        candidates = [p for p in self.prices.values() if p.offer_id == offer_id]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda p: (p.created_at, p.price_id))
+
+    def product_id_of_offer(self, offer_id: str) -> str:
+        """The Product one offer is a proposition of. ``KeyError`` when gone."""
+        return self.offers[offer_id].product_id
+
+    def checkout_cart(
+        self, cart_id: str, *, buyer_identity_id: str, now: str
+    ) -> tuple[OwnedOrder, list[OwnedOrderLine]]:
+        """Convert the selected contents of one cart into an Order.
+
+        The whole critical sequence — lines read, offer and price
+        validation, order and order-line creation, cart consumption — runs
+        inside the Cart's domain critical section, so two concurrent
+        checkouts of the same cart cannot both pass the non-empty check.
+        Every line is validated: the offer must exist here and belong to
+        the cart's Tenant, and it must have a current price. The order is
+        created ``PENDING_PAYMENT`` with one order line per cart line,
+        each carrying the quantity and the copied price snapshot; then the
+        cart lines are consumed and the cart is left holding nothing.
+        """
+        with self.cart_section(cart_id):
+            cart = self.carts[cart_id]
+            if cart.buyer_identity_id != buyer_identity_id:
+                raise DomainRefusal("buyer_mismatch")
+            lines = self.lines_of_cart(cart_id)
+            if not lines:
+                raise DomainRefusal("cart_empty")
+            snapshots: list[tuple[OwnedCartLine, OwnedOffer, OwnedPrice]] = []
+            for line in lines:
+                offer = self.offers.get(line.offer_id)
+                if offer is None or offer.tenant_id != cart.tenant_id:
+                    raise DomainRefusal("offer_unknown")
+                price = self.current_price(line.offer_id)
+                if price is None:
+                    raise DomainRefusal("price_unknown")
+                snapshots.append((line, offer, price))
+            order = self.register_order(
+                OwnedOrder(
+                    order_id=_new_id("ord"),
+                    tenant_id=cart.tenant_id,
+                    owner_component=OWNER_COMPONENT,
+                    buyer_identity_id=cart.buyer_identity_id,
+                    payment_state="PENDING_PAYMENT",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            created: list[OwnedOrderLine] = []
+            for line, offer, price in snapshots:
+                created.append(
+                    self.register_order_line(
+                        OwnedOrderLine(
+                            order_line_id=_new_id("orl"),
+                            order_id=order.order_id,
+                            tenant_id=cart.tenant_id,
+                            owner_component=OWNER_COMPONENT,
+                            offer_id=offer.offer_id,
+                            product_id=offer.product_id,
+                            amount=price.amount,
+                            currency=price.currency,
+                            quantity=line.quantity,
+                        )
+                    )
+                )
+            for line in lines:
+                del self.cart_lines[(cart_id, line.offer_id)]
+            self.carts[cart_id] = replace(cart, updated_at=now)
+            created.sort(key=lambda item: item.order_line_id)
+            return (order, created)
 
     def set_payment_state(
         self, order_id: str, payment_state: str, *, now: str
@@ -350,16 +638,22 @@ class CommerceStore:
         """Move the mutable payment state/result of one Order.
 
         The whole change runs inside the Order's domain critical section.
-        Only ``payment_state`` and ``updated_at`` change: the buyer, the
-        tenant and the bought positions — the immutable purchase facts —
-        are carried over untouched, and no reorder of the lines happens.
-        Raises ``KeyError`` when the Order is gone and ``DomainRefusal``
-        for an unknown payment state.
+        Only the ``PENDING_PAYMENT → PAID`` transition exists: any other
+        move — including recording an already paid order as paid again —
+        is refused. Only ``payment_state`` and ``updated_at`` change: the
+        buyer, the tenant and the bought positions — the immutable purchase
+        facts — are carried over untouched, and no reorder of the lines
+        happens. Raises ``KeyError`` when the Order is gone and
+        ``DomainRefusal`` for an unknown payment state or an invalid
+        transition.
         """
         if payment_state not in PAYMENT_STATES:
             raise DomainRefusal("unknown_payment_state")
         with self.order_section(order_id):
             order = self.orders[order_id]
+            allowed = _PAYMENT_TRANSITIONS.get(order.payment_state, ())
+            if payment_state not in allowed:
+                raise DomainRefusal("invalid_state_transition")
             updated = replace(order, payment_state=payment_state, updated_at=now)
             self.orders[order_id] = updated
             return updated
