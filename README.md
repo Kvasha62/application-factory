@@ -80,10 +80,11 @@ OIDC, CDC, RLS, SemVer).
 
 Стадия реализации (Foundation stage, standalone mode, ARCHITECTURE.md §4.1).
 
-Реализованы 8 компонентов Level 0 (in-memory, модульный монолит):
+Реализованы 9 компонентов Level 0 (in-memory, модульный монолит):
 `authorization`, `identity`, `tenant_authority`, `records`,
 `learning` (SCS-001, Slices 1–4), `saga`, `idempotency`,
-`commerce` (SCS-002, Stage 2 skeleton — Issue #55)
+`commerce` (SCS-002, Stage 2 skeleton — Issue #55),
+`booking` (SCS-003, MVP — Issue #57, ADR-0014)
 (`src/`, контракты в `components/*/contract/`, поведенческие и
 contract-тесты в `tests/`).
 
