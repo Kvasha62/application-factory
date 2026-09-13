@@ -474,15 +474,19 @@ class CommerceEngine:
             action, {"name": name, "description": description}
         )
         try:
-            created = self.idempotency.execute(
+            created = self._guarded_execute(
                 idempotency_key,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                resource_id=product_id,
+                resource_tenant_id=effective_tenant,
+                claimed_tenant_id=claimed_tenant_id,
                 identity=subject_id,
                 tenant_id=tenant_id,
                 operation=action,
                 resource=None,
                 fingerprint=fingerprint,
-                request_id=obs.request_id,
-                correlation_id=obs.correlation_id,
                 effect=lambda: self.store.create_product(
                     tenant_id=tenant_id,
                     name=name,
@@ -802,15 +806,19 @@ class CommerceEngine:
             action, {"name": name, "product_id": product_id}
         )
         try:
-            created = self.idempotency.execute(
+            created = self._guarded_execute(
                 idempotency_key,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                resource_id=offer_id,
+                resource_tenant_id=effective_tenant,
+                claimed_tenant_id=claimed_tenant_id,
                 identity=subject_id,
                 tenant_id=tenant_id,
                 operation=action,
                 resource=None,
                 fingerprint=fingerprint,
-                request_id=obs.request_id,
-                correlation_id=obs.correlation_id,
                 effect=lambda: self.store.create_offer(
                     tenant_id=tenant_id,
                     product_id=product_id,
@@ -985,15 +993,19 @@ class CommerceEngine:
             action, {"amount": amount, "currency": currency, "offer_id": offer_id}
         )
         try:
-            created = self.idempotency.execute(
+            created = self._guarded_execute(
                 idempotency_key,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                resource_id=price_id,
+                resource_tenant_id=effective_tenant,
+                claimed_tenant_id=claimed_tenant_id,
                 identity=subject_id,
                 tenant_id=tenant_id,
                 operation=action,
                 resource=None,
                 fingerprint=fingerprint,
-                request_id=obs.request_id,
-                correlation_id=obs.correlation_id,
                 effect=lambda: self.store.create_price(
                     tenant_id=tenant_id,
                     offer_id=offer_id,
@@ -1140,15 +1152,19 @@ class CommerceEngine:
 
         fingerprint = _payload_fingerprint(action, {})
         try:
-            created = self.idempotency.execute(
+            created = self._guarded_execute(
                 idempotency_key,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                resource_id=cart_id,
+                resource_tenant_id=effective_tenant,
+                claimed_tenant_id=claimed_tenant_id,
                 identity=subject_id,
                 tenant_id=tenant_id,
                 operation=action,
                 resource=None,
                 fingerprint=fingerprint,
-                request_id=obs.request_id,
-                correlation_id=obs.correlation_id,
                 effect=lambda: self.store.create_cart(
                     tenant_id=tenant_id,
                     buyer_identity_id=subject_id or "",
@@ -1421,18 +1437,28 @@ class CommerceEngine:
             )
 
         fingerprint = _payload_fingerprint(
-            action, {"cart_id": cart_id, "offer_id": offer_id, "quantity": quantity}
+            action,
+            {
+                "command": "add_cart_item",
+                "cart_id": cart_id,
+                "offer_id": offer_id,
+                "quantity": quantity,
+            },
         )
         try:
-            self.idempotency.execute(
+            self._guarded_execute(
                 idempotency_key,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                resource_id=cart_id,
+                resource_tenant_id=cart.tenant_id,
+                claimed_tenant_id=claimed_tenant_id,
                 identity=subject_id,
                 tenant_id=tenant_id,
                 operation=action,
                 resource=cart_id,
                 fingerprint=fingerprint,
-                request_id=obs.request_id,
-                correlation_id=obs.correlation_id,
                 effect=lambda: self.store.add_to_cart(
                     cart_id, offer_id, quantity=quantity, now=self.clock()
                 ),
@@ -1621,18 +1647,28 @@ class CommerceEngine:
             )
 
         fingerprint = _payload_fingerprint(
-            action, {"cart_id": cart_id, "offer_id": offer_id, "quantity": quantity}
+            action,
+            {
+                "command": "set_cart_line_quantity",
+                "cart_id": cart_id,
+                "offer_id": offer_id,
+                "quantity": quantity,
+            },
         )
         try:
-            self.idempotency.execute(
+            self._guarded_execute(
                 idempotency_key,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                resource_id=cart_id,
+                resource_tenant_id=cart.tenant_id,
+                claimed_tenant_id=claimed_tenant_id,
                 identity=subject_id,
                 tenant_id=tenant_id,
                 operation=action,
                 resource=cart_id,
                 fingerprint=fingerprint,
-                request_id=obs.request_id,
-                correlation_id=obs.correlation_id,
                 effect=lambda: self.store.set_cart_line_quantity(
                     cart_id, offer_id, quantity=quantity, now=self.clock()
                 ),
@@ -1797,18 +1833,23 @@ class CommerceEngine:
             )
 
         fingerprint = _payload_fingerprint(
-            action, {"cart_id": cart_id, "offer_id": offer_id}
+            action,
+            {"command": "remove_cart_line", "cart_id": cart_id, "offer_id": offer_id},
         )
         try:
-            self.idempotency.execute(
+            self._guarded_execute(
                 idempotency_key,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                resource_id=cart_id,
+                resource_tenant_id=cart.tenant_id,
+                claimed_tenant_id=claimed_tenant_id,
                 identity=subject_id,
                 tenant_id=tenant_id,
                 operation=action,
                 resource=cart_id,
                 fingerprint=fingerprint,
-                request_id=obs.request_id,
-                correlation_id=obs.correlation_id,
                 effect=lambda: self.store.remove_cart_line(
                     cart_id, offer_id, now=self.clock()
                 ),
@@ -1966,15 +2007,19 @@ class CommerceEngine:
 
         fingerprint = _payload_fingerprint(action, {"cart_id": cart_id})
         try:
-            created = self.idempotency.execute(
+            created = self._guarded_execute(
                 idempotency_key,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                resource_id=cart_id,
+                resource_tenant_id=cart.tenant_id,
+                claimed_tenant_id=claimed_tenant_id,
                 identity=subject_id,
                 tenant_id=tenant_id,
                 operation=action,
                 resource=cart_id,
                 fingerprint=fingerprint,
-                request_id=obs.request_id,
-                correlation_id=obs.correlation_id,
                 effect=lambda: self.store.checkout_cart(
                     cart_id,
                     buyer_identity_id=subject_id or "",
@@ -2230,15 +2275,19 @@ class CommerceEngine:
 
         fingerprint = _payload_fingerprint(action, {"order_id": order_id})
         try:
-            self.idempotency.execute(
+            self._guarded_execute(
                 idempotency_key,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                resource_id=order_id,
+                resource_tenant_id=order.tenant_id,
+                claimed_tenant_id=claimed_tenant_id,
                 identity=subject_id,
                 tenant_id=tenant_id,
                 operation=action,
                 resource=order_id,
                 fingerprint=fingerprint,
-                request_id=obs.request_id,
-                correlation_id=obs.correlation_id,
                 effect=lambda: self.store.set_payment_state(
                     order_id, "PAID", now=self.clock()
                 ),
@@ -2441,6 +2490,62 @@ class CommerceEngine:
         return (decided_obs, answer.subject_id, answer.tenant_id)
 
     # -------------------------------------------------------------- outcomes
+    def _guarded_execute(
+        self,
+        key: str | None,
+        *,
+        action: str,
+        obs: ObservabilityContext,
+        subject_id: str | None,
+        tenant_id: str | None,
+        resource_id: str | None,
+        resource_tenant_id: str | None,
+        claimed_tenant_id: str | None,
+        identity: str | None,
+        operation: str,
+        resource: str | None,
+        fingerprint: str,
+        effect: Callable[[], Any],
+    ) -> Any:
+        """Deliver one command to the IS-005 guard; its failure fails closed.
+
+        ``IdempotencyConflict``, ``DomainRefusal`` and ``KeyError`` pass
+        through to the caller's mapping — they are answers about the
+        command, not about the dependency. Anything else means the safety
+        dependency itself failed: the command is refused as
+        ``authorization_unavailable`` — audited, without a business effect
+        — exactly like a decision dependency that does not answer.
+        """
+        try:
+            return self.idempotency.execute(
+                key,
+                identity=identity,
+                tenant_id=tenant_id,
+                operation=operation,
+                resource=resource,
+                fingerprint=fingerprint,
+                request_id=obs.request_id,
+                correlation_id=obs.correlation_id,
+                effect=effect,
+            )
+        except (IdempotencyConflict, DomainRefusal, KeyError, AccessRefused):
+            raise
+        except Exception as exc:
+            raise self._refuse(
+                OwnDenyReason.AUTHORIZATION_UNAVAILABLE,
+                action=action,
+                obs=obs,
+                subject_id=subject_id,
+                tenant_id=tenant_id,
+                resource_id=resource_id,
+                resource_tenant_id=resource_tenant_id,
+                claimed_tenant_id=claimed_tenant_id,
+                details={
+                    "failing_dependency": "idempotency",
+                    "stated_error": type(exc).__name__,
+                },
+            )
+
     def _refuse(
         self,
         reason: str,
