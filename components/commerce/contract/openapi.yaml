@@ -1,0 +1,1573 @@
+openapi: 3.1.0
+info:
+  title: >-
+    SCS-002 Commerce — Commerce business logic (Stage 3)
+  version: 0.2.0
+  description: >-
+    Граница владельца коммерческих данных одной Platform Instance. Компонент
+    владеет tenant-scoped коммерческими данными и доказывает, что ALLOW от
+    IS-003 не является прямым доступом к данным: финальный контроль остаётся
+    на границе владельца. Каждый доступ проходит фиксированную цепочку
+    `ownership_boundary → authorization_decision → owned_data_operation`;
+    решение по умолчанию — DENY, отказ зависимости закрывает доступ.
+    Этап 3 (Issue #55, ADR-0013) публикует двенадцать операций: создание и
+    чтение товара (`commerce.products.create` / `commerce.products.read`),
+    определение предложения (`commerce.offers.create`), установку цены
+    (`commerce.prices.create`), открытие/чтение/изменение корзины
+    (`commerce.carts.create` / `commerce.carts.read` /
+    `commerce.carts.update`), checkout (`commerce.checkout.create`), чтение
+    заказа (`commerce.orders.read`) и фиксацию оплаты
+    (`commerce.orders.pay`). Товар принадлежит эффективному тенанту verified
+    identity и создаётся в состоянии `ACTIVE`; предложение определяется под
+    существующим товаром того же тенанта; цена дописывается в append-only
+    историю предложения; корзина принадлежит субъекту и меняется только его
+    командами; checkout проверяет выбранные предложения и их текущие цены,
+    создаёт заказ с неизменяемыми фактами покупки, расходует строки корзины
+    и ставит `PENDING_PAYMENT`; оплата движется только `PENDING_PAYMENT →
+    PAID`. Субъект достигает только своих корзин и заказов — чужие
+    отказываются причиной `buyer_mismatch` даже внутри того же тенанта.
+    Каждая команда изменения состояния защищена IS-005 (`Idempotency-Key`
+    обязателен): точный replay возвращает записанный результат без второго
+    эффекта, изменённый binding отказывается. Checkout — бизнес-команда, а
+    не сущность: персистентного Checkout не существует. Payment —
+    изменяемое коммерческое состояние/результат, связанное с Order и
+    принадлежащее Commerce: Payment Service, провайдер и gateway-имитация
+    отсутствуют. Отказы используют утверждённый конверт SCS-002:
+    `error.code` / `error.message` / `error.details` плюс `request_id` /
+    `correlation_id` верхнего уровня; стабильная внутренняя причина
+    сохраняется в `error.details.reason`.
+servers:
+  - url: /api/v1/commerce
+    description: Commerce API base path of one Platform Instance
+paths:
+  /products:
+    post:
+      summary: Create one owned Product (commerce.products.create)
+      description: >-
+        `Authorization` несёт credential субъекта; он проверяется в IS-001
+        внутри решения IS-003 — сам компонент credentials не проверяет.
+        `X-Tenant-Id` — только cross-check, передаётся как есть и никогда не
+        выбирает эффективный тенант (LAW-16a): тенант товара выводится из
+        verified identity через опубликованную цепочку. `Idempotency-Key`
+        обязателен: команда доставляется через IS-005, точный replay
+        возвращает записанный товар без второго эффекта, а повтор ключа с
+        другим binding отказывается. Новый товар создаётся в состоянии
+        `ACTIVE`. Тело команды называет только товар; тенант и идентичность
+        в нём отсутствуют по построению.
+      operationId: createProduct
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: >-
+            обязателен для команды; отсутствие отказывается кодом
+            IDEMPOTENCY_KEY_REQUIRED
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductCreate"
+      responses:
+        "201":
+          description: >-
+            товар создан цепочкой контроля; возвращается представление товара
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        "400":
+          description: >-
+            команда без ключа идемпотентности (код IDEMPOTENCY_KEY_REQUIRED);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            ключ уже использован с другим binding (код IDEMPOTENCY_CONFLICT,
+            причина `idempotency_conflict`); второй эффект не создан; отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            payload не проходит правила команды (код VALIDATION_ERROR,
+            причина `validation_error`) либо запрос не читается опубликованной
+            схемой (код INVALID_REQUEST, причина `malformed_request`); отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /products/{product_id}:
+    get:
+      summary: Read one owned Product (commerce.products.read)
+      description: >-
+        `Authorization` несёт credential субъекта; он проверяется в IS-001
+        внутри решения IS-003 — сам компонент credentials не проверяет.
+        `X-Tenant-Id` — только cross-check, передаётся как есть и никогда не
+        выбирает эффективный тенант (LAW-16a). Товар возвращается только
+        после полной цепочки контроля; любой иной исход — отказ в утверждённом
+        конверте со стабильным кодом, записанный в аудит с request_id и
+        correlation_id.
+      operationId: readProduct
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: product_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            доступ разрешён цепочкой контроля; возвращается представление товара
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`) либо запись принадлежит другому компоненту
+            (owner_mismatch); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            товар неизвестен этому владельцу (код NOT_FOUND,
+            product_unknown); решение у власти не запрашивается; отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /offers:
+    post:
+      summary: Define one Offer of a Product (commerce.offers.create)
+      description: >-
+        Родительский товар должен существовать здесь и принадлежать
+        эффективному тенанту verified identity; отсутствующий и чужой
+        родитель — одинаково `product_unknown`. Новое предложение создаётся в
+        состоянии `ACTIVE` и принадлежит тенанту товара по построению.
+        `X-Tenant-Id` — только cross-check (LAW-16a). `Idempotency-Key`
+        обязателен: команда доставляется через IS-005, точный replay
+        возвращает записанное предложение без второго эффекта, повтор ключа с
+        другим binding отказывается.
+      operationId: createOffer
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: >-
+            обязателен для команды; отсутствие отказывается кодом
+            IDEMPOTENCY_KEY_REQUIRED
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OfferCreate"
+      responses:
+        "201":
+          description: >-
+            предложение определено цепочкой контроля; возвращается представление
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Offer"
+        "400":
+          description: >-
+            команда без ключа идемпотентности (код IDEMPOTENCY_KEY_REQUIRED);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            родительский товар неизвестен или принадлежит другому тенанту (код
+            NOT_FOUND, product_unknown); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            ключ уже использован с другим binding (код IDEMPOTENCY_CONFLICT,
+            причина `idempotency_conflict`); второй эффект не создан; отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            payload не проходит правила команды (код VALIDATION_ERROR,
+            причина `validation_error`) либо запрос не читается опубликованной
+            схемой (код INVALID_REQUEST, причина `malformed_request`); отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /prices:
+    post:
+      summary: Set the current price of an Offer (commerce.prices.create)
+      description: >-
+        Родительское предложение должно существовать здесь и принадлежать
+        эффективному тенанту verified identity; отсутствующий и чужой
+        родитель — одинаково `offer_unknown`. Новая запись дописывается в
+        историю цен предложения: прошлые записи не затрагиваются, операции
+        изменения цены не существует. `X-Tenant-Id` — только cross-check
+        (LAW-16a). `Idempotency-Key` обязателен (IS-005).
+      operationId: createPrice
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: >-
+            обязателен для команды; отсутствие отказывается кодом
+            IDEMPOTENCY_KEY_REQUIRED
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PriceCreate"
+      responses:
+        "201":
+          description: >-
+            цена дописана цепочкой контроля; возвращается представление цены
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Price"
+        "400":
+          description: >-
+            команда без ключа идемпотентности (код IDEMPOTENCY_KEY_REQUIRED);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            родительское предложение неизвестно или принадлежит другому
+            тенанту (код NOT_FOUND, offer_unknown); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            ключ уже использован с другим binding (код IDEMPOTENCY_CONFLICT,
+            причина `idempotency_conflict`); второй эффект не создан; отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            payload не проходит правила команды (код VALIDATION_ERROR,
+            причина `validation_error`) либо запрос не читается опубликованной
+            схемой (код INVALID_REQUEST, причина `malformed_request`); отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /carts:
+    post:
+      summary: Open one Cart for the subject (commerce.carts.create)
+      description: >-
+        Команда не несёт тела: покупатель — verified subject, тенант —
+        эффективный тенант цепочки, поэтому субъект может открыть только свою
+        корзину. Новая корзина не содержит строк. `X-Tenant-Id` — только
+        cross-check (LAW-16a). `Idempotency-Key` обязателен (IS-005).
+      operationId: createCart
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: >-
+            обязателен для команды; отсутствие отказывается кодом
+            IDEMPOTENCY_KEY_REQUIRED
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "201":
+          description: >-
+            корзина открыта цепочкой контроля; возвращается представление
+            корзины без строк
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+        "400":
+          description: >-
+            команда без ключа идемпотентности (код IDEMPOTENCY_KEY_REQUIRED);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            ключ уже использован с другим binding (код IDEMPOTENCY_CONFLICT,
+            причина `idempotency_conflict`); второй эффект не создан; отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            запрос не читается опубликованной схемой (код INVALID_REQUEST,
+            причина `malformed_request`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /carts/{cart_id}:
+    get:
+      summary: Read one owned Cart (commerce.carts.read)
+      description: >-
+        Корзина возвращается только после полной цепочки контроля. Субъект
+        читает только свои корзины: корзина другого покупателя отказывается
+        причиной `buyer_mismatch` даже внутри того же тенанта. `X-Tenant-Id` —
+        только cross-check (LAW-16a).
+      operationId: readCart
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: cart_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            доступ разрешён цепочкой контроля; возвращается представление
+            корзины со строками
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY либо корзина принадлежит другому покупателю
+            (код AUTHORIZATION_DENIED; причина в `error.details.reason`);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            корзина неизвестна этому владельцу (код NOT_FOUND, cart_unknown);
+            решение у власти не запрашивается; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /carts/{cart_id}/items:
+    post:
+      summary: Add one offer to a Cart (commerce.carts.update)
+      description: >-
+        Корзина должна существовать здесь и принадлежать субъекту;
+        предложение должно существовать здесь и принадлежать тенанту
+        корзины — отсутствующее и чужое предложение одинаково
+        `offer_unknown`. Повторное добавление предложения увеличивает его
+        строку. `X-Tenant-Id` — только cross-check (LAW-16a).
+        `Idempotency-Key` обязателен (IS-005).
+      operationId: addCartItem
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: cart_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: >-
+            обязателен для команды; отсутствие отказывается кодом
+            IDEMPOTENCY_KEY_REQUIRED
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CartItemAdd"
+      responses:
+        "200":
+          description: >-
+            строка добавлена цепочкой контроля; возвращается представление
+            корзины
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+        "400":
+          description: >-
+            команда без ключа идемпотентности (код IDEMPOTENCY_KEY_REQUIRED);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY либо корзина принадлежит другому покупателю
+            (код AUTHORIZATION_DENIED; причина в `error.details.reason`);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            корзина неизвестна (cart_unknown) либо предложение неизвестно или
+            принадлежит другому тенанту (код NOT_FOUND, offer_unknown); отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            ключ уже использован с другим binding (код IDEMPOTENCY_CONFLICT,
+            причина `idempotency_conflict`); второй эффект не создан; отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            payload не проходит правила команды (код VALIDATION_ERROR,
+            причина `validation_error`) либо запрос не читается опубликованной
+            схемой (код INVALID_REQUEST, причина `malformed_request`); отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /carts/{cart_id}/items/{offer_id}/quantity:
+    post:
+      summary: Set the quantity of one cart line (commerce.carts.update)
+      description: >-
+        Корзина должна существовать здесь и принадлежать субъекту; строка
+        должна существовать — установка количества строки, которую не
+        добавляли, отказывается причиной `cart_line_unknown`, а не вставляет
+        строку. Количество абсолютное и положительное. `X-Tenant-Id` — только
+        cross-check (LAW-16a). `Idempotency-Key` обязателен (IS-005).
+      operationId: setCartItemQuantity
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: cart_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: offer_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: >-
+            обязателен для команды; отсутствие отказывается кодом
+            IDEMPOTENCY_KEY_REQUIRED
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CartItemQuantity"
+      responses:
+        "200":
+          description: >-
+            количество установлено цепочкой контроля; возвращается
+            представление корзины
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+        "400":
+          description: >-
+            команда без ключа идемпотентности (код IDEMPOTENCY_KEY_REQUIRED);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY либо корзина принадлежит другому покупателю
+            (код AUTHORIZATION_DENIED; причина в `error.details.reason`);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            корзина неизвестна (cart_unknown) либо строка для предложения
+            отсутствует (код NOT_FOUND, cart_line_unknown); отказ записан в
+            аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            ключ уже использован с другим binding (код IDEMPOTENCY_CONFLICT,
+            причина `idempotency_conflict`); второй эффект не создан; отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            payload не проходит правила команды (код VALIDATION_ERROR,
+            причина `validation_error`) либо запрос не читается опубликованной
+            схемой (код INVALID_REQUEST, причина `malformed_request`); отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /carts/{cart_id}/items/{offer_id}/remove:
+    post:
+      summary: Remove one offer from a Cart (commerce.carts.update)
+      description: >-
+        Корзина должна существовать здесь и принадлежать субъекту; строка
+        должна существовать — удаление строки, которую не добавляли,
+        отказывается причиной `cart_line_unknown`. `X-Tenant-Id` — только
+        cross-check (LAW-16a). `Idempotency-Key` обязателен (IS-005).
+      operationId: removeCartItem
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: cart_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: offer_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: >-
+            обязателен для команды; отсутствие отказывается кодом
+            IDEMPOTENCY_KEY_REQUIRED
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            строка удалена цепочкой контроля; возвращается представление
+            корзины
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+        "400":
+          description: >-
+            команда без ключа идемпотентности (код IDEMPOTENCY_KEY_REQUIRED);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY либо корзина принадлежит другому покупателю
+            (код AUTHORIZATION_DENIED; причина в `error.details.reason`);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            корзина неизвестна (cart_unknown) либо строка для предложения
+            отсутствует (код NOT_FOUND, cart_line_unknown); отказ записан в
+            аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            ключ уже использован с другим binding (код IDEMPOTENCY_CONFLICT,
+            причина `idempotency_conflict`); второй эффект не создан; отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            запрос не читается опубликованной схемой (код INVALID_REQUEST,
+            причина `malformed_request`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /checkout:
+    post:
+      summary: Convert one owned Cart into an Order (commerce.checkout.create)
+      description: >-
+        Checkout — бизнес-команда, а не сущность: персистентного Checkout не
+        существует. Корзина должна существовать здесь и принадлежать
+        субъекту; команда проверяет выбранные предложения и их текущие цены,
+        создаёт заказ с неизменяемыми фактами покупки и снепшотами цен,
+        расходует строки корзины и ставит начальное состояние
+        `PENDING_PAYMENT`. Пустая корзина отказывается причиной `cart_empty`;
+        предложение без текущей цены — причиной `price_unknown`.
+        Параллельные checkout одной корзины сериализуются в доменной
+        критической секции корзины: второй отказывается. `X-Tenant-Id` —
+        только cross-check (LAW-16a). `Idempotency-Key` обязателен (IS-005):
+        точный replay возвращает записанный заказ без второго заказа.
+      operationId: checkout
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: >-
+            обязателен для команды; отсутствие отказывается кодом
+            IDEMPOTENCY_KEY_REQUIRED
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckoutCreate"
+      responses:
+        "201":
+          description: >-
+            заказ создан цепочкой контроля; возвращается представление заказа
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          description: >-
+            команда без ключа идемпотентности (код IDEMPOTENCY_KEY_REQUIRED);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY либо корзина принадлежит другому покупателю
+            (код AUTHORIZATION_DENIED; причина в `error.details.reason`);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            корзина неизвестна (cart_unknown), предложение исчезло или
+            принадлежит другому тенанту (offer_unknown) либо у предложения
+            нет текущей цены (код NOT_FOUND, price_unknown); отказ записан в
+            аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            корзина пуста (код INVALID_STATE_TRANSITION, причина
+            `cart_empty`) либо ключ уже использован с другим binding (код
+            IDEMPOTENCY_CONFLICT, причина `idempotency_conflict`); второй
+            эффект не создан; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            запрос не читается опубликованной схемой (код INVALID_REQUEST,
+            причина `malformed_request`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /orders/{order_id}:
+    get:
+      summary: Read one owned Order (commerce.orders.read)
+      description: >-
+        Заказ возвращается только после полной цепочки контроля. Субъект
+        читает только свои заказы: заказ другого покупателя отказывается
+        причиной `buyer_mismatch` даже внутри того же тенанта. Показанные
+        факты покупки неизменяемы; движется только payment state.
+        `X-Tenant-Id` — только cross-check (LAW-16a).
+      operationId: readOrder
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: order_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            доступ разрешён цепочкой контроля; возвращается представление
+            заказа с позициями
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY либо заказ принадлежит другому покупателю
+            (код AUTHORIZATION_DENIED; причина в `error.details.reason`);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            заказ неизвестен этому владельцу (код NOT_FOUND, order_unknown);
+            решение у власти не запрашивается; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /orders/{order_id}/pay:
+    post:
+      summary: Record one owned Order as paid (commerce.orders.pay)
+      description: >-
+        Заказ должен существовать здесь и принадлежать субъекту; оплаченным
+        может быть зафиксирован только заказ в состоянии `PENDING_PAYMENT` —
+        любой иной переход отказывается причиной
+        `invalid_state_transition`. Фиксация оплаты движет только изменяемое
+        состояние/результат и никогда не касается неизменяемых фактов
+        покупки. `X-Tenant-Id` — только cross-check (LAW-16a).
+        `Idempotency-Key` обязателен (IS-005).
+      operationId: payOrder
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: order_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: >-
+            обязателен для команды; отсутствие отказывается кодом
+            IDEMPOTENCY_KEY_REQUIRED
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            оплата зафиксирована цепочкой контроля; возвращается представление
+            заказа
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          description: >-
+            команда без ключа идемпотентности (код IDEMPOTENCY_KEY_REQUIRED);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY либо заказ принадлежит другому покупателю
+            (код AUTHORIZATION_DENIED; причина в `error.details.reason`);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            заказ неизвестен этому владельцу (код NOT_FOUND, order_unknown);
+            решение у власти не запрашивается; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            переход недопустим для текущего состояния (код
+            INVALID_STATE_TRANSITION, причина `invalid_state_transition`)
+            либо ключ уже использован с другим binding (код
+            IDEMPOTENCY_CONFLICT, причина `idempotency_conflict`); второй
+            эффект не создан; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            запрос не читается опубликованной схемой (код INVALID_REQUEST,
+            причина `malformed_request`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /health:
+    servers:
+      - url: /
+        description: Instance root for health and readiness
+    get:
+      responses:
+        "200":
+          description: liveness
+  /ready:
+    servers:
+      - url: /
+        description: Instance root for health and readiness
+    get:
+      responses:
+        "200":
+          description: readiness
+components:
+  securitySchemes:
+    subjectAuth:
+      type: http
+      scheme: bearer
+      description: >-
+        credential субъекта; проверяется в IS-001 внутри решения IS-003, а не
+        этим компонентом
+  schemas:
+    Product:
+      type: object
+      additionalProperties: false
+      required: [product_id, name, description, status, created_by, created_at, updated_at]
+      properties:
+        product_id:
+          type: string
+          description: непрозрачный идентификатор товара
+        name:
+          type: string
+          description: название товара (непустое, не длиннее 512 символов)
+        description:
+          type: string
+          description: описание товара (не длиннее 4096 символов)
+        status:
+          type: string
+          enum: [ACTIVE]
+          description: >-
+            жизненный цикл товара этого среза — ровно одно состояние;
+            переходы каталога появятся в следующих срезах
+        created_by:
+          type: string
+          description: непрозрачная ссылка на verified identity, создавшую товар
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    ProductCreate:
+      type: object
+      additionalProperties: false
+      required: [name, description]
+      properties:
+        name:
+          type: string
+          description: непустое название не длиннее 512 символов
+        description:
+          type: string
+          description: описание не длиннее 4096 символов
+    Offer:
+      type: object
+      additionalProperties: false
+      required: [offer_id, product_id, name, status, created_by, created_at, updated_at]
+      properties:
+        offer_id:
+          type: string
+          description: непрозрачный идентификатор предложения
+        product_id:
+          type: string
+          description: товар, предложением которого является Offer (тот же тенант)
+        name:
+          type: string
+          description: название предложения (непустое, не длиннее 512 символов)
+        status:
+          type: string
+          enum: [ACTIVE]
+          description: жизненный цикл предложения этого среза — ровно одно состояние
+        created_by:
+          type: string
+          description: непрозрачная ссылка на verified identity, определившую предложение
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    OfferCreate:
+      type: object
+      additionalProperties: false
+      required: [product_id, name]
+      properties:
+        product_id:
+          type: string
+          description: существующий товар эффективного тенанта
+        name:
+          type: string
+          description: непустое название не длиннее 512 символов
+    Price:
+      type: object
+      additionalProperties: false
+      required: [price_id, offer_id, amount, currency, created_at]
+      properties:
+        price_id:
+          type: string
+          description: непрозрачный идентификатор цены
+        offer_id:
+          type: string
+          description: предложение, цену которого фиксирует запись (тот же тенант)
+        amount:
+          type: integer
+          minimum: 0
+          description: сумма в минорных единицах валюты; деньги — не float
+        currency:
+          type: string
+          description: код валюты (непустой, не длиннее 3 символов)
+        created_at:
+          type: string
+    PriceCreate:
+      type: object
+      additionalProperties: false
+      required: [offer_id, amount, currency]
+      properties:
+        offer_id:
+          type: string
+          description: существующее предложение эффективного тенанта
+        amount:
+          type: integer
+          minimum: 0
+          description: неотрицательная сумма в минорных единицах валюты
+        currency:
+          type: string
+          description: непустой код валюты не длиннее 3 символов
+    Cart:
+      type: object
+      additionalProperties: false
+      required: [cart_id, buyer_identity_id, created_at, updated_at, items]
+      properties:
+        cart_id:
+          type: string
+          description: непрозрачный идентификатор корзины
+        buyer_identity_id:
+          type: string
+          description: непрозрачная ссылка на verified subject — владельца корзины
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        items:
+          type: array
+          description: выбранные предложения в детерминированном порядке; пустая корзина — пустой список
+          items:
+            $ref: "#/components/schemas/CartLine"
+    CartLine:
+      type: object
+      additionalProperties: false
+      required: [offer_id, product_id, quantity]
+      properties:
+        offer_id:
+          type: string
+          description: выбранное предложение
+        product_id:
+          type: string
+          description: товар выбранного предложения
+        quantity:
+          type: integer
+          minimum: 1
+          description: положительное количество единиц
+    CartItemAdd:
+      type: object
+      additionalProperties: false
+      required: [offer_id, quantity]
+      properties:
+        offer_id:
+          type: string
+          description: предложение тенанта корзины
+        quantity:
+          type: integer
+          minimum: 1
+          description: положительное количество единиц
+    CartItemQuantity:
+      type: object
+      additionalProperties: false
+      required: [quantity]
+      properties:
+        quantity:
+          type: integer
+          minimum: 1
+          description: абсолютное положительное количество единиц
+    CheckoutCreate:
+      type: object
+      additionalProperties: false
+      required: [cart_id]
+      properties:
+        cart_id:
+          type: string
+          description: собственная корзина субъекта, преобразуемая в заказ
+    Order:
+      type: object
+      additionalProperties: false
+      required: [order_id, buyer_identity_id, payment_state, created_at, updated_at, lines]
+      properties:
+        order_id:
+          type: string
+          description: непрозрачный идентификатор заказа
+        buyer_identity_id:
+          type: string
+          description: непрозрачная ссылка на verified subject — покупателя
+        payment_state:
+          type: string
+          enum: [PENDING_PAYMENT, PAID]
+          description: изменяемое коммерческое состояние/результат оплаты заказа
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        lines:
+          type: array
+          description: купленные позиции в детерминированном порядке
+          items:
+            $ref: "#/components/schemas/OrderLine"
+    OrderLine:
+      type: object
+      additionalProperties: false
+      required: [order_line_id, offer_id, product_id, amount, currency, quantity]
+      properties:
+        order_line_id:
+          type: string
+          description: непрозрачный идентификатор позиции
+        offer_id:
+          type: string
+          description: купленное предложение
+        product_id:
+          type: string
+          description: товар купленного предложения
+        amount:
+          type: integer
+          minimum: 0
+          description: неизменяемый снепшот цены в минорных единицах
+        currency:
+          type: string
+          description: неизменяемый снепшот кода валюты
+        quantity:
+          type: integer
+          minimum: 1
+          description: сколько единиц куплено по снепшот-цене
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error, request_id, correlation_id]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              type: string
+              enum: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, NOT_FOUND, INVALID_REQUEST, VALIDATION_ERROR, INVALID_STATE_TRANSITION, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, DEPENDENCY_UNAVAILABLE]
+              description: минимальный опубликованный код отказа SCS-002
+            message:
+              type: string
+              description: стабильное человекочитаемое сообщение кода
+            details:
+              type: object
+              additionalProperties: true
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  description: стабильная внутренняя причина отказа
+        request_id:
+          type: string
+          description: идентификатор запроса записи аудита
+        correlation_id:
+          type: string
+          description: идентификатор корреляции записи аудита
