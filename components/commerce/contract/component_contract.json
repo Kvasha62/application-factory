@@ -1,0 +1,456 @@
+{
+  "component_id": "commerce",
+  "scs_id": "SCS-002",
+  "component_version": "0.1.0",
+  "class": "business_system",
+  "maturity_level": "level_0_modular_monolith",
+  "task": "SCS-002 Commerce MVP — Stage 2 skeleton (Issue #55, ADR-0013): component identity, Component Contract and OpenAPI, domain/storage foundation for Product → Offer → Price, Cart, Order/OrderLine and payment state, and the enforcement-chain plumbing. Live operations: create and read one owned Product.",
+  "commerce_boundary": {
+    "role": "Data Ownership / Commerce Boundary",
+    "invariants": [
+      "C-001 every product, offer, price, cart, cart line, order and order line has exactly one data owner",
+      "C-002 a subject of Tenant A never reaches Commerce data of Tenant B, including by changing an identifier or a caller-supplied tenant_id",
+      "C-003 a request with an IS-003 DENY never reaches the owned-data operation",
+      "C-004 an authorization dependency failure or a malformed/non-authoritative dependency answer fails closed to DENY",
+      "C-005 the effective tenant comes from IS-001; this component creates no second tenant-context mechanism",
+      "C-006 the public surface provides no access path that bypasses the Commerce enforcement boundary",
+      "C-007 security-sensitive refusals are auditable and observable with request/correlation and actor/tenant context where applicable",
+      "C-008 the internals of this component are not a consumer contract: a consumer receives the published client and values only",
+      "C-009 the catalog boundary is Product → Offer → Price: no Product.price exists, a price belongs to a sellable proposition, and no price books, tiers or pricing engines exist",
+      "C-010 every offer belongs to exactly one product of the same Tenant and every price to exactly one offer of the same Tenant: no orphan and no cross-tenant catalog record exists",
+      "C-011 the purchase facts of an Order (buyer, tenant, bought positions, captured prices) are immutable after creation; an OrderLine price snapshot is a copied value and is never recomputed from the current catalog",
+      "C-012 the payment state is the mutable Commerce-owned state/result bound to an Order; a payment-state change never touches the immutable purchase facts; no Payment Service, no payment provider and no gateway imitation exists",
+      "C-013 a buyer is an opaque buyer_identity_id: no customer, user or profile service exists and no identity internals are copied",
+      "C-014 Commerce reaches Learning — and Learning reaches Commerce — only through published contracts: no database, table or internal-module access in either direction, and no automatic paid-order → learning-access exists"
+    ],
+    "enforcement_chain": [
+      "ownership_boundary",
+      "authorization_decision",
+      "owned_data_operation"
+    ],
+    "product_model": {
+      "product": [
+        "product_id",
+        "tenant_id",
+        "name",
+        "description",
+        "status",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "published_view": [
+        "product_id",
+        "name",
+        "description",
+        "status",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "note": "A Product is what can be offered for sale in one Tenant (ADR-0013). tenant_id and owner_component are store facts of the record and are not published in the view. created_by is the opaque reference to the verified identity that created the product — Identity owns the profile, Commerce stores and never interprets the reference. The model is domain-agnostic: no Learning entities, no foreign keys into another schema, and no price — the price of a sellable proposition lives on the Price record, never here."
+    }
+  },
+  "api": {
+    "openapi": "components/commerce/contract/openapi.yaml",
+    "servers": "/api/v1/commerce",
+    "base_path": "/api/v1/commerce",
+    "supported_majors": [
+      "v1"
+    ],
+    "operations": [
+      {
+        "method": "POST",
+        "path": "/api/v1/commerce/products",
+        "openapi_path": "/products",
+        "purpose": "create one owned Product in the effective tenant of the verified identity; a new Product is created ACTIVE",
+        "authorization_operation": "commerce.products.create",
+        "idempotency": "required",
+        "idempotency_note": "State-changing command guarded by IS-005: the Idempotency-Key header is mandatory, an exact replay returns the recorded result without a second effect, and a changed binding (payload, identity, tenant, operation) is refused as IDEMPOTENCY_CONFLICT. The command has no pre-existing target: the IS-005 resource binding is empty, and the tenant binding is the effective tenant of the chain."
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/commerce/products/{product_id}",
+        "openapi_path": "/products/{product_id}",
+        "purpose": "serve one owned Product after the enforcement chain allowed the access",
+        "authorization_operation": "commerce.products.read",
+        "idempotency": "natural",
+        "idempotency_note": "A read changes no state beyond the append-only audit journal."
+      }
+    ],
+    "enforcement_model": {
+      "default_outcome": "deny",
+      "enforcement_chain": [
+        "ownership_boundary",
+        "authorization_decision",
+        "owned_data_operation"
+      ],
+      "owned_data_operations": [
+        "create_product",
+        "serve_product"
+      ],
+      "own_deny_reasons": [
+        "product_unknown",
+        "owner_mismatch",
+        "authorization_unavailable",
+        "idempotency_key_required",
+        "idempotency_conflict",
+        "validation_error"
+      ],
+      "passed_through_denials": "the published deny reasons of IS-003, unchanged",
+      "nonauthoritative_answers": "an answer outside the published decision model of IS-003 — including an ALLOW with a reason other than permitted and a DENY with an unknown reason — fails closed as authorization_unavailable",
+      "product_states": [
+        "ACTIVE"
+      ],
+      "product_catalog": {
+        "boundary": "Product → Offer → Price: an Offer links exactly one Product to a sellable proposition within the same Tenant, and a Price is a first-class price concept attached to the sellable proposition; collapsing the boundary to Product.price is not allowed",
+        "product": "a new Product is created ACTIVE in the effective tenant of the verified identity; catalog lifecycle transitions arrive in a later slice",
+        "offer_and_price": "Offer and Price models and their store invariants (same-tenant parentage, no orphans, append-only price history) exist in this slice; their commands arrive in a later slice and are undeclared surface until then",
+        "cart_and_order": "Cart, Order and OrderLine models, the price-snapshot shape and the payment-state vocabulary (PENDING_PAYMENT → PAID) exist in this slice; cart, checkout, order and payment-state commands arrive in later slices and are undeclared surface until then",
+        "no_checkout_entity": "Checkout is a business command, not an entity: no persistent Checkout record exists and none is planned without a proven need and a separate decision",
+        "no_payment_service": "payment is the mutable commercial state/result bound to an Order and owned by Commerce; no Payment Service, no provider integration and no gateway imitation exist"
+      }
+    },
+    "refusal_semantics": {
+      "principle": "a refusal is data with a stable machine-readable code and reason, audited with request_id and correlation_id; nothing about this surface can be mistaken for a served product",
+      "envelope": {
+        "shape": {
+          "error": {
+            "code": "one of the published codes",
+            "message": "the stable message of the code",
+            "details": {
+              "reason": "the stable internal refusal reason"
+            }
+          },
+          "request_id": "the request_id the refusal was audited with",
+          "correlation_id": "the correlation_id the refusal was audited with"
+        },
+        "codes": {
+          "AUTHENTICATION_REQUIRED": {
+            "status": 401,
+            "message": "Subject authentication is required.",
+            "reasons": "missing_identity, invalid_identity, unknown_identity"
+          },
+          "AUTHORIZATION_DENIED": {
+            "status": 403,
+            "message": "Operation is not permitted.",
+            "reasons": "tenant_mismatch, tenant_unknown, platform_ownership_mismatch, resource_tenant_unknown, resource_tenant_mismatch, tenant_not_active, tenant_suspended, tenant_deletion_requested, tenant_deleted, permission_not_granted, authority_unavailable, missing_tenant_context, owner_mismatch"
+          },
+          "NOT_FOUND": {
+            "status": 404,
+            "message": "Requested resource was not found.",
+            "reasons": "product_unknown"
+          },
+          "INVALID_REQUEST": {
+            "status": 422,
+            "message": "Request does not match the published contract.",
+            "reasons": "malformed_request",
+            "note": "defence in depth: the schema handler refuses a request the published contract cannot read (e.g. a command body with a missing field, a wrong type or a declared-unknown field) before any handler runs; the stable reason is malformed_request"
+          },
+          "IDEMPOTENCY_KEY_REQUIRED": {
+            "status": 400,
+            "message": "An Idempotency-Key header is required for this operation.",
+            "reasons": "idempotency_key_required"
+          },
+          "IDEMPOTENCY_CONFLICT": {
+            "status": 409,
+            "message": "The Idempotency-Key was already used with a different request.",
+            "reasons": "idempotency_conflict"
+          },
+          "DEPENDENCY_UNAVAILABLE": {
+            "status": 503,
+            "message": "Authorization dependency is unavailable.",
+            "reasons": "authorization_unavailable"
+          },
+          "VALIDATION_ERROR": {
+            "status": 422,
+            "message": "Request payload is not valid.",
+            "reasons": "validation_error"
+          }
+        },
+        "note": "The HTTP status selects the code; the stable internal reason is preserved in error.details.reason; request_id and correlation_id match the audit record of the refusal."
+      },
+      "refused": {
+        "400": "idempotency_key_required",
+        "401": "missing_identity, invalid_identity, unknown_identity",
+        "403": "tenant_mismatch, tenant_unknown, platform_ownership_mismatch, resource_tenant_unknown, resource_tenant_mismatch, tenant_not_active, tenant_suspended, tenant_deletion_requested, tenant_deleted, permission_not_granted, authority_unavailable, missing_tenant_context, owner_mismatch",
+        "404": "product_unknown",
+        "409": "idempotency_conflict",
+        "503": "authorization_unavailable",
+        "422": "validation_error"
+      },
+      "served": "HTTP 200/201 with the published product representation — produced only by the owned-data operation at the end of the enforcement chain"
+    },
+    "consumer_surface": {
+      "module": "commerce_service.reader",
+      "published_as": "CommerceClient",
+      "published_by": "commerce_service.deployment.CommerceDeployment.publish",
+      "transport": "commerce_service.transport.open_channel + commerce_service.transport.call_contract — the published HTTP contract executed in process over an opaque channel handle (ARCHITECTURE.md §1.1 interaction mode API, Level 0)",
+      "transport_handles": {
+        "open": "commerce_service.transport.open_channel",
+        "call": "commerce_service.transport.call_contract",
+        "close": "commerce_service.transport.close_channel"
+      },
+      "consumer_state": [
+        "opaque contract channel handle (str)"
+      ],
+      "operations": [
+        "create_product",
+        "read_product"
+      ],
+      "returns": [
+        "commerce_service.contracts.ProductView"
+      ],
+      "errors": [
+        "commerce_service.errors.AccessRefused — the access did not happen; the reason is one of the published refusal reasons (400/401/403/404/409/422/503), carried in error.details.reason, with the request_id/correlation_id of the refusal",
+        "commerce_service.errors.ContractViolation — the contract transport failed or answered outside its published shape (including any non-envelope shape); a consumer must fail closed"
+      ],
+      "guarantees": [
+        "values only: no commerce store, audit journal, engine reference or deployment is reachable through the published surface",
+        "the published client holds no callable and no credential: its state is one channel handle, so walking the client and its class reaches neither the component's ASGI application nor its internals",
+        "the subject credential is supplied per access and verified by IS-001 inside the IS-003 decision: a consumer cannot assert who the subject is",
+        "the ASGI application is never handed out: it stays behind the provider-side channel table, and a channel is revoked when the consumer drops the client",
+        "importing the published module binds no reference to commerce_service.transport — its namespace holds no module object, no channel table and no transport type",
+        "an unknown or revoked channel handle raises ContractViolation, so there is no permissive fallback and a handle cannot be guessed",
+        "every access runs through the same routing, enforcement chain and audit code that serves an HTTP request",
+        "there is no product listing, bulk export, search, pagination or raw-store operation: the published create command and the single read are the only access paths, and both are enforced",
+        "the create command owns no second idempotency mechanism: it is delivered to the IS-005 guard, which decides between executing, replaying and refusing a conflict"
+      ],
+      "composition_root_only": [
+        "commerce_service.deployment (CommerceDeployment: engine, store, configuration)",
+        "the contract application itself (the ASGI application) — a consumer component must not own or re-export it",
+        "the contract channel table commerce_service.transport._CHANNELS — a handle-to-application mapping owned by the component"
+      ],
+      "internal_modules": [
+        "commerce_service.engine",
+        "commerce_service.store",
+        "commerce_service.models",
+        "commerce_service.config",
+        "commerce_service.api",
+        "commerce_service.deployment",
+        "commerce_service.transport",
+        "commerce_service.ports",
+        "commerce_service.adapters"
+      ],
+      "note": "The deployment object is composition-internal: it assembles engine, store and contract application for the composition root and for this component's own tests and is never handed to a consumer. This component composes no other component and publishes no module-level demo application: a demo of a data owner needs a composed Platform Instance with a live decision dependency, and composing one is the job of a composition root."
+    },
+    "consumes": [
+      {
+        "component_id": "authorization",
+        "contract": "components/authorization/contract/component_contract.json",
+        "mechanism": "contract client over the published API of authorization, executed in process at Level 0",
+        "consumer_surface": "authorization_service.reader.AuthorizationClient",
+        "local_port": "commerce_service.ports.AuthorizationPort",
+        "local_adapter": "commerce_service.adapters.AuthorizationDecisionAdapter",
+        "local_answer_type": "commerce_service.consumed.DecisionAnswer",
+        "credential_source": "deployment secret resolved by the composition root: the service identity of this component",
+        "demo_credential": "authz-svc-token-commerce",
+        "operations": [
+          "decide"
+        ],
+        "note": "The access decision is read per access and never cached. The resource's owning Tenant stated in the question comes from this component's own store — or, for the create command whose target does not exist yet, from the effective tenant of the verified identity — never from a caller claim (LAW-16a).",
+        "dependency_isolation": "No module of commerce imports authorization_service, identity_service or tenant_authority: the published client is adapted at the composition boundary and only values owned by this component reach the enforcement logic (ARCHITECTURE.md 1.1, 6.1, LAW-04)."
+      },
+      {
+        "component_id": "identity",
+        "contract": "components/identity/contract/component_contract.json",
+        "mechanism": "contract client over the published API of identity, executed in process at Level 0",
+        "consumer_surface": "identity_service.reader.IdentityContextClient",
+        "local_port": "commerce_service.ports.TenantContextPort",
+        "local_adapter": "commerce_service.adapters.TenantContextAdapter",
+        "local_answer_type": "commerce_service.consumed.TenantContextAnswer",
+        "credential_source": "the subject credential presented on the published surface; the adapter adds nothing",
+        "operations": [
+          "resolve_context"
+        ],
+        "note": "Consumed by exactly one command — create-product — whose target does not exist yet, so the resource Tenant of its authorization question can only be the effective tenant of the verified identity (the chain Identity -> effective tenant -> Authorization -> Commerce ownership boundary). The adapter is structural over the published client, like its sibling for IS-003; the composition root wires it, and no module of commerce imports identity_service. No second identity or tenant mechanism exists: the port carries the answer of IS-001 and nothing else."
+      }
+    ]
+  },
+  "events": {
+    "envelope": "CloudEvents",
+    "status": "declared_only",
+    "published": [],
+    "consumed": [],
+    "note": "SCS-002 Stage 2 publishes no inter-component events and does not simulate a broker. The access audit journal is owned data, not a public event contract."
+  },
+  "data_export_cdc": {
+    "status": "declared_only",
+    "version": null,
+    "compatibility_policy": null,
+    "streams": [],
+    "note": "No CDC or bulk export stream is implemented in this slice. A bulk path would be a bypass risk for the enforcement boundary and is deliberately out of this slice."
+  },
+  "ui": {
+    "kind": "declared_only",
+    "embedding": "not_applicable",
+    "note": "Class A Business System / SCS; UI is out of this Level 0 slice. Every published operation is proven at the API boundary."
+  },
+  "configuration_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "platform_id"
+    ],
+    "properties": {
+      "platform_id": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Identifier of the Platform Instance this data owner serves."
+      },
+      "environment": {
+        "type": "string",
+        "default": "standalone"
+      }
+    }
+  },
+  "data_ownership": {
+    "owner": "commerce",
+    "logical_schema": "commerce",
+    "datasets": [
+      {
+        "name": "products",
+        "scope": "tenant-scoped",
+        "note": "Every product has exactly one data owner and belongs to exactly one Tenant; lifecycle is exactly ACTIVE; the Tenant comes from the verified identity through the published chain, never from a caller claim. Domain-agnostic: no Learning internals and no price — the price of a sellable proposition lives on the Price record."
+      },
+      {
+        "name": "offers",
+        "scope": "tenant-scoped",
+        "note": "Every offer links exactly one Product to a sellable proposition within the same Tenant; created only under an existing Product of that Tenant. Lifecycle is exactly ACTIVE."
+      },
+      {
+        "name": "prices",
+        "scope": "tenant-scoped",
+        "note": "Every price belongs to exactly one Offer of the same Tenant; amount is in minor currency units with an ISO currency code. Prices are append-only history: a new registration never rewrites a past record."
+      },
+      {
+        "name": "carts",
+        "scope": "tenant-scoped",
+        "note": "Mutable pre-order state of one buyer (opaque buyer_identity_id) within one Tenant; not a commercial fact — it may change, be emptied or be abandoned without commercial consequence."
+      },
+      {
+        "name": "cart_lines",
+        "scope": "tenant-scoped",
+        "note": "One selected Offer with a positive quantity per (Cart, Offer); the Cart and the Offer belong to the same Tenant as the line."
+      },
+      {
+        "name": "orders",
+        "scope": "tenant-scoped",
+        "note": "The central commercial fact: what a specific buyer bought in a specific tenant. The purchase facts (buyer, tenant, bought positions) are immutable after creation; the payment state bound to the Order is the mutable lifecycle/result and changes only through the payment-state operation."
+      },
+      {
+        "name": "order_lines",
+        "scope": "tenant-scoped",
+        "note": "One bought position per line with an immutable price snapshot at order time (copied amount/currency plus the Product/Offer references); never recomputed from the current catalog; no update operation exists."
+      },
+      {
+        "name": "payment_state",
+        "scope": "tenant-scoped",
+        "note": "The mutable commercial state/result of payment of an Order (PENDING_PAYMENT → PAID), owned by Commerce. Stored as fields of the Order in this slice (ADR-0013 permits either storage form); a payment-state change never touches the immutable purchase facts. No Payment Service, no provider integration and no gateway imitation exist."
+      },
+      {
+        "name": "access_audit",
+        "scope": "platform-scoped",
+        "note": "Append-only journal of every access attempt — served or refused — with request/correlation and actor/tenant context where known."
+      }
+    ],
+    "notes": [
+      "This component owns no identity, no permission grant, no tenant registry and no tenant state: those belong to identity, authorization and tenant_authority and are read through their published contracts.",
+      "The Product → Offer → Price parentage is registered, never declared by a caller: the store refuses orphan and cross-tenant children, duplicate identifiers and invalid content at registration.",
+      "Checkout is a business command, not an entity: no persistent Checkout record exists in any dataset."
+    ]
+  },
+  "audit": {
+    "journal": "internal append-only journal owned by commerce",
+    "access_fields": [
+      "action",
+      "decision",
+      "reason",
+      "subject_id",
+      "tenant_id",
+      "resource_id",
+      "resource_tenant_id",
+      "claimed_tenant_id",
+      "platform_id",
+      "request_id",
+      "correlation_id",
+      "timestamp"
+    ],
+    "denials_audited": true,
+    "allowed_accesses_audited": true,
+    "refusal_audit_scope": "every refusal of the published contract, including a request rejected by the contract schema before any handler runs and a refusal produced because the decision dependency did not answer; the record carries request_id and correlation_id of the caller",
+    "note": "Audit is owned data, not a public event contract, and is not readable through the published surface."
+  },
+  "observability": {
+    "context": [
+      "timestamp",
+      "environment",
+      "platform_id",
+      "component_id",
+      "component_version",
+      "tenant_id",
+      "subject_id",
+      "request_id",
+      "trace_id",
+      "correlation_id"
+    ],
+    "saga_id": "absent — this component runs no inter-component sagas",
+    "health": "/health",
+    "readiness": "/ready"
+  },
+  "authn": {
+    "service": "not_applicable_on_public_surface",
+    "human": "delegated_to_identity",
+    "note": "The subject credential presented on the public surface is verified by IS-001 inside the IS-003 decision; this component verifies no credential itself. When asking IS-003, this component authenticates with its own service identity (demo: authz-svc-token-commerce)."
+  },
+  "authz": {
+    "enforcement_boundary": "resource_owner",
+    "decision_source": "authorization",
+    "decision_source_component": "IS-003 Authorization Boundary / Permission Authority",
+    "default_decision": "DENY",
+    "enforcement_point": "commerce",
+    "tenant_context_source": "identity",
+    "operations_guarded": [
+      "commerce.products.create",
+      "commerce.products.read"
+    ],
+    "authentication_does_not_imply_authorization": true,
+    "note": "ALLOW from IS-003 is not direct data access: the data owner remains the final enforcement boundary (ARCHITECTURE.md §6.2). A decision that cannot be obtained is a denial. The two operations of this slice each carry their own grant — no role or policy logic exists inside Commerce. The create command has no pre-existing target, so its authorization question names the effective tenant of the verified identity resolved through IS-001; no second identity, tenant, authorization or idempotency mechanism is introduced."
+  },
+  "compatibility_policy": {
+    "api": "additive-minor-breaking-major",
+    "events": "tolerant-reader",
+    "supported_api_majors": 1,
+    "reason_codes": "adding a refusal reason is a minor change; removing or redefining one is a breaking change",
+    "enforcement_chain": "reordering or removing a step is a breaking change: the order is part of the published behaviour",
+    "product_model": "adding a field to the product representation is a minor change; changing the eight published fields is a breaking change",
+    "error_envelope": "the approved envelope shape is part of the contract; changing error/code/message/details/request_id/correlation_id is a breaking change",
+    "catalog_growth": "adding Offer, Price, Cart, Order and payment-state operations is additive: new operations, schemas, reasons and grants without changing any existing operation, reason or representation. The product lifecycle is exactly ACTIVE; adding product lifecycle states or transitions is a new architectural decision, not a silent change."
+  },
+  "dependencies": [
+    {
+      "component_id": "authorization",
+      "version_range": ">=0.1.0,<0.2.0",
+      "kind": "api",
+      "contract": "components/authorization/contract/component_contract.json",
+      "direction": "commerce -> authorization (read-only access decision)"
+    },
+    {
+      "component_id": "idempotency",
+      "version_range": ">=0.1.0,<0.2.0",
+      "kind": "internal-consumer-surface",
+      "contract": "components/idempotency/contract/component_contract.json",
+      "direction": "commerce -> idempotency (exactly-once delivery of the create-product command)",
+      "note": "SCS-002 implements no second idempotency mechanism: the create command identity (operation, payload fingerprint) is delivered to IS-005, which decides between executing, replaying and refusing a conflict."
+    },
+    {
+      "component_id": "identity",
+      "version_range": ">=0.3.0,<0.4.0",
+      "kind": "api",
+      "contract": "components/identity/contract/component_contract.json",
+      "direction": "commerce -> identity (tenant context of the verified subject for the create-product command)",
+      "note": "Consumed only because the create-product command has no pre-existing resource whose Tenant the store could state. The effective tenant still comes from IS-001 and from nowhere else; a caller-supplied tenant_id remains a cross-check (LAW-16a)."
+    }
+  ]
+}
