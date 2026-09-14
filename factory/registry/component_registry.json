@@ -1,0 +1,677 @@
+{
+  "$schema": "factory/registry/schema/component_registry.schema.json",
+  "registry_id": "application-factory-component-registry",
+  "registry_schema_version": "1.0.0",
+  "conventions": {
+    "canonical_source": "factory/registry/component_registry.json",
+    "identity": "component_id is the stable, unique, deterministic component identity; snake_case, never reused, never a floating selector",
+    "versioning": "public component version is explicit SemVer MAJOR.MINOR.PATCH (ARCHITECTURE.md §11); floating selectors (latest/current/default/stable) are never accepted",
+    "ownership": "owner records the accountable party; data_ownership.owner records the component that owns the data (ARCHITECTURE.md LAW-03). The registry owns no business data (ADR-0015 §4, §11)",
+    "artifacts": "ARCHITECTURE.md §11 requires id + version + digest for a supplied artifact. No deployable artifact is published at Level 0, so every entry records artifact_type=none, digest=null, pinned=false (ARCHITECTURE.md §30; CONFORMANCE_REVIEW_1.2.0 DOD-02)",
+    "lifecycle": "registry_state=registered records that the entry exists in the canonical registry. It certifies nothing: a registered component is not by that fact deployable or publishable (ARCHITECTURE.md §30)",
+    "dependencies": "declared component-to-component dependencies carry an explicit version range; discovery never uses internal imports or internal database access (ARCHITECTURE.md §18)"
+  },
+  "components": [
+    {
+      "component_id": "authorization",
+      "component_version": "0.1.0",
+      "class": "platform_service",
+      "maturity_level": "level_0_modular_monolith",
+      "scs_id": null,
+      "owner": "@Kvasha62",
+      "owner_source": ".github/CODEOWNERS",
+      "contracts": {
+        "component_contract": "components/authorization/contract/component_contract.json",
+        "openapi": "components/authorization/contract/openapi.yaml"
+      },
+      "data_ownership": {
+        "owner": "authorization",
+        "logical_schema": "authorization",
+        "data_scopes": [
+          "platform-scoped",
+          "tenant-scoped"
+        ],
+        "datasets": [
+          {
+            "name": "permission_grants",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "service_access",
+            "scope": "platform-scoped"
+          },
+          {
+            "name": "audit_events",
+            "scope": "platform-scoped"
+          }
+        ],
+        "source": "components/authorization/contract/component_contract.json#/data_ownership"
+      },
+      "dependencies": [
+        {
+          "component_id": "identity",
+          "version_range": ">=0.3.0,<0.4.0",
+          "kind": "api",
+          "contract": "components/identity/contract/component_contract.json"
+        },
+        {
+          "component_id": "tenant_authority",
+          "version_range": ">=0.1.0,<0.2.0",
+          "kind": "api",
+          "contract": "components/tenant_authority/contract/component_contract.json"
+        }
+      ],
+      "compatibility": {
+        "api_policy": "additive-minor-breaking-major",
+        "event_policy": "tolerant-reader",
+        "supported_api_majors": 1,
+        "breaking_change_requires": "major_version",
+        "source": "components/authorization/contract/component_contract.json#/compatibility_policy"
+      },
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      }
+    },
+    {
+      "component_id": "identity",
+      "component_version": "0.3.0",
+      "class": "platform_service",
+      "maturity_level": "level_0_modular_monolith",
+      "scs_id": null,
+      "owner": "@Kvasha62",
+      "owner_source": ".github/CODEOWNERS",
+      "contracts": {
+        "component_contract": "components/identity/contract/component_contract.json",
+        "openapi": "components/identity/contract/openapi.yaml"
+      },
+      "data_ownership": {
+        "owner": "identity",
+        "logical_schema": "identity",
+        "data_scopes": [
+          "platform-scoped",
+          "tenant-scoped"
+        ],
+        "datasets": [
+          {
+            "name": "identities",
+            "scope": "platform-scoped"
+          },
+          {
+            "name": "tenant_associations",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "protected_records",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "audit_events",
+            "scope": "platform-scoped"
+          }
+        ],
+        "source": "components/identity/contract/component_contract.json#/data_ownership"
+      },
+      "dependencies": [
+        {
+          "component_id": "tenant_authority",
+          "version_range": ">=0.1.0,<0.2.0",
+          "kind": "api",
+          "contract": "components/tenant_authority/contract/component_contract.json"
+        }
+      ],
+      "compatibility": {
+        "api_policy": "additive-minor-breaking-major",
+        "event_policy": "tolerant-reader",
+        "supported_api_majors": 1,
+        "breaking_change_requires": "major_version",
+        "source": "components/identity/contract/component_contract.json#/compatibility_policy"
+      },
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      }
+    },
+    {
+      "component_id": "tenant_authority",
+      "component_version": "0.1.0",
+      "class": "platform_service",
+      "maturity_level": "level_0_modular_monolith",
+      "scs_id": null,
+      "owner": "@Kvasha62",
+      "owner_source": ".github/CODEOWNERS",
+      "contracts": {
+        "component_contract": "components/tenant_authority/contract/component_contract.json",
+        "openapi": "components/tenant_authority/contract/openapi.yaml"
+      },
+      "data_ownership": {
+        "owner": "tenant_authority",
+        "logical_schema": "tenant_authority",
+        "data_scopes": [
+          "platform-scoped"
+        ],
+        "datasets": [
+          {
+            "name": "tenant_registry",
+            "scope": "platform-scoped"
+          },
+          {
+            "name": "lifecycle_transitions",
+            "scope": "platform-scoped"
+          },
+          {
+            "name": "service_access",
+            "scope": "platform-scoped"
+          },
+          {
+            "name": "audit_events",
+            "scope": "platform-scoped"
+          },
+          {
+            "name": "idempotency_keys",
+            "scope": "platform-scoped"
+          }
+        ],
+        "source": "components/tenant_authority/contract/component_contract.json#/data_ownership"
+      },
+      "dependencies": [],
+      "compatibility": {
+        "api_policy": "additive-minor-breaking-major",
+        "event_policy": "tolerant-reader",
+        "supported_api_majors": 1,
+        "breaking_change_requires": "major_version",
+        "source": "components/tenant_authority/contract/component_contract.json#/compatibility_policy"
+      },
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      }
+    },
+    {
+      "component_id": "records",
+      "component_version": "0.1.0",
+      "class": "platform_service",
+      "maturity_level": "level_0_modular_monolith",
+      "scs_id": null,
+      "owner": "@Kvasha62",
+      "owner_source": ".github/CODEOWNERS",
+      "contracts": {
+        "component_contract": "components/records/contract/component_contract.json",
+        "openapi": "components/records/contract/openapi.yaml"
+      },
+      "data_ownership": {
+        "owner": "records",
+        "logical_schema": "records",
+        "data_scopes": [
+          "platform-scoped",
+          "tenant-scoped"
+        ],
+        "datasets": [
+          {
+            "name": "resources",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "access_audit",
+            "scope": "platform-scoped"
+          }
+        ],
+        "source": "components/records/contract/component_contract.json#/data_ownership"
+      },
+      "dependencies": [
+        {
+          "component_id": "authorization",
+          "version_range": ">=0.1.0,<0.2.0",
+          "kind": "api",
+          "contract": "components/authorization/contract/component_contract.json"
+        }
+      ],
+      "compatibility": {
+        "api_policy": "additive-minor-breaking-major",
+        "event_policy": "tolerant-reader",
+        "supported_api_majors": 1,
+        "breaking_change_requires": "major_version",
+        "source": "components/records/contract/component_contract.json#/compatibility_policy"
+      },
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      }
+    },
+    {
+      "component_id": "learning",
+      "component_version": "0.3.0",
+      "class": "business_system",
+      "maturity_level": "level_0_modular_monolith",
+      "scs_id": "SCS-001",
+      "owner": "@Kvasha62",
+      "owner_source": ".github/CODEOWNERS",
+      "contracts": {
+        "component_contract": "components/learning/contract/component_contract.json",
+        "openapi": "components/learning/contract/openapi.yaml"
+      },
+      "data_ownership": {
+        "owner": "learning",
+        "logical_schema": "learning",
+        "data_scopes": [
+          "platform-scoped",
+          "tenant-scoped"
+        ],
+        "datasets": [
+          {
+            "name": "courses",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "modules",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "lessons",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "assignments",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "submissions",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "enrollments",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "access_audit",
+            "scope": "platform-scoped"
+          }
+        ],
+        "source": "components/learning/contract/component_contract.json#/data_ownership"
+      },
+      "dependencies": [
+        {
+          "component_id": "authorization",
+          "version_range": ">=0.1.0,<0.2.0",
+          "kind": "api",
+          "contract": "components/authorization/contract/component_contract.json"
+        },
+        {
+          "component_id": "idempotency",
+          "version_range": ">=0.1.0,<0.2.0",
+          "kind": "internal-consumer-surface",
+          "contract": "components/idempotency/contract/component_contract.json"
+        },
+        {
+          "component_id": "identity",
+          "version_range": ">=0.3.0,<0.4.0",
+          "kind": "api",
+          "contract": "components/identity/contract/component_contract.json"
+        }
+      ],
+      "compatibility": {
+        "api_policy": "additive-minor-breaking-major",
+        "event_policy": "tolerant-reader",
+        "supported_api_majors": 1,
+        "breaking_change_requires": "major_version",
+        "source": "components/learning/contract/component_contract.json#/compatibility_policy"
+      },
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      }
+    },
+    {
+      "component_id": "saga",
+      "component_version": "0.1.0",
+      "class": "platform_service",
+      "maturity_level": "level_0_modular_monolith",
+      "scs_id": null,
+      "owner": "@Kvasha62",
+      "owner_source": ".github/CODEOWNERS",
+      "contracts": {
+        "component_contract": "components/saga/contract/component_contract.json",
+        "openapi": null
+      },
+      "data_ownership": {
+        "owner": "saga",
+        "logical_schema": "saga",
+        "data_scopes": [
+          "platform-scoped",
+          "tenant-scoped"
+        ],
+        "datasets": [
+          {
+            "name": "saga_records",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "step_records",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "workflow_audit",
+            "scope": "platform-scoped"
+          }
+        ],
+        "source": "components/saga/contract/component_contract.json#/data_ownership"
+      },
+      "dependencies": [
+        {
+          "component_id": "idempotency",
+          "version_range": ">=0.1.0,<0.2.0",
+          "kind": "internal-consumer-surface",
+          "contract": "components/idempotency/contract/component_contract.json"
+        },
+        {
+          "component_id": "identity",
+          "version_range": ">=0.3.0,<0.4.0",
+          "kind": "api",
+          "contract": "components/identity/contract/component_contract.json"
+        }
+      ],
+      "compatibility": {
+        "api_policy": "additive-minor-breaking-major",
+        "event_policy": null,
+        "supported_api_majors": null,
+        "breaking_change_requires": "major_version",
+        "source": "components/saga/contract/component_contract.json#/compatibility_policy"
+      },
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      }
+    },
+    {
+      "component_id": "idempotency",
+      "component_version": "0.1.0",
+      "class": "platform_service",
+      "maturity_level": "level_0_modular_monolith",
+      "scs_id": null,
+      "owner": "@Kvasha62",
+      "owner_source": ".github/CODEOWNERS",
+      "contracts": {
+        "component_contract": "components/idempotency/contract/component_contract.json",
+        "openapi": null
+      },
+      "data_ownership": {
+        "owner": "idempotency",
+        "logical_schema": "in-memory (bounded)",
+        "data_scopes": [
+          "platform-scoped"
+        ],
+        "datasets": [
+          {
+            "name": "idempotency_records",
+            "scope": "platform-scoped"
+          }
+        ],
+        "source": "components/idempotency/contract/component_contract.json#/data_ownership"
+      },
+      "dependencies": [],
+      "compatibility": {
+        "api_policy": "additive-minor-breaking-major",
+        "event_policy": null,
+        "supported_api_majors": null,
+        "breaking_change_requires": "major_version",
+        "source": "components/idempotency/contract/component_contract.json#/compatibility_policy"
+      },
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      }
+    },
+    {
+      "component_id": "commerce",
+      "component_version": "0.2.0",
+      "class": "business_system",
+      "maturity_level": "level_0_modular_monolith",
+      "scs_id": "SCS-002",
+      "owner": "@Kvasha62",
+      "owner_source": ".github/CODEOWNERS",
+      "contracts": {
+        "component_contract": "components/commerce/contract/component_contract.json",
+        "openapi": "components/commerce/contract/openapi.yaml"
+      },
+      "data_ownership": {
+        "owner": "commerce",
+        "logical_schema": "commerce",
+        "data_scopes": [
+          "platform-scoped",
+          "tenant-scoped"
+        ],
+        "datasets": [
+          {
+            "name": "products",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "offers",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "prices",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "carts",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "cart_lines",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "orders",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "order_lines",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "payment_state",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "access_audit",
+            "scope": "platform-scoped"
+          }
+        ],
+        "source": "components/commerce/contract/component_contract.json#/data_ownership"
+      },
+      "dependencies": [
+        {
+          "component_id": "authorization",
+          "version_range": ">=0.1.0,<0.2.0",
+          "kind": "api",
+          "contract": "components/authorization/contract/component_contract.json"
+        },
+        {
+          "component_id": "idempotency",
+          "version_range": ">=0.1.0,<0.2.0",
+          "kind": "internal-consumer-surface",
+          "contract": "components/idempotency/contract/component_contract.json"
+        },
+        {
+          "component_id": "identity",
+          "version_range": ">=0.3.0,<0.4.0",
+          "kind": "api",
+          "contract": "components/identity/contract/component_contract.json"
+        }
+      ],
+      "compatibility": {
+        "api_policy": "additive-minor-breaking-major",
+        "event_policy": "tolerant-reader",
+        "supported_api_majors": 1,
+        "breaking_change_requires": "major_version",
+        "source": "components/commerce/contract/component_contract.json#/compatibility_policy"
+      },
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      }
+    },
+    {
+      "component_id": "booking",
+      "component_version": "0.1.0",
+      "class": "business_system",
+      "maturity_level": "level_0_modular_monolith",
+      "scs_id": "SCS-003",
+      "owner": "@Kvasha62",
+      "owner_source": ".github/CODEOWNERS",
+      "contracts": {
+        "component_contract": "components/booking/contract/component_contract.json",
+        "openapi": "components/booking/contract/openapi.yaml"
+      },
+      "data_ownership": {
+        "owner": "booking",
+        "logical_schema": "booking",
+        "data_scopes": [
+          "platform-scoped",
+          "tenant-scoped"
+        ],
+        "datasets": [
+          {
+            "name": "resources",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "availability_windows",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "reservations",
+            "scope": "tenant-scoped"
+          },
+          {
+            "name": "access_audit",
+            "scope": "platform-scoped"
+          }
+        ],
+        "source": "components/booking/contract/component_contract.json#/data_ownership"
+      },
+      "dependencies": [
+        {
+          "component_id": "authorization",
+          "version_range": ">=0.1.0,<0.2.0",
+          "kind": "api",
+          "contract": "components/authorization/contract/component_contract.json"
+        },
+        {
+          "component_id": "idempotency",
+          "version_range": ">=0.1.0,<0.2.0",
+          "kind": "internal-consumer-surface",
+          "contract": "components/idempotency/contract/component_contract.json"
+        },
+        {
+          "component_id": "identity",
+          "version_range": ">=0.3.0,<0.4.0",
+          "kind": "api",
+          "contract": "components/identity/contract/component_contract.json"
+        }
+      ],
+      "compatibility": {
+        "api_policy": "additive-minor-breaking-major",
+        "event_policy": "tolerant-reader",
+        "supported_api_majors": 1,
+        "breaking_change_requires": "major_version",
+        "source": "components/booking/contract/component_contract.json#/compatibility_policy"
+      },
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      }
+    }
+  ]
+}

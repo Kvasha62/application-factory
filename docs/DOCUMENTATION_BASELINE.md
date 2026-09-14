@@ -33,6 +33,7 @@
 | Проектная ориентация | `README.md` | ALIGNED |
 | Реализация компонентов | `src/` | существует: 9 компонентов; Level 0 modular monolith |
 | Component Contracts | `components/*/contract/` | существуют для 9 компонентов |
+| Component Registry | `factory/registry/component_registry.json` | Slice A IMPLEMENTED; canonical machine-readable реестр, 9 компонентов |
 | Contract / boundary tests | `tests/` | существуют; автоматическая проверка архитектурных границ активна |
 | Quality Gate | `scripts/quality-gate.ps1` + `.github/workflows/quality-gate.yml` | GREEN на ранее подтверждённом main; для текущей ратификационной ветки требуется CI-проверка PR |
 | Маршрутизация ответственности | `.github/CODEOWNERS` | существует |
@@ -76,22 +77,32 @@
 
 Активация произведена ADR-0015 и означает разрешение на постепенное введение фабричных механизмов. Она не означает, что эти механизмы уже реализованы.
 
-На момент этой актуализации **не считаются реализованными и доступными**:
+**Slice A — Component Registry: `IMPLEMENTED`.**
 
-- Component Registry;
-- Component Catalog;
-- Platform Manifest implementation;
-- Golden Bundles;
-- Composer;
-- Platform Instance assembly tooling.
-
-Первый разрешённый implementation slice:
+Канонический machine-readable реестр реализован:
 
 ```text
-Slice A — Component Registry
+factory/registry/component_registry.json            canonical registry
+factory/registry/schema/component_registry.schema.json  normative schema
+factory/registry/README.md                          формат и правила реестра
+src/component_registry/                             загрузка и валидация
+tests/test_component_registry.py                    focused tests
 ```
 
-Он должен иметь отдельный work item, собственную проверку, независимый review и owner approval до merge.
+Реестр содержит factory-level metadata 9 подтверждённых компонентов и не
+владеет бизнес-данными компонентов (ADR-0015 §4, §11).
+
+На момент этой актуализации **не считаются реализованными и доступными**:
+
+- Component Catalog (Slice B);
+- Platform Manifest implementation (Slice C);
+- Golden Bundles (Slice D);
+- Composer (Slice E);
+- Platform Instance assembly tooling.
+
+Slice A прошёл Arena-верификацию и ожидает независимого review и owner approval.
+Последующие slices требуют отдельных work item, проверки, независимого review
+и owner approval до merge.
 
 ## 6. Границы Level 2
 
@@ -116,16 +127,20 @@ Slice A — Component Registry
 
 ## 8. Следующее изменение
 
-Следующим самостоятельным этапом является **Slice A — Component Registry**.
+**Slice A — Component Registry реализован** и проходит независимый review.
 
-До начала реализации Slice A необходимо иметь отдельный утверждённый work item и сохранить границу:
+Следующим самостоятельным этапом является **Slice B — Component Catalog**.
+
+До начала реализации Slice B необходимо иметь отдельный утверждённый work item и сохранить границу:
 
 ```text
 ADR-0015 ratified
         ↓
-approved implementation work item
+Slice A — Component Registry (IMPLEMENTED)
         ↓
-Slice A — Component Registry
+approved implementation work item for Slice B
+        ↓
+Slice B — Component Catalog
         ↓
 verification / independent review
         ↓
@@ -140,7 +155,8 @@ merge
 
 **Architecture Level 2: ACTIVE.**
 
-**Factory mechanisms: NOT YET IMPLEMENTED.**
+**Factory mechanisms:** Slice A — Component Registry `IMPLEMENTED`;
+Catalog, Manifest, Golden Bundles и Composer `NOT YET IMPLEMENTED`.
 
 **Factory Gate #1: PASSED.**
 

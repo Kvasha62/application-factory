@@ -1,0 +1,394 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory/registry/schema/component_registry.schema.json",
+  "title": "Application Factory — Component Registry",
+  "description": "Normative schema of the canonical machine-readable Component Registry (Slice A, ADR-0015 §4). The registry holds factory-level metadata only: it never contains component business data and never becomes a second source of truth for published contracts.",
+  "type": "object",
+  "required": [
+    "registry_id",
+    "registry_schema_version",
+    "components"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "registry_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identity of this registry."
+    },
+    "registry_schema_version": {
+      "$ref": "#/$defs/semver",
+      "description": "Version of the registry document format itself."
+    },
+    "conventions": {
+      "type": "object",
+      "description": "Human-readable statement of the registry's identity, versioning, ownership, artifact, lifecycle and dependency conventions.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/component_entry"
+      },
+      "description": "The registered component inventory; component identity is unique across this array."
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "description": "Explicit public SemVer MAJOR.MINOR.PATCH (ARCHITECTURE.md §11). A floating selector such as latest is not a version."
+    },
+    "component_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable, unique, deterministic component identity: lower snake_case, opaque, never reused (ARCHITECTURE.md §11)."
+    },
+    "repo_path": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._/-]+$",
+      "minLength": 1,
+      "description": "Repository-relative path to a published artifact."
+    },
+    "data_scope": {
+      "type": "string",
+      "enum": [
+        "tenant-scoped",
+        "platform-scoped",
+        "system-scoped"
+      ],
+      "description": "Exactly one scope per dataset (ARCHITECTURE.md §5.4, LAW-16a)."
+    },
+    "component_entry": {
+      "type": "object",
+      "required": [
+        "component_id",
+        "component_version",
+        "class",
+        "owner",
+        "contracts",
+        "data_ownership",
+        "dependencies",
+        "compatibility",
+        "artifact",
+        "lifecycle"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "component_id": {
+          "$ref": "#/$defs/component_id"
+        },
+        "component_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "class": {
+          "type": "string",
+          "enum": [
+            "business_system",
+            "platform_service",
+            "computational_service",
+            "streaming_pipeline"
+          ],
+          "description": "Component class (ARCHITECTURE.md §3)."
+        },
+        "maturity_level": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scs_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Software Component System identifier of a Class A Business System, when the component is one (SCS-001, SCS-002, SCS-003)."
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Accountable owner of the component (ARCHITECTURE.md LAW-02)."
+        },
+        "owner_source": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Where the owner assertion comes from."
+        },
+        "contracts": {
+          "type": "object",
+          "required": [
+            "component_contract"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "component_contract": {
+              "$ref": "#/$defs/repo_path"
+            },
+            "openapi": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/repo_path"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "description": "References to the component's published contracts. The registry references contracts; it does not restate them."
+        },
+        "data_ownership": {
+          "type": "object",
+          "required": [
+            "owner",
+            "data_scopes",
+            "datasets"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "owner": {
+              "$ref": "#/$defs/component_id",
+              "description": "The component that owns the data (ARCHITECTURE.md LAW-03)."
+            },
+            "logical_schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data_scopes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/data_scope"
+              }
+            },
+            "datasets": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "scope"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "scope": {
+                    "$ref": "#/$defs/data_scope"
+                  }
+                }
+              }
+            },
+            "source": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Published contract location this ownership metadata is derived from."
+            }
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/dependency"
+          },
+          "description": "Declared component dependencies. Empty when the component declares none."
+        },
+        "compatibility": {
+          "$ref": "#/$defs/compatibility"
+        },
+        "artifact": {
+          "$ref": "#/$defs/artifact"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/lifecycle"
+        }
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "required": [
+        "component_id",
+        "version_range",
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "component_id": {
+          "$ref": "#/$defs/component_id"
+        },
+        "version_range": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Explicit comma-separated version constraints, each with an operator and an exact SemVer version. A floating selector such as latest is never accepted (ARCHITECTURE.md §1.3)."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "api",
+            "events",
+            "data_export_cdc",
+            "internal-consumer-surface"
+          ],
+          "description": "Permitted dependency mechanism (ARCHITECTURE.md §18). database, internal code, private schema and internal queue are forbidden and have no representation here."
+        },
+        "contract": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/repo_path"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "required": [
+        "api_policy",
+        "breaking_change_requires"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "api_policy": {
+          "type": "string",
+          "enum": [
+            "additive-minor-breaking-major"
+          ]
+        },
+        "event_policy": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "tolerant-reader"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "supported_api_majors": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "breaking_change_requires": {
+          "type": "string",
+          "enum": [
+            "major_version"
+          ],
+          "description": "A breaking change requires a new major version (ARCHITECTURE.md §1.4, §7)."
+        },
+        "source": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "artifact_type",
+        "digest",
+        "pinned"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "enum": [
+            "none",
+            "source_package",
+            "container_image"
+          ],
+          "description": "Kind of published artifact. none means no deployable artifact is published; it is an explicit statement, never a floating selector."
+        },
+        "digest": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(sha256:)?[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Immutable content digest of the artifact (ARCHITECTURE.md §11). Null when no artifact is published."
+        },
+        "pinned": {
+          "type": "boolean",
+          "description": "True only when the artifact is selected by an immutable digest."
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "required": [
+        "registry_state",
+        "deployable",
+        "publishable"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "registry_state": {
+          "type": "string",
+          "enum": [
+            "registered",
+            "deprecated",
+            "retired"
+          ],
+          "description": "Lifecycle state of the registry entry. registered means the entry exists in the canonical registry; it does not certify the component and does not make it deployable or publishable."
+        },
+        "deployable": {
+          "type": "boolean"
+        },
+        "publishable": {
+          "type": "boolean"
+        },
+        "publishability_blockers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Reasons the component is not publishable (ARCHITECTURE.md §30)."
+        }
+      }
+    }
+  }
+}

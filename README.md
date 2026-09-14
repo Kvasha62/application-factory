@@ -92,10 +92,19 @@ contract-тесты в `tests/`).
 и SCS-003 Booking — обеспечили прохождение Factory Gate #1.
 
 Активация Level 2 разрешает ввод фабричных механизмов, но не означает,
-что они уже реализованы. На текущем этапе ещё не считаются реализованными:
-Component Registry, Component Catalog, Platform Manifest tooling,
-Golden Bundles и Composer. Первый implementation slice — Component Registry.
-Каждый такой slice требует отдельного work item, проверки, независимого
+что они все уже реализованы.
+
+**Slice A — Component Registry: реализован.** Канонический machine-readable
+реестр — `factory/registry/component_registry.json` (схема в
+`factory/registry/schema/`, правила в `factory/registry/README.md`,
+загрузка и валидация в `src/component_registry/`, тесты в
+`tests/test_component_registry.py`). Реестр содержит factory-level metadata
+9 компонентов и не владеет бизнес-данными.
+
+На текущем этапе ещё не считаются реализованными:
+Component Catalog (Slice B), Platform Manifest tooling (Slice C),
+Golden Bundles (Slice D) и Composer (Slice E).
+Каждый slice требует отдельного work item, проверки, независимого
 review и owner approval до merge.
 
 Границы бизнес-систем, владение данными, опубликованные контракты,
