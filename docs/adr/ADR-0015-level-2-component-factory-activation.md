@@ -29,9 +29,9 @@ At the same time, reaching the gate does not justify building every factory capa
 
 ## 2. Decision
 
-**Architectural Level 2 — Component Factory is activated.**
+**Architectural Level 2 — Component Factory is proposed for activation.**
 
-Activation means that the project may now introduce the factory mechanisms explicitly defined by `docs/ARCHITECTURE.md`, provided they are implemented incrementally and remain subordinate to the architectural law.
+Upon ratification of this ADR, the project may introduce the factory mechanisms explicitly defined by `docs/ARCHITECTURE.md`, provided they are implemented incrementally and remain subordinate to the architectural law.
 
 Level 2 does **not** mean that every factory mechanism must exist immediately. The initial factory implementation is incremental.
 
@@ -57,7 +57,7 @@ The exact implementation order may be adjusted by later implementation ADRs/issu
 
 ## 3. What Level-2 Activation Authorizes
 
-The following capabilities are now architecturally authorized for implementation:
+The following capabilities are architecturally authorized **after this ADR is ratified**:
 
 - a canonical machine-readable Component Registry;
 - a discoverable Component Catalog derived from authoritative metadata;
@@ -227,7 +227,9 @@ This ADR does **not** authorize:
 
 ## 14. Transition State
 
-Immediately after ratification, the intended architectural state is:
+Until this ADR is ratified, the architectural state remains the current ratified state.
+
+After ratification, the intended state is:
 
 ```text
 Architecture level: Level 2 — ACTIVE
@@ -290,9 +292,9 @@ Factory tests must verify architecture rules, not merely successful object const
 
 ## 17. Acceptance Boundary
 
-ADR-0015 is considered implemented only as an architectural decision when:
+ADR-0015 is considered ratified only when:
 
-1. Level 2 activation is ratified through the project's normal ADR workflow;
+1. Level 2 activation is approved through the project's normal ADR workflow;
 2. Factory Gate #1 remains documented as satisfied by the three independent Business Systems;
 3. no ratified business-system boundary is changed by the activation;
 4. the transition state is documented accurately;
