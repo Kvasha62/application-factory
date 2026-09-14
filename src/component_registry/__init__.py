@@ -33,7 +33,11 @@ from component_registry.registry import (
     load_registry_document,
 )
 from component_registry.validation import (
+    COMPATIBILITY_POINTER,
     FLOATING_SELECTOR_TOKENS,
+    OWNERSHIP_POINTER,
+    canonical_contract_path,
+    canonical_openapi_path,
     is_floating_selector,
     parse_semver,
     parse_version_range,
@@ -42,12 +46,16 @@ from component_registry.validation import (
 )
 
 __all__ = [
+    "COMPATIBILITY_POINTER",
     "FLOATING_SELECTOR_TOKENS",
+    "OWNERSHIP_POINTER",
     "REGISTRY_PATH",
     "Registry",
     "RegistryError",
     "RegistryNotFoundError",
     "RegistryValidationError",
+    "canonical_contract_path",
+    "canonical_openapi_path",
     "discover_root",
     "is_floating_selector",
     "load_registry",

@@ -103,15 +103,82 @@ latest  current  default  stable  edge  main  master  head  tip  *
 
 ---
 
-## 6. Контракты
+## 6. Ссылки на контракты
 
-Запись реестра ссылается на опубликованные контракты и не копирует их
-содержание. Валидация проверяет, что:
+Ссылки реестра — это не произвольные пути файловой системы, а
+**repository-relative canonical references**: идентичность документа
+определяется каноническим путём, который архитектура назначает компоненту,
+а не файлом, который просто объявляет подходящий `component_id` в другом
+месте. Дубликат или decoy с корректным содержимым, но не по каноническому
+пути, отвергается.
 
-* файл контракта существует;
-* контракт объявляет тот же `component_id`;
-* контракт объявляет ту же `component_version`;
-* ссылка не выходит за пределы репозитория.
+Canonical path компонента `<component_id>`:
+
+```text
+components/<component_id>/contract/component_contract.json
+components/<component_id>/contract/openapi.yaml
+```
+
+Все пути:
+
+* относительные от repository root;
+* нормализованные (отвергаются `./`, `//`, завершающий `/`);
+* без обходов (`..`) и без абсолютных путей;
+* без URL и схем (`https:`, `file:`, `C:`);
+* без symlink-like и normalization tricks.
+
+### `contracts.component_contract`
+
+Должен быть ровно canonical path contract-а **этого же** компонента:
+
+```text
+components/<component_id>/contract/component_contract.json
+```
+
+Fragment (`#...`) **не разрешён**: ссылка адресует весь документ.
+
+### `data_ownership.source` и `compatibility.source`
+
+Состоят из двух частей:
+
+```text
+DOCUMENT_PATH#FRAGMENT
+```
+
+```text
+components/<component_id>/contract/component_contract.json#/data_ownership
+components/<component_id>/contract/component_contract.json#/compatibility_policy
+```
+
+* `DOCUMENT_PATH` — canonical contract того же компонента;
+* `FRAGMENT` — валидный JSON Pointer (RFC 6901), который реально разрешается
+  в этом документе и адресует объект ожидаемого раздела.
+
+Fragment является частью семантики ссылки. Проверяется не только
+существование файла, но и:
+
+* наличие ровно одного fragment-а;
+* canonical document path;
+* корректность и разрешимость JSON Pointer;
+* соответствие ожидаемому semantic target.
+
+### `dependencies[].contract`
+
+Должен быть canonical path contract-а **целевого** компонента:
+
+```text
+components/<dependency.component_id>/contract/component_contract.json
+```
+
+Дополнительно проверяется, что этот canonical contract объявляет ровно ту
+версию, которая зарегистрирована для целевого компонента. Расхождение версии
+— ошибка валидации, даже если диапазон зависимости её формально допускает.
+
+### Содержание контракта
+
+Также проверяется, что canonical contract объявляет тот же `component_id`
+и ту же `component_version`, что и запись реестра, и что metadata реестра
+не расходится с опубликованным контрактом.
 
 ---
 

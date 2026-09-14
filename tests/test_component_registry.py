@@ -554,14 +554,29 @@ def test_a_missing_component_contract_reference_is_rejected(
     rejects(clone, root, "component_contract")
 
 
-def test_a_broken_contract_reference_is_rejected(root: Path, document: Mapping) -> None:
+def test_a_non_canonical_contract_reference_is_rejected(
+    root: Path, document: Mapping
+) -> None:
+    """A descriptor that is not at the canonical path is rejected even if valid."""
     clone = with_nested(
         document,
         "authorization",
         "contracts",
         component_contract="components/authorization/contract/does_not_exist.json",
     )
-    rejects(clone, root, "does not exist")
+    rejects(clone, root, "is not the canonical contract")
+
+
+def test_a_contract_reference_may_not_carry_a_fragment(
+    root: Path, document: Mapping
+) -> None:
+    clone = with_nested(
+        document,
+        "authorization",
+        "contracts",
+        component_contract="components/authorization/contract/component_contract.json#/api",
+    )
+    rejects(clone, root, "must not carry a fragment")
 
 
 def test_a_contract_reference_outside_the_repository_is_rejected(
@@ -570,19 +585,20 @@ def test_a_contract_reference_outside_the_repository_is_rejected(
     clone = with_nested(
         document, "authorization", "contracts", component_contract="../../etc/passwd"
     )
-    rejects(clone, root, "escapes the repository")
+    rejects(clone, root, "path traversal or normalization segment")
 
 
-def test_a_contract_declaring_another_component_is_rejected(
+def test_another_components_canonical_contract_is_rejected(
     root: Path, document: Mapping
 ) -> None:
+    """Canonical identity wins over content: the right content at the wrong path is a decoy."""
     clone = with_nested(
         document,
         "authorization",
         "contracts",
         component_contract="components/identity/contract/component_contract.json",
     )
-    rejects(clone, root, "contract declares component_id")
+    rejects(clone, root, "is not the canonical contract")
 
 
 def test_an_invalid_data_scope_is_rejected(root: Path, document: Mapping) -> None:
@@ -710,7 +726,7 @@ def test_a_dependency_pointing_at_another_component_contract_is_rejected(
     clone["components"][0]["dependencies"][0][
         "contract"
     ] = "components/commerce/contract/component_contract.json"
-    rejects(clone, root, "dependency targets")
+    rejects(clone, root, "is not the canonical contract")
 
 
 # ---------------------------------------------------------------------------

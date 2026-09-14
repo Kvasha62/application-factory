@@ -53,9 +53,9 @@
     },
     "repo_path": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9._/-]+$",
+      "pattern": "^(?!.*(?:^|/)\\.(?:\\.)?(?:/|$))[A-Za-z0-9._/-]+$",
       "minLength": 1,
-      "description": "Repository-relative path to a published artifact."
+      "description": "Repository-relative path to a published artifact: POSIX separators, no fragment, no absolute path and no traversal/normalization segment."
     },
     "data_scope": {
       "type": "string",

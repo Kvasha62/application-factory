@@ -24,7 +24,7 @@ import json
 import operator
 import re
 from collections.abc import Mapping
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from component_registry.schema import load_schema, validate_structure
 
@@ -67,8 +67,29 @@ BREAKING_CHANGE_REQUIREMENTS = frozenset({"major_version"})
 API_POLICIES = frozenset({"additive-minor-breaking-major"})
 EVENT_POLICIES = frozenset({"tolerant-reader"})
 
+#: Canonical repository layout of a published component contract.
+#: A contract is identified by where the architecture says it lives, not by
+#: whether some file somewhere happens to declare a matching ``component_id``.
+CONTRACT_ROOT = "components"
+CONTRACT_DIRNAME = "contract"
+CONTRACT_FILENAME = "component_contract.json"
+OPENAPI_FILENAME = "openapi.yaml"
+
+#: JSON Pointer (RFC 6901) that each ``source`` reference must address inside
+#: the canonical component contract.
+OWNERSHIP_POINTER = "/data_ownership"
+COMPATIBILITY_POINTER = "/compatibility_policy"
+
 _CLAUSE_RE = re.compile(r"^(==|>=|<=|>|<)(?P<version>.+)$")
 _DIGEST_RE = re.compile(r"^(sha256:)?[0-9a-f]{64}$")
+
+#: A URL-ish scheme prefix: ``https:``, ``file:``, ``C:`` — never a repository
+#: relative path.
+_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
+
+#: A JSON Pointer token: an escaped ``~0``/``~1`` run or any non-tilde run.
+_POINTER_TOKEN_RE = re.compile(r"(?:~[01]|[^~])*")
+
 _OPERATORS = {
     "==": operator.eq,
     "!=": operator.ne,
@@ -142,6 +163,193 @@ def _is_mapping(value: object) -> bool:
     return isinstance(value, Mapping)
 
 
+# --------------------------------------------------------------------------
+# Canonical reference semantics
+#
+# A registry reference is not an arbitrary filesystem path: it is a
+# repository-relative canonical reference whose identity is derived from the
+# authoritative component_id. A file that merely declares a matching
+# component_id at some other path is a decoy and must be rejected.
+# --------------------------------------------------------------------------
+
+
+def canonical_contract_path(component_id: object) -> str | None:
+    """Return the canonical contract path of ``component_id``, or None."""
+    if not isinstance(component_id, str) or not component_id:
+        return None
+    return f"{CONTRACT_ROOT}/{component_id}/{CONTRACT_DIRNAME}/{CONTRACT_FILENAME}"
+
+
+def canonical_openapi_path(component_id: object) -> str | None:
+    """Return the canonical OpenAPI path of ``component_id``, or None."""
+    if not isinstance(component_id, str) or not component_id:
+        return None
+    return f"{CONTRACT_ROOT}/{component_id}/{CONTRACT_DIRNAME}/{OPENAPI_FILENAME}"
+
+
+def _path_violation(value: object) -> str | None:
+    """Return a reason when ``value`` is not a canonical repository-relative path.
+
+    Rejects, in order: non-strings, URL-like references, non-POSIX separators,
+    absolute paths, traversal/normalization segments, and any path that is not
+    already normalized — so ``a//b``, ``./a`` and ``a/b/`` cannot be used to
+    smuggle a second spelling of the canonical path.
+    """
+    if not isinstance(value, str) or not value:
+        return "a canonical repository-relative path is required"
+    if _SCHEME_RE.match(value) or value.startswith("//"):
+        return f"{value!r} is a URL-like reference, not a repository-relative path"
+    if "\\" in value:
+        return f"{value!r} uses a non-canonical path separator"
+    candidate = PurePosixPath(value)
+    if candidate.is_absolute():
+        return f"{value!r} is an absolute filesystem path"
+    if any(part in {"..", "."} for part in candidate.parts):
+        return f"{value!r} contains a path traversal or normalization segment"
+    if str(candidate) != value:
+        return f"{value!r} is not a normalized repository-relative path"
+    return None
+
+
+def _resolve_json_pointer(document: object, pointer: str) -> tuple[bool, object]:
+    """Resolve an RFC 6901 JSON Pointer; return ``(resolved, node)``."""
+    if not pointer.startswith("/"):
+        return False, None
+    if pointer == "/":
+        return True, document
+    node: object = document
+    for raw_token in pointer[1:].split("/"):
+        if _POINTER_TOKEN_RE.fullmatch(raw_token) is None:
+            return False, None
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        if _is_mapping(node) and token in node:
+            node = node[token]
+        elif isinstance(node, list) and token.isdigit() and int(token) < len(node):
+            node = node[int(token)]
+        else:
+            return False, None
+    return True, node
+
+
+def _canonical_path_errors(
+    field: str,
+    path: str,
+    reference: object,
+    component_id: object,
+    expected: str | None,
+) -> list[str]:
+    """Validate that ``reference`` *is* the canonical path, without reading it.
+
+    Used for every reference whose identity must be canonical, including the
+    OpenAPI document, which is YAML and therefore not parsed as JSON here.
+    """
+    if not isinstance(reference, str) or not reference:
+        return [f"{path}.{field}: a canonical contract reference is required"]
+    if "#" in reference:
+        return [
+            f"{path}.{field}: {reference!r} must not carry a fragment; it addresses the whole contract"
+        ]
+    violation = _path_violation(reference)
+    if violation is not None:
+        return [f"{path}.{field}: {violation}"]
+    if expected is None:
+        return [
+            f"{path}.{field}: the entry has no component identity from which to derive a canonical contract"
+        ]
+    if reference != expected:
+        suffix = (
+            f" of component {component_id!r}" if isinstance(component_id, str) else ""
+        )
+        return [
+            f"{path}.{field}: {reference!r} is not the canonical contract {expected!r}{suffix}"
+        ]
+    return []
+
+
+def _canonical_contract_errors(
+    field: str,
+    path: str,
+    reference: object,
+    component_id: object,
+    expected: str | None,
+    root: Path,
+) -> tuple[list[str], Mapping | None]:
+    """Validate a whole-contract reference (no fragment) and load the contract."""
+    errors = _canonical_path_errors(field, path, reference, component_id, expected)
+    if errors or not isinstance(reference, str):
+        return errors, None
+    document, error = _read_published_contract(reference, root)
+    if error is not None:
+        errors.append(f"{path}.{field}: {error}")
+        return errors, None
+    return errors, document
+
+
+def _canonical_source_errors(
+    field: str,
+    path: str,
+    source: object,
+    component_id: object,
+    expected_pointer: str,
+    root: Path,
+) -> tuple[list[str], Mapping | None]:
+    """Validate a ``canonical contract path # JSON Pointer`` source reference.
+
+    Every part of the reference is checked: exactly one fragment, a canonical
+    document path for *this* component, the expected JSON Pointer, and that
+    the pointer really resolves to an object inside that document.
+    """
+    errors: list[str] = []
+    if not isinstance(source, str) or not source:
+        errors.append(f"{path}.{field}: a canonical source reference is required")
+        return errors, None
+    if source.count("#") != 1:
+        errors.append(
+            f"{path}.{field}: {source!r} must be the canonical component contract plus exactly one JSON Pointer fragment"
+        )
+        return errors, None
+
+    document_path, _, fragment = source.partition("#")
+    violation = _path_violation(document_path)
+    if violation is not None:
+        errors.append(f"{path}.{field}: {violation}")
+        return errors, None
+
+    expected_path = canonical_contract_path(component_id)
+    if expected_path is None:
+        errors.append(
+            f"{path}.{field}: the entry has no component identity from which to derive a canonical contract"
+        )
+        return errors, None
+    if document_path != expected_path:
+        errors.append(
+            f"{path}.{field}: {document_path!r} is not the canonical contract {expected_path!r} of component {component_id!r}"
+        )
+        return errors, None
+    if fragment != expected_pointer:
+        errors.append(
+            f"{path}.{field}: fragment {fragment!r} does not address {expected_pointer!r} of the canonical contract"
+        )
+        return errors, None
+
+    document, error = _read_published_contract(document_path, root)
+    if error is not None:
+        errors.append(f"{path}.{field}: {error}")
+        return errors, None
+    resolved, node = _resolve_json_pointer(document, fragment)
+    if not resolved:
+        errors.append(
+            f"{path}.{field}: JSON Pointer {fragment!r} does not resolve inside {document_path}"
+        )
+        return errors, None
+    if not _is_mapping(node):
+        errors.append(
+            f"{path}.{field}: JSON Pointer {fragment!r} does not address an object inside {document_path}"
+        )
+        return errors, None
+    return errors, document
+
+
 def _read_published_contract(
     relative: object, root: Path
 ) -> tuple[Mapping | None, str | None]:
@@ -201,34 +409,40 @@ def _contract_errors(entry: Mapping, path: str, root: Path) -> list[str]:
     if not _is_mapping(contracts):
         return [f"{path}.contracts: published contract references are required"]
 
-    document, error = _read_published_contract(
-        contracts.get("component_contract"), root
-    )
-    if error is not None:
-        errors.append(f"{path}.contracts.component_contract: {error}")
-        return errors
-    assert document is not None  # guaranteed when error is None
-
     component_id = entry.get("component_id")
-    declared_id = document.get("component_id")
-    if declared_id != component_id:
-        errors.append(
-            f"{path}.contracts.component_contract: contract declares component_id {declared_id!r}, registry declares {component_id!r}"
-        )
-    declared_version = document.get("component_version")
-    if declared_version != entry.get("component_version"):
-        errors.append(
-            f"{path}.contracts.component_contract: contract declares component_version {declared_version!r}, registry declares {entry.get('component_version')!r}"
-        )
+    contract_errors, document = _canonical_contract_errors(
+        "contracts.component_contract",
+        path,
+        contracts.get("component_contract"),
+        component_id,
+        canonical_contract_path(component_id),
+        root,
+    )
+    errors.extend(contract_errors)
+
+    if document is not None:
+        declared_id = document.get("component_id")
+        if declared_id != component_id:
+            errors.append(
+                f"{path}.contracts.component_contract: contract declares component_id {declared_id!r}, registry declares {component_id!r}"
+            )
+        declared_version = document.get("component_version")
+        if declared_version != entry.get("component_version"):
+            errors.append(
+                f"{path}.contracts.component_contract: contract declares component_version {declared_version!r}, registry declares {entry.get('component_version')!r}"
+            )
 
     openapi = contracts.get("openapi")
     if openapi is not None:
-        candidate = (root / openapi).resolve() if isinstance(openapi, str) else None
-        if candidate is None or not candidate.is_relative_to(root.resolve()):
-            errors.append(
-                f"{path}.contracts.openapi: reference escapes the repository: {openapi!r}"
-            )
-        elif not candidate.is_file():
+        openapi_errors = _canonical_path_errors(
+            "contracts.openapi",
+            path,
+            openapi,
+            component_id,
+            canonical_openapi_path(component_id),
+        )
+        errors.extend(openapi_errors)
+        if not openapi_errors and not (root / openapi).is_file():
             errors.append(
                 f"{path}.contracts.openapi: referenced contract does not exist: {openapi}"
             )
@@ -282,27 +496,40 @@ def _ownership_errors(entry: Mapping, path: str, root: Path) -> list[str]:
 
     source = ownership.get("source")
     if isinstance(source, str) and source:
-        relative = source.split("#", 1)[0]
-        document, error = _read_published_contract(relative, root)
-        if error is not None:
-            errors.append(f"{path}.data_ownership.source: {error}")
-        else:
-            assert document is not None
+        source_errors, document = _canonical_source_errors(
+            "data_ownership.source",
+            path,
+            source,
+            component_id,
+            OWNERSHIP_POINTER,
+            root,
+        )
+        errors.extend(source_errors)
+        if document is not None:
             published = document.get("data_ownership", {})
-            published_pairs = {
-                (item.get("name"), item.get("scope"))
-                for item in published.get("datasets", [])
-                if _is_mapping(item)
-            }
-            registry_pairs = {
-                (item.get("name"), item.get("scope"))
-                for item in datasets
-                if _is_mapping(item)
-            }
-            if published_pairs and published_pairs != registry_pairs:
+            if not _is_mapping(published):
                 errors.append(
-                    f"{path}.data_ownership.datasets: registry metadata diverges from the published contract {relative}"
+                    f"{path}.data_ownership.source: {OWNERSHIP_POINTER!r} does not address an object in the canonical contract"
                 )
+            elif not isinstance(published.get("datasets"), list):
+                errors.append(
+                    f"{path}.data_ownership.source: the canonical contract declares no dataset list at {OWNERSHIP_POINTER}/datasets"
+                )
+            else:
+                published_pairs = {
+                    (item.get("name"), item.get("scope"))
+                    for item in published["datasets"]
+                    if _is_mapping(item)
+                }
+                registry_pairs = {
+                    (item.get("name"), item.get("scope"))
+                    for item in datasets
+                    if _is_mapping(item)
+                }
+                if published_pairs and published_pairs != registry_pairs:
+                    errors.append(
+                        f"{path}.data_ownership.datasets: registry metadata diverges from the published contract {canonical_contract_path(component_id)}"
+                    )
     return errors
 
 
@@ -374,15 +601,30 @@ def _dependency_errors(
 
         dependency_contract = dependency.get("contract")
         if dependency_contract is not None:
-            document, error = _read_published_contract(dependency_contract, root)
-            if error is not None:
-                errors.append(f"{item}.contract: {error}")
-            else:
-                assert document is not None
+            contract_errors, document = _canonical_contract_errors(
+                f"dependencies[{index}].contract",
+                path,
+                dependency_contract,
+                target,
+                canonical_contract_path(target),
+                root,
+            )
+            errors.extend(contract_errors)
+            if document is not None:
                 if document.get("component_id") != target:
                     errors.append(
                         f"{item}.contract: contract declares component_id {document.get('component_id')!r}, dependency targets {target!r}"
                     )
+                target_entry = (
+                    registered.get(target) if isinstance(target, str) else None
+                )
+                if target_entry is not None:
+                    declared = document.get("component_version")
+                    registered_version = target_entry.get("component_version")
+                    if declared != registered_version:
+                        errors.append(
+                            f"{item}.contract: contract declares component_version {declared!r}, which is not the registered version {registered_version!r} of {target!r}"
+                        )
     return errors
 
 
@@ -423,21 +665,30 @@ def _compatibility_errors(entry: Mapping, path: str, root: Path) -> list[str]:
 
     source = compatibility.get("source")
     if isinstance(source, str) and source:
-        relative = source.split("#", 1)[0]
-        document, error = _read_published_contract(relative, root)
-        if error is not None:
-            errors.append(f"{path}.compatibility.source: {error}")
-        else:
-            assert document is not None
+        source_errors, document = _canonical_source_errors(
+            "compatibility.source",
+            path,
+            source,
+            entry.get("component_id"),
+            COMPATIBILITY_POINTER,
+            root,
+        )
+        errors.extend(source_errors)
+        if document is not None:
             published = document.get("compatibility_policy", {})
-            if published.get("api") != api_policy:
+            if not _is_mapping(published):
                 errors.append(
-                    f"{path}.compatibility.api_policy: registry declares {api_policy!r}, published contract declares {published.get('api')!r}"
+                    f"{path}.compatibility.source: {COMPATIBILITY_POINTER!r} does not address an object in the canonical contract"
                 )
-            if published.get("events") != event_policy:
-                errors.append(
-                    f"{path}.compatibility.event_policy: registry declares {event_policy!r}, published contract declares {published.get('events')!r}"
-                )
+            else:
+                if published.get("api") != api_policy:
+                    errors.append(
+                        f"{path}.compatibility.api_policy: registry declares {api_policy!r}, published contract declares {published.get('api')!r}"
+                    )
+                if published.get("events") != event_policy:
+                    errors.append(
+                        f"{path}.compatibility.event_policy: registry declares {event_policy!r}, published contract declares {published.get('events')!r}"
+                    )
     return errors
 
 
@@ -519,10 +770,13 @@ def _lifecycle_errors(entry: Mapping, path: str) -> list[str]:
 
     if not isinstance(deployable, bool):
         errors.append(f"{path}.lifecycle.deployable: must be a boolean")
-    elif deployable and not entry.get("artifact", {}).get("pinned"):
-        errors.append(
-            f"{path}.lifecycle.deployable: a deployable entry requires a pinned artifact (ARCHITECTURE.md §1.3, §31)"
-        )
+    else:
+        artifact = entry.get("artifact")
+        pinned = artifact.get("pinned") if _is_mapping(artifact) else None
+        if deployable and pinned is not True:
+            errors.append(
+                f"{path}.lifecycle.deployable: a deployable entry requires a pinned artifact (ARCHITECTURE.md §1.3, §31)"
+            )
     return errors
 
 
