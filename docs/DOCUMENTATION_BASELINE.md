@@ -1,143 +1,147 @@
 # DOCUMENTATION_BASELINE.md
 
-**Статус:** `CLEAN`
-**Дата:** 2026-09-11
-**Ветка создания:** `chore/phase-0-repository-cleanup` (ветка впоследствии удалена)
-**Исторический commit:** `19c8a5b1efe31d01b8b7044e197b11c44f7fa2f4`
-**Актуализация:** 2026-09-08 — Issue #6 (DOC-002): ратифицирован и включён в контур `docs/OPERATING_MODEL.md` как канонический операционный источник
-**Актуализация:** 2026-09-10 — состояние приведено в соответствие с фактическим репозиторием (реализация компонентов, Component Contracts, contract-test suite, Quality Gate, CI). История перехода к реализованному состоянию сохраняется, в том числе зафиксированное в ADR-0011 (раздел Ratification) отклонение последовательности «ратифицировать → реализовать» для среза 4 SCS-001
-**Актуализация:** 2026-09-11 — Issue #49 (Foundation Health Review): фактические показатели приведены к тогдашнему `main` (`de13ab39c65ffe83e11c0f15b0f90ccacdeb5d2a`), который успешно прошёл Quality Gate (GitHub Actions run `34582747555`, 2026-09-11); количество тестов уточнено по фактическому прогону suite; отражено появление ADR-0012 и состояние SCS-001 после Student Enrollment. Проверены как актуальные: `docs/ARCHITECTURE.md` 1.2.0, `docs/OPERATING_MODEL.md` 1.0.0, `docs/GIT_OPERATING_PROTOCOL.md` 1.1.4, ADR-0010/0011/0012. Архитектура, ADR, Component Contracts и код не изменялись. Branch protection/rulesets этим документом не подтверждаются.
-**Актуализация:** 2026-09-11 — Issue #51: после merge PR #50 фактические показатели приведены к текущему `main` (`7ed2ec11f4f3d5329aa9424e5742c3fb6298ac41`), который успешно прошёл Quality Gate (GitHub Actions run `34624069051`, 2026-09-11); количество тестов (811) подтверждено фактическим прогоном suite. Повторно проверены как актуальные: `docs/ARCHITECTURE.md` 1.2.0, `docs/OPERATING_MODEL.md` 1.0.0, `docs/GIT_OPERATING_PROTOCOL.md` 1.1.4, ADR-0010/0011/0012. Архитектура, ADR, Component Contracts и код не изменялись. Branch protection/rulesets этим документом не подтверждаются.
-**Основание:** `docs/ARCHITECTURE.md` 1.2.0 + `docs/adr/ADR-0010-architecture-gap-review.md`
+**Статус:** `CLEAN`  
+**Дата:** 2026-09-14  
+**Базовый `main` до ратификации:** `da3ac2e03255e6bfe0b42e0923326e9ed2bfb38d`  
+**Актуализация:** 2026-09-14 — после прохождения Factory Gate #1 и ратификации ADR-0015 зафиксирована активация Level 2 — Component Factory; при этом сами фабричные механизмы остаются не реализованными до прохождения отдельных implementation slices.  
+**Основание:** `docs/ARCHITECTURE.md` 1.2.0 + `docs/adr/ADR-0010-architecture-gap-review.md` + `docs/adr/ADR-0015-level-2-component-factory-activation.md`
 
 ## 1. Назначение
 
-Этот документ фиксирует состояние документационного фундамента после ратификации ARCHITECTURE.md 1.2.0.
+Этот документ фиксирует подтверждённое состояние документационного фундамента и реализации проекта.
 
 `CLEAN` означает не «документация полна», а следующее:
 
 - единственный действующий архитектурный закон определён;
 - нормативные ADR имеют единый каталог;
-- ложные или неподтверждённые нормативные ссылки удалены;
+- ложные или неподтверждённые нормативные ссылки не используются;
 - отсутствующие исторические артефакты не выдаются за существующие;
 - операционный контур зафиксирован каноническим документом без создания второго архитектурного источника истины;
-- состояние документации соответствует текущему standalone-режиму;
-- следующий этап может начинать реализацию без реконструкции несуществующей архитектурной истории.
+- документация различает архитектурную активацию Level 2 и фактическое наличие фабричных механизмов;
+- текущее состояние проекта может быть продолжено без реконструкции несуществующей архитектурной истории.
 
 ## 2. Канонические источники
 
 | Область | Источник | Статус |
 |---|---|---|
 | Архитектурный закон | `docs/ARCHITECTURE.md` | RATIFIED 1.2.0 |
-| Архитектурные решения | `docs/adr/` | ACTIVE (ADR-0010 RATIFIED 2026-09-08; ADR-0011 RATIFIED 2026-09-10; ADR-0012 RATIFIED 2026-09-10) |
-| Текущее ADR конституционного изменения | `docs/adr/ADR-0010-architecture-gap-review.md` | RATIFIED |
+| Архитектурные решения | `docs/adr/` | ACTIVE; ADR-0010…ADR-0015 подтверждены, ADR-0015 RATIFIED 2026-09-14 |
+| Активация Component Factory | `docs/adr/ADR-0015-level-2-component-factory-activation.md` | RATIFIED; Level 2 ACTIVE |
 | Документационный baseline | `docs/DOCUMENTATION_BASELINE.md` | CLEAN |
 | Операционная модель | `docs/OPERATING_MODEL.md` | RATIFIED 1.0.0 |
+| Git / PR / CI процесс | `docs/GIT_OPERATING_PROTOCOL.md` | ACTIVE 1.1.4 |
 | Проектная ориентация | `README.md` | ALIGNED |
-| Реализация компонентов | код соответствующего компонента (`src/`) | существует: 7 компонентов, Level 0 modular monolith, standalone-режим |
-| Component Contracts | `components/*/contract/` (component_contract.json + openapi.yaml) | существует: 7/7, machine-readable |
-| Contract-test suite | `tests/` (contract/boundary/conformance наборы) | существует: 811 тестов |
-| Quality Gate | `scripts/quality-gate.ps1` (локальный) + `.github/workflows/quality-gate.yml` (CI) | GREEN: CI workflow активен; `main` `7ed2ec1...` успешно прошёл Quality Gate (run `34624069051`) |
+| Реализация компонентов | `src/` | существует: 9 компонентов; Level 0 modular monolith |
+| Component Contracts | `components/*/contract/` | существуют для 9 компонентов |
+| Contract / boundary tests | `tests/` | существуют; автоматическая проверка архитектурных границ активна |
+| Quality Gate | `scripts/quality-gate.ps1` + `.github/workflows/quality-gate.yml` | GREEN на ранее подтверждённом main; для текущей ратификационной ветки требуется CI-проверка PR |
 | Маршрутизация ответственности | `.github/CODEOWNERS` | существует |
 
-`docs/OPERATING_MODEL.md` — канонический операционный источник: он определяет, как команда (ChatGPT / Arena) работает через GitHub, и не создаёт архитектурных законов (Level A, §34.1 ARCHITECTURE.md; ADR не требуется). Архитектурным источником истины остаётся только `docs/ARCHITECTURE.md`, поэтому Operating Model не формирует второй архитектурный контур: при конфликте приоритет у ARCHITECTURE.md (см. §13 OPERATING_MODEL.md).
+`docs/OPERATING_MODEL.md` определяет, как команда работает через GitHub, и не создаёт архитектурных законов. При конфликте приоритет у `docs/ARCHITECTURE.md`.
 
-## 3. Проверка графа документации
+## 3. Подтверждённые архитектурные решения
 
-### 3.1. Устранённые фиктивные ссылки
+- `ADR-0010` — архитектурный gap review и ратификация `ARCHITECTURE.md` 1.2.0 — `RATIFIED`.
+- `ADR-0011` — SCS-001 Learning Content Authoring Boundary — `RATIFIED`.
+- `ADR-0012` — SCS-001 Student Enrollment Boundary — `RATIFIED`.
+- `ADR-0013` — Commerce Product Boundary / SCS-002 — `RATIFIED`.
+- `ADR-0014` — SCS-003 Booking Boundary — `RATIFIED`.
+- `ADR-0015` — Level 2 Component Factory activation after Factory Gate #1 — `RATIFIED` 2026-09-14.
 
-Следующие артефакты не существуют в подтверждённой истории и поэтому не используются как нормативные источники:
+`ADR-0009` отсутствует в подтверждённой истории и не реконструируется предположением.
 
-- `ADR-0009`;
-- `docs/07-core-model.md`;
-- `docs/08-scenario-validation.md`;
-- `docs/01-architecture.md`;
-- `docs/04-tech-stack.md`;
-- `docs/adr.md`;
-- `docs/architecture-review-1.1.0.md`.
+## 4. Состояние реализации
 
-`RELEASE_POLICY.md` также отсутствует, но это не является дефектом baseline: ARCHITECTURE.md 1.2.0 определяет его как отдельную операционную политику, необходимую при соответствующем режиме работы, а не как обязательный фундаментальный артефакт текущего standalone-режима.
+В репозитории подтверждены 9 компонентов Level 0:
 
-### 3.2. Историческая целостность
+- `authorization`;
+- `identity`;
+- `tenant_authority`;
+- `records`;
+- `learning` — SCS-001;
+- `saga`;
+- `idempotency`;
+- `commerce` — SCS-002;
+- `booking` — SCS-003.
 
-ADR-0009 не восстанавливается задним числом.
+Три независимых Business Systems подтверждают Factory Gate #1:
 
-Сведения, ранее приписанные ADR-0009, были перенесены в ADR-0010 только там, где они являются частью принятого решения 1.2.0. Неподтверждённые исторические утверждения о проведённых работах удалены из действующей архитектуры.
+- SCS-001 Learning;
+- SCS-002 Commerce;
+- SCS-003 Booking.
 
-### 3.3. README
+## 5. Состояние фабрики
 
-README синхронизирован с архитектурой 1.2.0 и больше не ссылается на удалённый аудит 1.1.0 и не утверждает, что ADR-0010 ожидает ратификации.
+**Архитектурный уровень:** `Level 2 — ACTIVE`.
 
-## 4. Ожидаемые артефакты
+Активация произведена ADR-0015 и означает разрешение на постепенное введение фабричных механизмов. Она не означает, что эти механизмы уже реализованы.
 
-Обязательные для текущего foundation/standalone-режима:
+На момент этой актуализации **не считаются реализованными и доступными**:
 
-- `docs/ARCHITECTURE.md`;
-- `docs/adr/`;
-- `docs/DOCUMENTATION_BASELINE.md`;
-- `docs/OPERATING_MODEL.md`;
-- `README.md`.
-
-Ожидаемые по мере развития репозитория, но не обязательные до появления соответствующей потребности:
-
-- `RELEASE_POLICY.md` — при переходе к соответствующему операционному режиму.
-
-Появившиеся с переходом к реализации (необязательные для foundation-режима, но уже существующие и охраняемые):
-
-- `.github/CODEOWNERS` — существует;
-- Component Contracts — существуют (7/7);
-- contract-test suite — существует;
-- CI/conformance automation — активна: `.github/workflows/quality-gate.yml` выполняется для pull request и push в `main`; текущий `main` успешно прошёл Quality Gate. Branch protection/rulesets в рамках этого baseline не утверждаются.
-
-Отсутствие необязательного артефакта не делает baseline `DIRTY`.
-
-## 5. Состояние репозитория
-
-**Существует (факт на момент этой актуализации):**
-
-- 7 реализованных компонентов Level 0 (in-memory, standalone): `authorization`, `identity`, `tenant_authority`, `records`, `learning` (SCS-001: Submission read, Teacher Submission Discovery, Teacher Review и Learning Content Authoring — граница авторинга ратифицирована ADR-0011; Student Enrollment определён ADR-0012; компонент версии 0.3.0), `saga`, `idempotency`;
-- Component Contracts (7/7) с OpenAPI-документами;
-- contract-test suite и поведенческие тесты (811 тестов: границы, tenant isolation, fail closed, idempotency, saga, audit, observability, enrollment);
-- Quality Gate: локальный скрипт и активный CI workflow `.github/workflows/quality-gate.yml`; текущий `main` `7ed2ec1...` успешно прошёл Quality Gate (run `34624069051`).
-
-**По-прежнему не существует** (фабричные механизмы не введены, что допустимо в standalone/foundation-режиме §4.1):
-
-- Component Catalog;
 - Component Registry;
+- Component Catalog;
+- Platform Manifest implementation;
+- Golden Bundles;
 - Composer;
-- Golden Bundle;
-- Platform Instance implementation;
-- migration sets (физических БД нет — in-memory stores Level 0);
-- deployable-артефакты (текущие `deployment.py` — только композиционный код).
+- Platform Instance assembly tooling.
 
-Следствие для §30: ни один компонент не является `PUBLISHABLE` (отсутствуют migrations, deployable-артефакт, event-инфраструктура). Проект публикации не заявляет; это задокументированное состояние foundation/standalone-режима, а **не нарушение** архитектурного закона.
-
-## 6. Что означает CLEAN
-
-`CLEAN` разрешает перейти к следующему этапу:
+Первый разрешённый implementation slice:
 
 ```text
-Documentation Baseline
-        ↓
-First Implementation Slice
-        ↓
-Component Contract
-        ↓
-Implementation
-        ↓
-Tests / Conformance
+Slice A — Component Registry
 ```
 
-`CLEAN` не означает автоматического выбора технологий и не отменяет ADR для изменений уровня C/D.
+Он должен иметь отдельный work item, собственную проверку, независимый review и owner approval до merge.
 
-## 7. Правило следующего изменения
+## 6. Границы Level 2
 
-Любое новое фундаментальное требование, отсутствующее в ARCHITECTURE.md 1.2.0, не должно появляться как «решение по умолчанию». Оно либо относится к реализации уровня A/B, либо оформляется соответствующим ADR.
+Активация фабрики не изменяет:
 
-Первый implementation slice должен быть минимальным, самостоятельно проверяемым и не требовать преждевременного включения фабричной механики.
+- границы Learning, Commerce или Booking;
+- владение бизнес-данными;
+- опубликованные контракты;
+- правила совместимости и версионирования;
+- запрет на `latest` как архитектурную зависимость;
+- запрет на прямой доступ фабрики к внутренним БД компонентов;
+- запрет на прямые импорты внутренних модулей компонентов как механизм композиции;
+- правило отдельного ADR для новых архитектурных границ.
 
-## 8. Итог
+Фабрика владеет только factory-level metadata и knowledge of composition: registry metadata, catalog metadata, bundles, manifests и compatibility metadata.
+
+## 7. Документационная целостность
+
+`README.md` и `docs/adr/README.md` должны отражать, что Level 2 активирован, но фабричные механизмы ещё не реализованы.
+
+Исторические conformance/audit документы не переписываются только потому, что проект развился после даты их снимка; они остаются историческими артефактами своего состояния.
+
+## 8. Следующее изменение
+
+Следующим самостоятельным этапом является **Slice A — Component Registry**.
+
+До начала реализации Slice A необходимо иметь отдельный утверждённый work item и сохранить границу:
+
+```text
+ADR-0015 ratified
+        ↓
+approved implementation work item
+        ↓
+Slice A — Component Registry
+        ↓
+verification / independent review
+        ↓
+owner approval
+        ↓
+merge
+```
+
+## 9. Итог
 
 **DOCUMENTATION BASELINE: CLEAN.**
 
-Фундамент документации сопровождает репозиторий от конституционной подготовки до текущего реализованного состояния: компоненты Level 0 реализованы, контракты и contract-тесты существуют, Quality Gate воспроизводим и зелёный, фабричные механизмы намеренно не введены (standalone-режим, §4.1), компоненты не публикуются и `NOT PUBLISHABLE` по §30 задокументировано как текущее состояние foundation/standalone-режима.
+**Architecture Level 2: ACTIVE.**
+
+**Factory mechanisms: NOT YET IMPLEMENTED.**
+
+**Factory Gate #1: PASSED.**
+
+Документационный baseline отражает переход от foundation/standalone состояния к активированному Level 2 без ложного утверждения, что Registry, Catalog, Golden Bundles или Composer уже существуют.
