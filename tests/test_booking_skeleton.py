@@ -365,6 +365,22 @@ def test_blank_name_is_a_validation_error_before_any_decision():
     assert harness.instance.authorization.store.audit == []
 
 
+def test_name_of_512_characters_is_accepted_and_513_is_refused():
+    harness = booking_harness(store=BookingStore())
+    http = harness.http()
+    at_limit = create_resource(http, "skeleton-name-512", name="x" * 512)
+    assert at_limit.status_code == 201, at_limit.text
+    assert at_limit.json()["name"] == "x" * 512
+    over_limit = create_resource(http, "skeleton-name-513", name="x" * 513)
+    assert over_limit.status_code == 422
+    body = envelope_of(over_limit)
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    assert body["error"]["details"]["reason"] == "validation_error"
+    assert len(harness.booking.store.resources) == 1
+    # Refused before any decision: only the 512-name create asked IS-003.
+    assert len(harness.instance.authorization.store.audit) == 1
+
+
 def test_unknown_body_field_is_a_schema_refusal():
     harness = booking_harness()
     response = harness.http().post(

@@ -828,7 +828,7 @@ components:
         name:
           type: string
           minLength: 1
-          maxLength: 200
+          maxLength: 512
         status:
           type: string
           enum: [ACTIVE, INACTIVE]

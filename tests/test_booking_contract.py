@@ -33,8 +33,10 @@ from booking_service.contracts import (
     OwnDenyReason,
 )
 from booking_service.engine import ENFORCEMENT_CHAIN
+from booking_service.engine import NAME_MAX as ENGINE_NAME_MAX
 from booking_service.errors import ConfigurationError
 from booking_service.models import OwnedResource
+from booking_service.store import NAME_MAX as STORE_NAME_MAX
 from booking_service.store import BookingStore
 from tests.test_booking_boundary import StubAuthorizationPort, booking_deployment
 from tests.test_booking_skeleton import (
@@ -194,6 +196,9 @@ def openapi() -> dict:
                 e.strip().strip('"')
                 for e in line.split("[", 1)[1].rstrip("]").split(",")
             ]
+        elif prop is not None and line.startswith("          m") and "Length:" in line:
+            key, value = line.strip().split(":", 1)
+            prop[key] = int(value)
     error = document["components"]["schemas"]["Error"]
     error_text = schemas_text.split("    Error:\n", 1)[1]
     error["properties"]["error"] = {
@@ -473,6 +478,24 @@ def test_declared_models_match_the_implementation():
         "ACTIVE",
         "CANCELLED",
     ]
+
+
+def test_resource_name_limit_is_one_value_across_implementation_and_contract():
+    """Resource.name: at most 512 characters inclusive — everywhere."""
+    assert ENGINE_NAME_MAX == STORE_NAME_MAX == 512
+    name_schema = openapi()["components"]["schemas"]["ResourceCreate"]["properties"][
+        "name"
+    ]
+    assert name_schema["minLength"] == 1
+    assert name_schema["maxLength"] == ENGINE_NAME_MAX
+    assert "512" in contract()["booking_boundary"]["resource_model"]["name_rule"]
+    # And the published limit is the limit the API actually enforces.
+    http = booking_harness(store=BookingStore()).http()
+    accepted = create_resource(http, "limit-512", name="n" * ENGINE_NAME_MAX)
+    assert accepted.status_code == 201, accepted.text
+    refused = create_resource(http, "limit-513", name="n" * (ENGINE_NAME_MAX + 1))
+    assert refused.status_code == 422
+    assert envelope_of(refused)["error"]["code"] == "VALIDATION_ERROR"
 
 
 def test_declared_refusal_vocabulary_matches_the_published_reasons():

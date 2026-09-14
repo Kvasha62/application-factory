@@ -46,6 +46,7 @@
         "created_at",
         "updated_at"
       ],
+      "name_rule": "name is a non-blank string of at most 512 characters (inclusive): 512 is accepted, 513 is refused as validation_error; the same limit (NAME_MAX = 512) is enforced by the engine and at store registration and is published as ResourceCreate.name.maxLength in the OpenAPI document",
       "availability_window": [
         "availability_id",
         "tenant_id",
