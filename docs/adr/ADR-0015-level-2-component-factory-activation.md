@@ -1,11 +1,12 @@
 # ADR-0015 — Activate Level 2 Component Factory
 
-**Status:** `PROPOSED`  
+**Status:** `RATIFIED`  
 **Date:** 2026-09-14  
+**Ratified:** 2026-09-14 by project owner  
 **Level:** D — domain/architecture boundary decision  
 **Initiated by:** Factory Gate #1 review after SCS-003 Booking
 
-> This ADR proposes activation of architectural Level 2 — Component Factory after the project has earned Factory Gate #1. It does not authorize premature expansion of business systems, microservices or integrations, and it does not replace `docs/ARCHITECTURE.md`.
+> This ADR activates architectural Level 2 — Component Factory after the project has earned Factory Gate #1. It does not authorize premature expansion of business systems, microservices or integrations, and it does not replace `docs/ARCHITECTURE.md`.
 
 ## 1. Context
 
@@ -29,7 +30,7 @@ At the same time, reaching the gate does not justify building every factory capa
 
 ## 2. Decision
 
-**Architectural Level 2 — Component Factory is proposed for activation.**
+**Architectural Level 2 — Component Factory is activated.**
 
 Upon ratification of this ADR, the project may introduce the factory mechanisms explicitly defined by `docs/ARCHITECTURE.md`, provided they are implemented incrementally and remain subordinate to the architectural law.
 
@@ -227,9 +228,7 @@ This ADR does **not** authorize:
 
 ## 14. Transition State
 
-Until this ADR is ratified, the architectural state remains the current ratified state.
-
-After ratification, the intended state is:
+Before ratification, the architectural state remained the then-current ratified state. This ADR is now ratified, so the intended state is:
 
 ```text
 Architecture level: Level 2 — ACTIVE
@@ -292,7 +291,7 @@ Factory tests must verify architecture rules, not merely successful object const
 
 ## 17. Acceptance Boundary
 
-ADR-0015 is considered ratified only when:
+ADR-0015 is considered ratified when:
 
 1. Level 2 activation is approved through the project's normal ADR workflow;
 2. Factory Gate #1 remains documented as satisfied by the three independent Business Systems;
@@ -336,14 +335,14 @@ Rejected. Substantive architectural changes must be recorded through the ADR pro
 
 ## 20. Ratification
 
-This document is proposed for owner ratification through the project's established workflow:
+This ADR was proposed through the project's established workflow:
 
 ```text
-Issue → ADR branch → PR → independent ChatGPT review
+Issue → ADR branch → PR → independent review
 → corrections if required → owner approval → merge → post-merge verification
 ```
 
-Until ratified, this document has `PROPOSED` status and does not by itself activate Level 2.
+The project owner approved ADR-0015 on 2026-09-14. This document is now `RATIFIED`, and Level 2 — Component Factory is activated subject to the incremental implementation and acceptance boundaries defined above.
 
 Arena may prepare and implement the approved follow-up work only after the ADR reaches `RATIFIED` status and the corresponding work item is approved.
 
@@ -353,12 +352,12 @@ This ADR does not replace `docs/ARCHITECTURE.md`.
 
 `docs/ARCHITECTURE.md` remains the project's technical law. The Level 2 definition and factory gate rules remain authoritative.
 
-`docs/adr/README.md` remains the catalog of confirmed ADRs and architectural history. ADR-0015 must be added there only after ratification, preserving the distinction between proposed and confirmed architectural history.
+`docs/adr/README.md` remains the catalog of confirmed ADRs and architectural history. ADR-0015 is included there as a confirmed architectural decision after ratification.
 
 ADR-0014 remains the ratified Booking boundary and is not modified by this ADR.
 
 ## 22. Final Decision
 
-> **The project has earned Factory Gate #1 through three independently delivered Class A Business Systems. Level 2 — Component Factory is proposed for activation, with factory capabilities introduced incrementally and without changing existing business boundaries, data ownership, contract rules, compatibility rules or the prohibition on `latest`.**
+> **The project has earned Factory Gate #1 through three independently delivered Class A Business Systems. Level 2 — Component Factory is activated, with factory capabilities introduced incrementally and without changing existing business boundaries, data ownership, contract rules, compatibility rules or the prohibition on `latest`.**
 
-**ADR-0015 status: PROPOSED.**
+**ADR-0015 status: RATIFIED.**

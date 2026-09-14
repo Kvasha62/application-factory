@@ -78,7 +78,7 @@ OIDC, CDC, RLS, SemVer).
 
 ## Статус
 
-Стадия реализации (Foundation stage, standalone mode, ARCHITECTURE.md §4.1).
+**Architecture Level 2 — Component Factory: ACTIVE** (ADR-0015, 2026-09-14).
 
 Реализованы 9 компонентов Level 0 (in-memory, модульный монолит):
 `authorization`, `identity`, `tenant_authority`, `records`,
@@ -88,14 +88,25 @@ OIDC, CDC, RLS, SemVer).
 (`src/`, контракты в `components/*/contract/`, поведенческие и
 contract-тесты в `tests/`).
 
-Текущее состояние — автономный режим (standalone mode, ARCHITECTURE.md §4.1):
-механизмы фабрики (Component Catalog, Golden Bundles, Composer,
-Release Train) ещё не включены, и создание их до достижения гейтов
-было бы нарушением LAW-13. Миграции и deployable-артефакты отсутствуют,
-поэтому компоненты не являются `PUBLISHABLE` по §30 — это задокументированное
-состояние foundation-режима, а не нарушение.
+Три независимых Business Systems — SCS-001 Learning, SCS-002 Commerce
+и SCS-003 Booking — обеспечили прохождение Factory Gate #1.
+
+Активация Level 2 разрешает ввод фабричных механизмов, но не означает,
+что они уже реализованы. На текущем этапе ещё не считаются реализованными:
+Component Registry, Component Catalog, Platform Manifest tooling,
+Golden Bundles и Composer. Первый implementation slice — Component Registry.
+Каждый такой slice требует отдельного work item, проверки, независимого
+review и owner approval до merge.
+
+Границы бизнес-систем, владение данными, опубликованные контракты,
+правила совместимости и запрет на `latest` не изменяются.
+Миграции и deployable-артефакты отсутствуют, поэтому компоненты не являются
+`PUBLISHABLE` по §30 — это задокументированное текущее состояние реализации,
+а не нарушение архитектурного закона.
 
 Архитектура 1.2.0 ратифицирована (ADR-0010, 2026-09-08).
-ADR-0011 (SCS-001 Learning Content Authoring) ратифицирован 2026-09-10.
+ADR-0011, ADR-0012, ADR-0013 и ADR-0014 ратифицированы как соответствующие
+границы SCS/компонентов.
+ADR-0015 ратифицирован 2026-09-14 и активировал Level 2.
 Документационный базовый стандарт зафиксирован в
 `docs/DOCUMENTATION_BASELINE.md` (статус: `CLEAN`).
