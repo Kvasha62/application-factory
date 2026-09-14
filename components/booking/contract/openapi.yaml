@@ -1,0 +1,969 @@
+openapi: 3.1.0
+info:
+  title: >-
+    SCS-003 Booking — Resource, Availability Window, Reservation (MVP)
+  version: 0.1.0
+  description: >-
+    Граница владельца данных бронирования одной Platform Instance (Issue #57,
+    ADR-0014). Компонент владеет tenant-scoped ресурсами, их окнами
+    доступности и резервированиями и доказывает, что ALLOW от IS-003 не
+    является прямым доступом к данным: финальный контроль остаётся на
+    границе владельца. Каждый доступ проходит фиксированную цепочку
+    `ownership_boundary → authorization_decision → owned_data_operation`;
+    решение по умолчанию — DENY, отказ зависимости закрывает доступ.
+    Опубликованы семь операций: создание и чтение ресурса
+    (`booking.resources.create` / `booking.resources.read`), объявление и
+    чтение окон доступности (`booking.availability.create` /
+    `booking.availability.read`), создание, чтение и отмена резервирования
+    (`booking.reservations.create` / `booking.reservations.read` /
+    `booking.reservations.cancel`). Все интервалы полуоткрытые
+    `[start_at, end_at)` со `start_at < end_at`; входные метки времени
+    обязаны быть timezone-aware (naive отказывается кодом
+    VALIDATION_ERROR), хранение и сравнение — в UTC, ответы несут явное
+    смещение `+00:00`; смежные интервалы не пересекаются. Резервирование
+    создаётся только для ACTIVE-ресурса, целиком внутри одного окна
+    доступности и без пересечения с ACTIVE-резервированиями; проверка и
+    запись атомарны в критической секции ресурса, конфликт — `409
+    reservation_conflict`. Жизненный цикл резервирования — ровно `ACTIVE →
+    CANCELLED`, запись сохраняется, удаления нет. Booker — verified identity
+    субъекта; отменить может только он (`booker_mismatch` иначе). Каждая
+    команда изменения состояния защищена IS-005 (`Idempotency-Key`
+    обязателен). Отказы используют утверждённый конверт: `error.code` /
+    `error.message` / `error.details` плюс `request_id` / `correlation_id`
+    верхнего уровня; стабильная внутренняя причина сохраняется в
+    `error.details.reason`. Зависимостей от Commerce и Learning нет;
+    цены, оплата, capacity > 1, повторяющиеся бронирования, листы ожидания,
+    уведомления и календарная синхронизация — вне границы.
+servers:
+  - url: /api/v1/booking
+    description: Booking API base path of one Platform Instance
+paths:
+  /resources:
+    post:
+      summary: Create one owned Resource (booking.resources.create)
+      description: >-
+        `Authorization` несёт credential субъекта; он проверяется в IS-001
+        внутри решения IS-003 — сам компонент credentials не проверяет.
+        `X-Tenant-Id` — только cross-check, передаётся как есть и никогда не
+        выбирает эффективный тенант (LAW-16a).
+        Тенант ресурса выводится из verified identity через опубликованную
+        цепочку. `Idempotency-Key` обязателен: команда доставляется через IS-005, точный
+        replay возвращает записанный результат без второго эффекта, а повтор
+        ключа с другим binding отказывается.
+        Новый ресурс создаётся в состоянии `ACTIVE`, если явно не объявлен
+        `INACTIVE`. Тело команды называет только ресурс; тенант и идентичность
+        в нём отсутствуют по построению.
+      operationId: createResource
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: >-
+            обязателен для команды; отсутствие отказывается кодом
+            IDEMPOTENCY_KEY_REQUIRED
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResourceCreate"
+      responses:
+        "201":
+          description: >-
+            ресурс создан цепочкой контроля; возвращается представление ресурса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        "400":
+          description: >-
+            команда без ключа идемпотентности (код IDEMPOTENCY_KEY_REQUIRED);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            ключ уже использован с другим binding (код IDEMPOTENCY_CONFLICT,
+            причина `idempotency_conflict`); второй эффект не создан; отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            payload не проходит правила команды (код VALIDATION_ERROR,
+            причина `validation_error`) либо запрос не читается опубликованной
+            схемой (код INVALID_REQUEST, причина `malformed_request`); отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /resources/{resource_id}:
+    get:
+      summary: Serve one owned Resource (booking.resources.read)
+      description: >-
+        `Authorization` несёт credential субъекта; он проверяется в IS-001
+        внутри решения IS-003 — сам компонент credentials не проверяет.
+        `X-Tenant-Id` — только cross-check, передаётся как есть и никогда не
+        выбирает эффективный тенант (LAW-16a).
+        Владелец данных сначала устанавливает границу владения (ресурс
+        существует и принадлежит этому компоненту), затем спрашивает решение
+        IS-003 и лишь потом отдаёт данные.
+      operationId: readResource
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: resource_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            доступ разрешён цепочкой контроля; возвращается представление ресурса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            ресурс не существует в границе владельца (код NOT_FOUND, причина
+            `resource_not_found`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            запрос не читается опубликованной схемой (код INVALID_REQUEST,
+            причина `malformed_request`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /resources/{resource_id}/availability:
+    post:
+      summary: Declare one Availability Window (booking.availability.create)
+      description: >-
+        `Authorization` несёт credential субъекта; он проверяется в IS-001
+        внутри решения IS-003 — сам компонент credentials не проверяет.
+        `X-Tenant-Id` — только cross-check, передаётся как есть и никогда не
+        выбирает эффективный тенант (LAW-16a).
+        `Idempotency-Key` обязателен: команда доставляется через IS-005, точный
+        replay возвращает записанный результат без второго эффекта, а повтор
+        ключа с другим binding отказывается.
+        Окно доступности — явный разрешённый полуоткрытый интервал
+        `[start_at, end_at)` существующего ресурса того же тенанта; не слот и
+        не занятость, окна могут пересекаться между собой. Метки времени обязаны
+        нести смещение (naive отказывается), сохраняются и отдаются в UTC.
+      operationId: createAvailability
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: resource_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: >-
+            обязателен для команды; отсутствие отказывается кодом
+            IDEMPOTENCY_KEY_REQUIRED
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AvailabilityCreate"
+      responses:
+        "201":
+          description: >-
+            окно объявлено цепочкой контроля; возвращается представление окна в UTC
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Availability"
+        "400":
+          description: >-
+            команда без ключа идемпотентности (код IDEMPOTENCY_KEY_REQUIRED);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            ресурс не существует в границе владельца (код NOT_FOUND, причина
+            `resource_not_found`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            ключ уже использован с другим binding (код IDEMPOTENCY_CONFLICT,
+            причина `idempotency_conflict`); второй эффект не создан; отказ
+            записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            payload не проходит правила команды (код VALIDATION_ERROR, причина
+            `validation_error`): naive timestamp без смещения, нечитаемая
+            метка времени, `start_at >= end_at` после приведения к UTC; либо
+            запрос не читается опубликованной схемой (код INVALID_REQUEST,
+            причина `malformed_request`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      summary: Serve the Availability Windows of one Resource (booking.availability.read)
+      description: >-
+        `Authorization` несёт credential субъекта; он проверяется в IS-001
+        внутри решения IS-003 — сам компонент credentials не проверяет.
+        `X-Tenant-Id` — только cross-check, передаётся как есть и никогда не
+        выбирает эффективный тенант (LAW-16a).
+        Возвращает все окна доступности ресурса в порядке возрастания
+        `start_at`; ресурс без окон отдаёт пустой список.
+      operationId: listAvailability
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: resource_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            доступ разрешён цепочкой контроля; возвращается список окон ресурса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvailabilityList"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            ресурс не существует в границе владельца (код NOT_FOUND, причина
+            `resource_not_found`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            запрос не читается опубликованной схемой (код INVALID_REQUEST,
+            причина `malformed_request`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /reservations:
+    post:
+      summary: Create one Reservation (booking.reservations.create)
+      description: >-
+        `Authorization` несёт credential субъекта; он проверяется в IS-001
+        внутри решения IS-003 — сам компонент credentials не проверяет.
+        `X-Tenant-Id` — только cross-check, передаётся как есть и никогда не
+        выбирает эффективный тенант (LAW-16a).
+        `Idempotency-Key` обязателен: команда доставляется через IS-005, точный
+        replay возвращает записанный результат без второго эффекта, а повтор
+        ключа с другим binding отказывается.
+        Booker — verified identity субъекта; в теле команды он отсутствует по
+        построению. Резервирование создаётся только если ресурс существует в
+        тенанте, находится в `ACTIVE`, интервал валиден (aware, `start_at <
+        end_at`), лежит целиком в одном окне доступности и не пересекается ни с
+        одним ACTIVE-резервированием ресурса по правилу полуоткрытого интервала
+        (смежные интервалы не конфликтуют). Проверка и запись выполняются
+        атомарно в критической секции ресурса: при гонке ровно один из
+        конкурентов получает 201, остальные — 409 `reservation_conflict`.
+      operationId: createReservation
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: >-
+            обязателен для команды; отсутствие отказывается кодом
+            IDEMPOTENCY_KEY_REQUIRED
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReservationCreate"
+      responses:
+        "201":
+          description: >-
+            резервирование создано цепочкой контроля; возвращается представление в UTC со статусом ACTIVE
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reservation"
+        "400":
+          description: >-
+            команда без ключа идемпотентности (код IDEMPOTENCY_KEY_REQUIRED);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            ресурс не существует в границе владельца (код NOT_FOUND, причина
+            `resource_not_found`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            одна из причин (второй эффект не создан; отказ записан в аудит):
+            ресурс неактивен (код RESOURCE_INACTIVE, причина
+            `resource_inactive`); интервал не лежит целиком в одном окне
+            доступности либо окон нет (код OUTSIDE_AVAILABILITY, причины
+            `outside_availability` / `availability_not_found`); интервал
+            пересекается с ACTIVE-резервированием того же ресурса по правилу
+            полуоткрытого интервала (код RESERVATION_CONFLICT, причина
+            `reservation_conflict` — решается атомарно в критической секции
+            ресурса); ключ уже использован с другим binding (код
+            IDEMPOTENCY_CONFLICT, причина `idempotency_conflict`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            payload не проходит правила команды (код VALIDATION_ERROR, причина
+            `validation_error`): naive timestamp без смещения, нечитаемая
+            метка времени, `start_at >= end_at` после приведения к UTC; либо
+            запрос не читается опубликованной схемой (код INVALID_REQUEST,
+            причина `malformed_request`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /reservations/{reservation_id}:
+    get:
+      summary: Serve one owned Reservation (booking.reservations.read)
+      description: >-
+        `Authorization` несёт credential субъекта; он проверяется в IS-001
+        внутри решения IS-003 — сам компонент credentials не проверяет.
+        `X-Tenant-Id` — только cross-check, передаётся как есть и никогда не
+        выбирает эффективный тенант (LAW-16a).
+        Отдаёт резервирование в любом состоянии (`ACTIVE` или `CANCELLED`) —
+        отменённая запись сохраняется как исторический факт.
+      operationId: readReservation
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: reservation_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            доступ разрешён цепочкой контроля; возвращается представление резервирования
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reservation"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            резервирование не существует в границе владельца (код NOT_FOUND,
+            причина `reservation_not_found`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            запрос не читается опубликованной схемой (код INVALID_REQUEST,
+            причина `malformed_request`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /reservations/{reservation_id}/cancel:
+    post:
+      summary: Cancel one Reservation (booking.reservations.cancel)
+      description: >-
+        `Authorization` несёт credential субъекта; он проверяется в IS-001
+        внутри решения IS-003 — сам компонент credentials не проверяет.
+        `X-Tenant-Id` — только cross-check, передаётся как есть и никогда не
+        выбирает эффективный тенант (LAW-16a).
+        `Idempotency-Key` обязателен: команда доставляется через IS-005, точный
+        replay возвращает записанный результат без второго эффекта, а повтор
+        ключа с другим binding отказывается.
+        Команда без тела. Единственный переход жизненного цикла: `ACTIVE →
+        CANCELLED`. Запись сохраняется, интервал снова доступен для
+        резервирования; повторная отмена — `invalid_state_transition`;
+        обратного перехода и удаления не существует. Отменить может только
+        booker резервирования — другой субъект того же тенанта получает
+        `booker_mismatch` даже при наличии grant.
+      operationId: cancelReservation
+      security:
+        - subjectAuth: []
+      parameters:
+        - in: path
+          name: reservation_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Tenant-Id
+          required: false
+          schema:
+            type: string
+          description: caller-supplied cross-check only; never a source of tenant identity
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: >-
+            обязателен для команды; отсутствие отказывается кодом
+            IDEMPOTENCY_KEY_REQUIRED
+        - in: header
+          name: X-Request-Id
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            резервирование переведено в CANCELLED (или возвращён записанный результат replay); возвращается представление
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reservation"
+        "400":
+          description: >-
+            команда без ключа идемпотентности (код IDEMPOTENCY_KEY_REQUIRED);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            субъект не установлен (код AUTHENTICATION_REQUIRED; причина в
+            `error.details.reason`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            решение власти — DENY либо субъект не является booker'ом
+            резервирования (код AUTHORIZATION_DENIED; причина в
+            `error.details.reason`, для чужого booker'а — `booker_mismatch`);
+            отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            резервирование не существует в границе владельца (код NOT_FOUND,
+            причина `reservation_not_found`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            резервирование уже CANCELLED (код INVALID_STATE_TRANSITION, причина
+            `invalid_state_transition`) либо ключ уже использован с другим
+            binding (код IDEMPOTENCY_CONFLICT, причина `idempotency_conflict`);
+            запись сохранена без изменений; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            запрос не читается опубликованной схемой (код INVALID_REQUEST,
+            причина `malformed_request`); отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            зависимость принятия решения не ответила либо ответила вне
+            опубликованного контракта (код DEPENDENCY_UNAVAILABLE): доступ
+            закрыт; отказ записан в аудит
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /health:
+    servers:
+      - url: /
+        description: Instance root for health and readiness
+    get:
+      responses:
+        "200":
+          description: liveness
+  /ready:
+    servers:
+      - url: /
+        description: Instance root for health and readiness
+    get:
+      responses:
+        "200":
+          description: readiness
+components:
+  securitySchemes:
+    subjectAuth:
+      type: http
+      scheme: bearer
+      description: >-
+        credential субъекта; проверяется в IS-001 внутри решения IS-003, а не
+        этим компонентом
+  schemas:
+    Resource:
+      type: object
+      additionalProperties: false
+      required: [resource_id, name, status, created_by, created_at, updated_at]
+      properties:
+        resource_id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+          description: только ACTIVE-ресурс принимает новые резервирования
+        created_by:
+          type: string
+          description: opaque-ссылка на verified identity создателя; профиль принадлежит Identity
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      description: >-
+        опубликованное представление ресурса; tenant_id и owner_component —
+        факты хранилища и не публикуются
+    ResourceCreate:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 512
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+          default: ACTIVE
+      description: >-
+        тело команды называет только ресурс; тенант и идентичность в нём
+        отсутствуют по построению
+    Availability:
+      type: object
+      additionalProperties: false
+      required: [availability_id, resource_id, start_at, end_at, created_at]
+      properties:
+        availability_id:
+          type: string
+        resource_id:
+          type: string
+        start_at:
+          type: string
+          format: date-time
+          description: начало окна в UTC (включительно)
+        end_at:
+          type: string
+          format: date-time
+          description: конец окна в UTC (исключительно)
+        created_at:
+          type: string
+          format: date-time
+      description: >-
+        явное разрешённое окно `[start_at, end_at)` одного ресурса; не слот и
+        не занятость
+    AvailabilityCreate:
+      type: object
+      additionalProperties: false
+      required: [start_at, end_at]
+      properties:
+        start_at:
+          type: string
+          format: date-time
+          description: ISO 8601 с явным смещением или Z; naive отказывается
+        end_at:
+          type: string
+          format: date-time
+          description: ISO 8601 с явным смещением или Z; строго позже start_at
+    AvailabilityList:
+      type: object
+      additionalProperties: false
+      required: [resource_id, items]
+      properties:
+        resource_id:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Availability"
+          description: окна ресурса в порядке возрастания start_at
+    ReservationCreate:
+      type: object
+      additionalProperties: false
+      required: [resource_id, start_at, end_at]
+      properties:
+        resource_id:
+          type: string
+        start_at:
+          type: string
+          format: date-time
+          description: ISO 8601 с явным смещением или Z; naive отказывается
+        end_at:
+          type: string
+          format: date-time
+          description: ISO 8601 с явным смещением или Z; строго позже start_at
+      description: >-
+        booker_identity_id в теле отсутствует по построению — booker выводится
+        из verified identity субъекта
+    Reservation:
+      type: object
+      additionalProperties: false
+      required: [reservation_id, resource_id, booker_identity_id, start_at, end_at, status, created_at, cancelled_at]
+      properties:
+        reservation_id:
+          type: string
+        resource_id:
+          type: string
+        booker_identity_id:
+          type: string
+          description: opaque-ссылка на verified identity booker'а; профиль принадлежит Identity
+        start_at:
+          type: string
+          format: date-time
+          description: начало интервала в UTC (включительно)
+        end_at:
+          type: string
+          format: date-time
+          description: конец интервала в UTC (исключительно)
+        status:
+          type: string
+          enum: [ACTIVE, CANCELLED]
+          description: единственный переход — ACTIVE → CANCELLED
+        created_at:
+          type: string
+          format: date-time
+        cancelled_at:
+          type: [string, "null"]
+          format: date-time
+          description: момент отмены в UTC; null для ACTIVE
+      description: >-
+        опубликованное представление резервирования; tenant_id и
+        owner_component — факты хранилища и не публикуются
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error, request_id, correlation_id]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              type: string
+              enum: [AUTHENTICATION_REQUIRED, AUTHORIZATION_DENIED, NOT_FOUND, INVALID_REQUEST, VALIDATION_ERROR, RESOURCE_INACTIVE, OUTSIDE_AVAILABILITY, RESERVATION_CONFLICT, INVALID_STATE_TRANSITION, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_CONFLICT, DEPENDENCY_UNAVAILABLE]
+              description: минимальный опубликованный код отказа SCS-003
+            message:
+              type: string
+              description: стабильное человекочитаемое сообщение кода
+            details:
+              type: object
+              additionalProperties: true
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  description: стабильная внутренняя причина отказа
+        request_id:
+          type: string
+          description: идентификатор запроса записи аудита
+        correlation_id:
+          type: string
+          description: идентификатор корреляции записи аудита

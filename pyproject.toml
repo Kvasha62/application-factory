@@ -54,6 +54,8 @@ extend-immutable-calls = ["fastapi.Query"]
 # Fail-closed dependency boundaries — see the policy note above (BLE001).
 "src/authorization_service/adapters.py" = ["BLE001"]
 "src/authorization_service/engine.py" = ["BLE001"]
+"src/booking_service/adapters.py" = ["BLE001"]
+"src/booking_service/engine.py" = ["BLE001"]
 "src/commerce_service/adapters.py" = ["BLE001"]
 "src/commerce_service/engine.py" = ["BLE001"]
 "src/learning_service/adapters.py" = ["BLE001"]
