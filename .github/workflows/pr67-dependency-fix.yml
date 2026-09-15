@@ -1,0 +1,75 @@
+name: PR67 dependency fix
+
+on:
+  push:
+    branches:
+      - arena/01a0a44c-application-factory
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.head_commit.message != 'fix: validate manifest component dependencies'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arena/01a0a44c-application-factory
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply dependency validation fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          validation = Path('src/platform_manifest/validation.py')
+          text = validation.read_text(encoding='utf-8')
+
+          marker = '''def _component_errors(document: Mapping, path: str, root: Path, registry) -> list[str]:\n'''
+          helper = '''_VERSION_CONSTRAINT_RE = re.compile(\n    r"^(<=|>=|==|<|>)(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"\n)\n\n\ndef _version_satisfies_range(version: object, version_range: object) -> bool:\n    """Return whether an explicit SemVer satisfies every registry constraint.\n\n    Registry dependency ranges are comma-separated constraints with exact\n    SemVer bounds. This validates the explicit composition; it never resolves\n    or substitutes a version and therefore is not Composer behavior.\n    """\n    if parse_semver(version) is None or not isinstance(version_range, str):\n        return False\n    if is_floating_selector(version_range):\n        return False\n    constraints = [part.strip() for part in version_range.split(",")]\n    if not constraints or any(not part for part in constraints):\n        return False\n    for constraint in constraints:\n        match = _VERSION_CONSTRAINT_RE.fullmatch(constraint)\n        if match is None:\n            return False\n        operator = match.group(1)\n        bound = ".".join(match.group(i) for i in range(2, 5))\n        comparison = compare_semver(version, bound)\n        if operator == ">=" and comparison < 0:\n            return False\n        if operator == ">" and comparison <= 0:\n            return False\n        if operator == "<=" and comparison > 0:\n            return False\n        if operator == "<" and comparison >= 0:\n            return False\n        if operator == "==" and comparison != 0:\n            return False\n    return True\n\n\n'''
+          if marker not in text:
+              raise SystemExit('component validation marker not found')
+          if '_VERSION_CONSTRAINT_RE' not in text:
+              text = text.replace(marker, helper + marker, 1)
+
+          old = '''    # Ensure deterministic order: components should be sorted by component_id for reproducibility.\n'''
+          dependency_block = '''    # Validate the explicit composition against dependencies declared by the\n    # authoritative Component Registry. Missing or incompatible dependencies\n    # are errors; this validator never adds, substitutes, or resolves them.\n    if registry is not None:\n        selected_versions = {\n            entry.get("component_id"): entry.get("component_version")\n            for entry in components\n            if _is_mapping(entry)\n            and isinstance(entry.get("component_id"), str)\n            and parse_semver(entry.get("component_version")) is not None\n        }\n        for index, entry in enumerate(components):\n            if not _is_mapping(entry):\n                continue\n            comp_id = entry.get("component_id")\n            if not isinstance(comp_id, str) or comp_id not in registered_ids:\n                continue\n            try:\n                reg_entry = registry.entry(comp_id)\n                dependencies = reg_entry.get("dependencies", [])\n            except (KeyError, AttributeError, TypeError):\n                continue\n            entry_path = f"{path}.components[{index}]"\n            if not isinstance(dependencies, list):\n                errors.append(\n                    f"{entry_path}: canonical registry dependencies for {comp_id!r} must be a list"\n                )\n                continue\n            for dep_index, dependency in enumerate(dependencies):\n                dep_path = f"{entry_path}.dependencies[{dep_index}]"\n                if not _is_mapping(dependency):\n                    errors.append(f"{dep_path}: canonical dependency must be an object")\n                    continue\n                dep_id = dependency.get("component_id")\n                version_range = dependency.get("version_range")\n                if not isinstance(dep_id, str) or not dep_id:\n                    errors.append(f"{dep_path}.component_id: dependency identity is required")\n                    continue\n                if is_floating_selector(dep_id):\n                    errors.append(\n                        f"{dep_path}.component_id: {dep_id!r} is a floating selector"\n                    )\n                    continue\n                if not isinstance(version_range, str) or not version_range.strip():\n                    errors.append(\n                        f"{dep_path}.version_range: explicit SemVer constraints are required"\n                    )\n                    continue\n                if is_floating_selector(version_range):\n                    errors.append(\n                        f"{dep_path}.version_range: {version_range!r} is a floating selector"\n                    )\n                    continue\n                selected_version = selected_versions.get(dep_id)\n                if selected_version is None:\n                    errors.append(\n                        f"{entry_path}.component_id: component {comp_id!r} requires dependency {dep_id!r}, but it is absent from the manifest"\n                    )\n                    continue\n                if not _version_satisfies_range(selected_version, version_range):\n                    errors.append(\n                        f"{entry_path}.component_version: component {comp_id!r} requires {dep_id!r} in range {version_range!r}, but manifest selects {selected_version!r}"\n                    )\n
+'''
+          if dependency_block not in text:
+              if old not in text:
+                  raise SystemExit('deterministic-order marker not found')
+              text = text.replace(old, dependency_block + old, 1)
+          validation.write_text(text, encoding='utf-8')
+
+          tests = Path('tests/test_platform_manifest.py')
+          t = tests.read_text(encoding='utf-8')
+          old_fixture = '        components=[valid_components[0]],\n'
+          new_fixture = '        components=[next(c for c in valid_components if c["component_id"] == "tenant_authority")],\n'
+          count = t.count(old_fixture)
+          if count != 2:
+              raise SystemExit(f'expected exactly 2 single-component fixture usages, found {count}')
+          t = t.replace(old_fixture, new_fixture)
+          tests.write_text(t, encoding='utf-8')
+
+          dependency_tests = Path('tests/test_platform_manifest_dependencies.py')
+          dependency_tests.write_text('''"""Manifest-boundary dependency and compatibility validation tests for Slice C."""\n\nfrom __future__ import annotations\n\nimport copy\nfrom pathlib import Path\n\nfrom platform_manifest import build_manifest_document, compute_manifest_digest, validate_document\nfrom component_registry import load_registry\n\n\ndef _components(registry, *ids):\n    selected = []\n    for entry in registry.entries:\n        if entry["component_id"] in ids:\n            selected.append({\n                "component_id": entry["component_id"],\n                "component_version": entry["component_version"],\n                "artifact": dict(entry["artifact"]),\n            })\n    return sorted(selected, key=lambda item: item["component_id"])\n\n\ndef _manifest(root: Path, registry, *ids):\n    return build_manifest_document(\n        manifest_id="dependency-test",\n        manifest_version="1.0.0",\n        lifecycle_state="draft",\n        components=_components(registry, *ids),\n    )\n\n\ndef _errors(root: Path, registry, *ids):\n    return validate_document(_manifest(root, registry, *ids), root=root)\n\n\ndef test_dependency_closed_composition_is_valid():\n    root = Path.cwd()\n    registry = load_registry(root)\n    assert _errors(root, registry, "learning", "authorization", "identity", "tenant_authority", "idempotency") == []\n\n\ndef test_missing_dependency_is_rejected():\n    root = Path.cwd()\n    registry = load_registry(root)\n    errors = _errors(root, registry, "learning")\n    assert any("requires dependency 'authorization'" in error for error in errors)\n    assert any("requires dependency 'idempotency'" in error for error in errors)\n    assert any("requires dependency 'identity'" in error for error in errors)\n\n\ndef test_transitive_dependency_is_rejected_when_selected_parent_is_present():\n    root = Path.cwd()\n    registry = load_registry(root)\n    errors = _errors(root, registry, "authorization", "identity", "tenant_authority")\n    assert errors == []\n    errors = _errors(root, registry, "authorization", "identity")\n    assert any("requires dependency 'tenant_authority'" in error for error in errors)\n\n\ndef test_dependency_lower_bound_is_inclusive():\n    root = Path.cwd()\n    registry = load_registry(root)\n    assert _errors(root, registry, "identity", "tenant_authority") == []\n\n\ndef test_dependency_upper_bound_is_exclusive():\n    root = Path.cwd()\n    registry = load_registry(root)\n    doc = _manifest(root, registry, "identity", "tenant_authority")\n    for component in doc["components"]:\n        if component["component_id"] == "tenant_authority":\n            component["component_version"] = "0.2.0"\n    doc["manifest_digest"] = compute_manifest_digest(doc)\n    errors = validate_document(doc, root=root)\n    assert any("requires dependency 'tenant_authority'" in error and "0.2.0" in error for error in errors)\n\n\ndef test_dependency_wrong_version_is_rejected():\n    root = Path.cwd()\n    registry = load_registry(root)\n    doc = _manifest(root, registry, "identity", "tenant_authority")\n    for component in doc["components"]:\n        if component["component_id"] == "tenant_authority":\n            component["component_version"] = "0.0.9"\n    doc["manifest_digest"] = compute_manifest_digest(doc)\n    errors = validate_document(doc, root=root)\n    assert any("requires dependency 'tenant_authority'" in error for error in errors)\n\n\ndef test_floating_dependency_range_is_rejected(monkeypatch):\n    root = Path.cwd()\n    registry = load_registry(root)\n    original = registry.entry\n\n    def patched(component_id):\n        entry = copy.deepcopy(original(component_id))\n        if component_id == "identity":\n            entry["dependencies"][0]["version_range"] = "latest"\n        return entry\n\n    monkeypatch.setattr(registry, "entry", patched)\n    doc = _manifest(root, registry, "identity", "tenant_authority")\n    errors = validate_document(doc, root=root)\n    assert any("floating selector" in error for error in errors)\n''', encoding='utf-8')
+          PY
+
+      - name: Run focused tests
+        run: |
+          python -m pytest -q tests/test_platform_manifest.py tests/test_platform_manifest_dependencies.py
+      - name: Run quality gates
+        run: |
+          python -m ruff check src tests
+          python -m black --check src tests
+      - name: Commit fix and remove temporary workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/platform_manifest/validation.py tests/test_platform_manifest.py tests/test_platform_manifest_dependencies.py .github/workflows/pr67-dependency-fix.yml
+          git rm .github/workflows/pr67-dependency-fix.yml
+          git commit -m 'fix: validate manifest component dependencies'
+          git push origin HEAD:arena/01a0a44c-application-factory
