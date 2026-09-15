@@ -1,0 +1,253 @@
+{
+  "$schema": "factory/catalog/schema/component_catalog.schema.json",
+  "catalog_id": "application-factory-component-catalog",
+  "catalog_schema_version": "1.0.0",
+  "derived_from": {
+    "canonical_registry": "factory/registry/component_registry.json",
+    "registry_id": "application-factory-component-registry",
+    "component_contracts_root": "components"
+  },
+  "components": [
+    {
+      "component_id": "authorization",
+      "component_version": "0.1.0",
+      "class": "platform_service",
+      "scs_id": null,
+      "maturity_level": "level_0_modular_monolith",
+      "owner": "@Kvasha62",
+      "data_scopes": [
+        "platform-scoped",
+        "tenant-scoped"
+      ],
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      },
+      "contracts": {
+        "component_contract": "components/authorization/contract/component_contract.json",
+        "openapi": "components/authorization/contract/openapi.yaml"
+      },
+      "summary": "IS-003 (GitHub Issue #12)",
+      "entry_digest": "sha256:49fe6d124d7cc36d69a5389b408c1dd2942c53a7403c8c7aa4dd5be15caa411f"
+    },
+    {
+      "component_id": "identity",
+      "component_version": "0.3.0",
+      "class": "platform_service",
+      "scs_id": null,
+      "maturity_level": "level_0_modular_monolith",
+      "owner": "@Kvasha62",
+      "data_scopes": [
+        "platform-scoped",
+        "tenant-scoped"
+      ],
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      },
+      "contracts": {
+        "component_contract": "components/identity/contract/component_contract.json",
+        "openapi": "components/identity/contract/openapi.yaml"
+      },
+      "summary": null,
+      "entry_digest": "sha256:95db9d362b577d78f7601f7a2bace5f80d4e393101194f88e1bf51f8d1375c87"
+    },
+    {
+      "component_id": "tenant_authority",
+      "component_version": "0.1.0",
+      "class": "platform_service",
+      "scs_id": null,
+      "maturity_level": "level_0_modular_monolith",
+      "owner": "@Kvasha62",
+      "data_scopes": [
+        "platform-scoped"
+      ],
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      },
+      "contracts": {
+        "component_contract": "components/tenant_authority/contract/component_contract.json",
+        "openapi": "components/tenant_authority/contract/openapi.yaml"
+      },
+      "summary": "IS-002 (GitHub Issue #10)",
+      "entry_digest": "sha256:32804445cd6b008f7888802af9efec45bff29695cfbc113221975b5e947807b6"
+    },
+    {
+      "component_id": "records",
+      "component_version": "0.1.0",
+      "class": "platform_service",
+      "scs_id": null,
+      "maturity_level": "level_0_modular_monolith",
+      "owner": "@Kvasha62",
+      "data_scopes": [
+        "platform-scoped",
+        "tenant-scoped"
+      ],
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      },
+      "contracts": {
+        "component_contract": "components/records/contract/component_contract.json",
+        "openapi": "components/records/contract/openapi.yaml"
+      },
+      "summary": "IS-004 (GitHub Issue #14)",
+      "entry_digest": "sha256:3e1abfa7887150ac8d9a92caad2602da03e5b6d46e3341b46f0cb45c71e6888e"
+    },
+    {
+      "component_id": "learning",
+      "component_version": "0.3.0",
+      "class": "business_system",
+      "scs_id": "SCS-001",
+      "maturity_level": "level_0_modular_monolith",
+      "owner": "@Kvasha62",
+      "data_scopes": [
+        "platform-scoped",
+        "tenant-scoped"
+      ],
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      },
+      "contracts": {
+        "component_contract": "components/learning/contract/component_contract.json",
+        "openapi": "components/learning/contract/openapi.yaml"
+      },
+      "summary": "SCS-001 Slices 1-4 — Submission Read, Teacher Submission Discovery (Issue #20), Teacher Submission Review (Issue #24), Learning Content Authoring (Issue #31), Student Enrollment (ADR-0012)",
+      "entry_digest": "sha256:d548ea163744b23a5d6f2ec02f8465c113318a930743f1dfeec74314e0715ed1"
+    },
+    {
+      "component_id": "saga",
+      "component_version": "0.1.0",
+      "class": "platform_service",
+      "scs_id": null,
+      "maturity_level": "level_0_modular_monolith",
+      "owner": "@Kvasha62",
+      "data_scopes": [
+        "platform-scoped",
+        "tenant-scoped"
+      ],
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      },
+      "contracts": {
+        "component_contract": "components/saga/contract/component_contract.json",
+        "openapi": null
+      },
+      "summary": "IS-006 (GitHub Issue #18)",
+      "entry_digest": "sha256:4ece43764de20b046b9e80c2f1fce1b18f6e32020fe513919707f856e5aab443"
+    },
+    {
+      "component_id": "idempotency",
+      "component_version": "0.1.0",
+      "class": "platform_service",
+      "scs_id": null,
+      "maturity_level": "level_0_modular_monolith",
+      "owner": "@Kvasha62",
+      "data_scopes": [
+        "platform-scoped"
+      ],
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      },
+      "contracts": {
+        "component_contract": "components/idempotency/contract/component_contract.json",
+        "openapi": null
+      },
+      "summary": "IS-005 (GitHub Issue #16)",
+      "entry_digest": "sha256:33423326dad57b7c8b0b77e03ee4dddeca47585f9bdad92dc54b472a85db7bac"
+    },
+    {
+      "component_id": "commerce",
+      "component_version": "0.2.0",
+      "class": "business_system",
+      "scs_id": "SCS-002",
+      "maturity_level": "level_0_modular_monolith",
+      "owner": "@Kvasha62",
+      "data_scopes": [
+        "platform-scoped",
+        "tenant-scoped"
+      ],
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      },
+      "contracts": {
+        "component_contract": "components/commerce/contract/component_contract.json",
+        "openapi": "components/commerce/contract/openapi.yaml"
+      },
+      "summary": "SCS-002 Commerce MVP — Stage 3 business logic (Issue #55, ADR-0013): the full commerce contour on the Stage 2 skeleton — catalog (Product → Offer → Price), mutable Cart, checkout as a business command, immutable Order purchase facts with the mutable payment state — behind the same enforcement chain, IS-005 guard, audit journal and published client. Live operations: twelve — create and read one owned Product, define one Offer, set one Price, open/read/mutate one owned Cart, checkout, read one owned Order, record its payment.",
+      "entry_digest": "sha256:da06be5b7f83c232b74c51ea15375af47d739c5f01abe45f16d1474928d8babf"
+    },
+    {
+      "component_id": "booking",
+      "component_version": "0.1.0",
+      "class": "business_system",
+      "scs_id": "SCS-003",
+      "maturity_level": "level_0_modular_monolith",
+      "owner": "@Kvasha62",
+      "data_scopes": [
+        "platform-scoped",
+        "tenant-scoped"
+      ],
+      "lifecycle": {
+        "registry_state": "registered",
+        "deployable": false,
+        "publishable": false,
+        "publishability_blockers": [
+          "deployment_artifact_absent",
+          "migrations_absent"
+        ]
+      },
+      "contracts": {
+        "component_contract": "components/booking/contract/component_contract.json",
+        "openapi": "components/booking/contract/openapi.yaml"
+      },
+      "summary": "SCS-003 Booking MVP (Issue #57, ADR-0014): the third Class A Business System of the Application Factory at Level 0. Owns tenant-scoped Resources, their Availability Windows and Reservations behind the same enforcement chain as SCS-001/SCS-002, reuses IS-001 (tenant context), IS-003 (decision), IS-005 (exactly-once commands) and the audit semantics, and proves the no-double-booking invariant atomically under concurrency. Live operations: seven — create and read one owned Resource, declare and list its Availability Windows, create, read and cancel one Reservation.",
+      "entry_digest": "sha256:a9e873296b6306f44e5b1d0a8cc953313e45662fef869cca00c1ba9755097b2b"
+    }
+  ]
+}

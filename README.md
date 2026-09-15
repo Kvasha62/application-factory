@@ -101,9 +101,18 @@ contract-тесты в `tests/`).
 `tests/test_component_registry.py`). Реестр содержит factory-level metadata
 9 компонентов и не владеет бизнес-данными.
 
+**Slice B — Component Catalog: реализован.** Каталог — детерминированно
+выводимое discoverable view поверх реестра и опубликованных
+контрактов — `factory/catalog/component_catalog.json` (схема в
+`factory/catalog/schema/`, правила в `factory/catalog/README.md`,
+derivation, валидация и фильтрация в `src/component_catalog/`, тесты в
+`tests/test_component_catalog.py`). Каталог не является вторым источником
+истины: каждая запись закреплена за записью реестра content digest, а
+валидация отвергает любое расхождение с canonical metadata.
+
 На текущем этапе ещё не считаются реализованными:
-Component Catalog (Slice B), Platform Manifest tooling (Slice C),
-Golden Bundles (Slice D) и Composer (Slice E).
+Platform Manifest tooling (Slice C), Golden Bundles (Slice D)
+и Composer (Slice E).
 Каждый slice требует отдельного work item, проверки, независимого
 review и owner approval до merge.
 
