@@ -110,9 +110,25 @@ derivation, валидация и фильтрация в `src/component_catalog
 истины: каждая запись закреплена за записью реестра content digest, а
 валидация отвергает любое расхождение с canonical metadata.
 
+**Slice C — Platform Manifest: реализован.** Явный, машинно-читаемый и
+воспроизводимый артефакт композиции платформы — схема в
+`factory/platform_manifest/schema/`, правила в
+`factory/platform_manifest/README.md`, загрузка, сборка, lifecycle и
+валидация в `src/platform_manifest/`, тесты в
+`tests/test_platform_manifest.py`. Манифест фиксирует конкретные версии
+компонентов и artifact identity, ссылается на authoritative metadata из
+Registry и Catalog и не создаёт второй источник истины.
+
+**Slice D — Golden Bundles: реализован.** Сертифицированный,
+воспроизводимый набор совместимых версий компонентов — схема в
+`factory/golden_bundle/schema/`, правила в `factory/golden_bundle/README.md`,
+загрузка, сборка, lifecycle и валидация в `src/golden_bundle/`, тесты в
+`tests/test_golden_bundle.py`. Bundle фиксирует явные версии компонентов,
+идентифицируется `bundle_id + version + digest`, фиксирует проверенные
+отношения совместимости и не решает/не подставляет зависимости.
+
 На текущем этапе ещё не считаются реализованными:
-Platform Manifest tooling (Slice C), Golden Bundles (Slice D)
-и Composer (Slice E).
+Composer (Slice E) и Platform Instance assembly tooling.
 Каждый slice требует отдельного work item, проверки, независимого
 review и owner approval до merge.
 
