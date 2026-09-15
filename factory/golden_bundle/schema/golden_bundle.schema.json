@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory/golden_bundle/schema/golden_bundle.schema.json",
+  "title": "Application Factory — Golden Bundle",
+  "description": "Normative schema of the Golden Bundle (Slice D, ARCHITECTURE.md §14, ADR-0015 §7). A Golden Bundle is a validated, reproducible set of compatible component versions intended as a known-good composition. It pins concrete component versions and records its validated compatibility relationships explicitly; it never resolves, substitutes or assembles versions and never becomes a second source of truth for component metadata.",
+  "type": "object",
+  "required": [
+    "bundle_id",
+    "bundle_version",
+    "bundle_digest",
+    "lifecycle",
+    "components",
+    "compatibility"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "bundle_id": {
+      "$ref": "#/$defs/bundle_id",
+      "description": "Stable identity of this Golden Bundle lineage."
+    },
+    "bundle_version": {
+      "$ref": "#/$defs/semver",
+      "description": "Explicit public SemVer version of this bundle."
+    },
+    "bundle_digest": {
+      "$ref": "#/$defs/sha256_digest",
+      "description": "Immutable content digest pinning this bundle's canonical form (excluding the digest field itself)."
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/lifecycle",
+      "description": "Explicit bundle lifecycle state (ARCHITECTURE.md §14)."
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/component_entry"
+      },
+      "description": "The pinned compatible component set — explicit component versions and artifact identities, in deterministic order."
+    },
+    "compatibility": {
+      "$ref": "#/$defs/compatibility",
+      "description": "Explicit machine-readable record of the validated pairwise compatibility relationships of the pinned set."
+    },
+    "certification": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/certification"
+        }
+      ],
+      "description": "Certification evidence, required when lifecycle is certified or later (ARCHITECTURE.md §14)."
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "description": "Explicit SemVer MAJOR.MINOR.PATCH (ARCHITECTURE.md §11). A floating selector such as latest is not a version."
+    },
+    "bundle_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([_-][a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable, unique, deterministic Golden Bundle identity: lower snake_case or kebab-case, never reused as a floating selector (ARCHITECTURE.md §11, §14)."
+    },
+    "component_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable component identity mirrored from the canonical Component Registry (ARCHITECTURE.md §11)."
+    },
+    "sha256_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Immutable content digest: sha256 followed by 64 hex characters (ARCHITECTURE.md §11)."
+    },
+    "sha256_digest_nullable": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^(sha256:)?[0-9a-f]{64}$"
+        }
+      ],
+      "description": "Nullable artifact digest: null when no artifact is published, otherwise sha256 hex (with optional sha256: prefix for registry compatibility)."
+    },
+    "iso8601_utc": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+      "description": "UTC timestamp in ISO8601 format, e.g. 2026-09-15T00:00:00Z."
+    },
+    "bundle_state": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "candidate",
+        "certified",
+        "deprecated",
+        "revoked"
+      ],
+      "description": "Golden Bundle lifecycle state (ARCHITECTURE.md §14): draft → candidate → certified → deprecated → revoked."
+    },
+    "artifact_type": {
+      "type": "string",
+      "enum": [
+        "none",
+        "container_image",
+        "source_package"
+      ],
+      "description": "Kind of artifact. none means no deployable artifact is published (explicit statement, never a floating selector)."
+    },
+    "dependency_kind": {
+      "type": "string",
+      "enum": [
+        "api",
+        "events",
+        "data_export_cdc",
+        "internal-consumer-surface"
+      ],
+      "description": "Declared dependency mechanism (ARCHITECTURE.md §18). database, internal_code, private_schema and internal_queue are forbidden and have no representation here."
+    },
+    "lifecycle": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/bundle_state"
+        },
+        "created_at": {
+          "$ref": "#/$defs/iso8601_utc"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "artifact_type",
+        "digest",
+        "pinned"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "artifact_type": {
+          "$ref": "#/$defs/artifact_type"
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256_digest_nullable"
+        },
+        "pinned": {
+          "type": "boolean",
+          "description": "True only when the artifact is selected by an immutable digest (ARCHITECTURE.md §1.3)."
+        }
+      }
+    },
+    "component_entry": {
+      "type": "object",
+      "required": [
+        "component_id",
+        "component_version",
+        "artifact"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "component_id": {
+          "$ref": "#/$defs/component_id"
+        },
+        "component_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "artifact": {
+          "$ref": "#/$defs/artifact"
+        }
+      }
+    },
+    "compatibility_pair": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "mechanism",
+        "compatible"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/component_id",
+          "description": "The pinned component whose declared dependency this relationship validates."
+        },
+        "to": {
+          "$ref": "#/$defs/component_id",
+          "description": "The pinned dependency target of the relationship."
+        },
+        "mechanism": {
+          "$ref": "#/$defs/dependency_kind"
+        },
+        "compatible": {
+          "type": "boolean",
+          "description": "Explicit validated compatibility verdict for this pinned relationship. A Golden Bundle packages validated compatible relationships, so a declared dependency edge must be recorded as compatible."
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "required": [
+        "pairs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "pairs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/compatibility_pair"
+          },
+          "description": "The validated pairwise compatibility relationships of the pinned set, in deterministic order."
+        }
+      }
+    },
+    "certification": {
+      "type": "object",
+      "required": [
+        "certified_by",
+        "certified_at",
+        "certification_id",
+        "checks"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "certified_by": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Accountable actor or process that certified the bundle."
+        },
+        "certified_at": {
+          "$ref": "#/$defs/iso8601_utc"
+        },
+        "certification_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable identity of this certification record."
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The approved validation checks that passed for certification (ARCHITECTURE.md §14): compatibility matrix, contract tests, E2E, migration paths, smoke/load validation, artifact signature."
+        }
+      }
+    }
+  }
+}

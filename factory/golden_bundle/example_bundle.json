@@ -1,0 +1,187 @@
+{
+  "$schema": "factory/golden_bundle/schema/golden_bundle.schema.json",
+  "bundle_digest": "sha256:509979712e91c74d5df860feadec019f9c1f85a332c59870d4d2cefd403b33f7",
+  "bundle_id": "example-golden-bundle",
+  "bundle_version": "1.0.0",
+  "certification": null,
+  "compatibility": {
+    "pairs": [
+      {
+        "compatible": true,
+        "from": "authorization",
+        "mechanism": "api",
+        "to": "identity"
+      },
+      {
+        "compatible": true,
+        "from": "authorization",
+        "mechanism": "api",
+        "to": "tenant_authority"
+      },
+      {
+        "compatible": true,
+        "from": "booking",
+        "mechanism": "api",
+        "to": "authorization"
+      },
+      {
+        "compatible": true,
+        "from": "booking",
+        "mechanism": "internal-consumer-surface",
+        "to": "idempotency"
+      },
+      {
+        "compatible": true,
+        "from": "booking",
+        "mechanism": "api",
+        "to": "identity"
+      },
+      {
+        "compatible": true,
+        "from": "commerce",
+        "mechanism": "api",
+        "to": "authorization"
+      },
+      {
+        "compatible": true,
+        "from": "commerce",
+        "mechanism": "internal-consumer-surface",
+        "to": "idempotency"
+      },
+      {
+        "compatible": true,
+        "from": "commerce",
+        "mechanism": "api",
+        "to": "identity"
+      },
+      {
+        "compatible": true,
+        "from": "identity",
+        "mechanism": "api",
+        "to": "tenant_authority"
+      },
+      {
+        "compatible": true,
+        "from": "learning",
+        "mechanism": "api",
+        "to": "authorization"
+      },
+      {
+        "compatible": true,
+        "from": "learning",
+        "mechanism": "internal-consumer-surface",
+        "to": "idempotency"
+      },
+      {
+        "compatible": true,
+        "from": "learning",
+        "mechanism": "api",
+        "to": "identity"
+      },
+      {
+        "compatible": true,
+        "from": "records",
+        "mechanism": "api",
+        "to": "authorization"
+      },
+      {
+        "compatible": true,
+        "from": "saga",
+        "mechanism": "internal-consumer-surface",
+        "to": "idempotency"
+      },
+      {
+        "compatible": true,
+        "from": "saga",
+        "mechanism": "api",
+        "to": "identity"
+      }
+    ]
+  },
+  "components": [
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "authorization",
+      "component_version": "0.1.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "booking",
+      "component_version": "0.1.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "commerce",
+      "component_version": "0.2.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "idempotency",
+      "component_version": "0.1.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "identity",
+      "component_version": "0.3.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "learning",
+      "component_version": "0.3.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "records",
+      "component_version": "0.1.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "saga",
+      "component_version": "0.1.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "tenant_authority",
+      "component_version": "0.1.0"
+    }
+  ],
+  "lifecycle": {
+    "state": "candidate"
+  }
+}

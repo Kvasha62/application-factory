@@ -3,7 +3,7 @@
 **Статус:** `CLEAN`  
 **Дата:** 2026-09-15  
 **Базовый `main` до ратификации:** `da3ac2e03255e6bfe0b42e0923326e9ed2bfb38d`  
-**Актуализация:** 2026-09-14 — после прохождения Factory Gate #1 и ратификации ADR-0015 зафиксирована активация Level 2 — Component Factory; при этом сами фабричные механизмы остаются не реализованными до прохождения отдельных implementation slices. 2026-09-15 — после реализации Slice B — Component Catalog (Issue #64): каталог реализован как производный discoverable view реестра и опубликованных контрактов; после реализации Slice C — Platform Manifest (Issue #66, PR #67): манифест реализован как явный машинно-читаемый артефакт композиции платформы; Slice D/E остаются не реализованными до отдельных утверждённых work item.
+**Актуализация:** 2026-09-14 — после прохождения Factory Gate #1 и ратификации ADR-0015 зафиксирована активация Level 2 — Component Factory; при этом сами фабричные механизмы остаются не реализованными до прохождения отдельных implementation slices. 2026-09-15 — после реализации Slice B — Component Catalog (Issue #64): каталог реализован как производный discoverable view реестра и опубликованных контрактов; после реализации Slice C — Platform Manifest (Issue #66, PR #67): манифест реализован как явный машинно-читаемый артефакт композиции платформы; после реализации Slice D — Golden Bundles (Issue #71): Golden Bundle реализован как явный машинно-читаемый артефакт сертифицированного воспроизводимого набора совместимых версий компонентов; Slice E остаётся не реализованным до отдельного утверждённого work item.
 **Основание:** `docs/ARCHITECTURE.md` 1.2.0 + `docs/adr/ADR-0010-architecture-gap-review.md` + `docs/adr/ADR-0015-level-2-component-factory-activation.md`
 
 ## 1. Назначение
@@ -36,6 +36,7 @@
 | Component Registry | `factory/registry/component_registry.json` | Slice A IMPLEMENTED; canonical machine-readable реестр, 9 компонентов |
 | Component Catalog | `factory/catalog/component_catalog.json` | Slice B IMPLEMENTED; производный discoverable view реестра, 9 компонентов |
 | Platform Manifest | `factory/platform_manifest/schema/platform_manifest.schema.json` + `src/platform_manifest/` | Slice C IMPLEMENTED; явный машинно-читаемый артефакт композиции платформы |
+| Golden Bundle | `factory/golden_bundle/schema/golden_bundle.schema.json` + `src/golden_bundle/` | Slice D IMPLEMENTED; явный машинно-читаемый артефакт сертифицированного воспроизводимого набора совместимых версий компонентов |
 | Contract / boundary tests | `tests/` | существуют; автоматическая проверка архитектурных границ активна |
 | Quality Gate | `scripts/quality-gate.ps1` + `.github/workflows/quality-gate.yml` | GREEN на ранее подтверждённом main; для текущей ратификационной ветки требуется CI-проверка PR |
 | Маршрутизация ответственности | `.github/CODEOWNERS` | существует |
@@ -128,15 +129,34 @@ artifact identity/digests, identity/version модель, lifecycle, approval/pu
 источник истины. Опциональная ссылка на Golden Bundle допустима, но сам
 Golden Bundle (Slice D) этим slice не реализуется.
 
+**Slice D — Golden Bundles: `IMPLEMENTED`** (Issue #71).
+
+Явный машинно-читаемый артефакт сертифицированного воспроизводимого набора
+совместимых версий компонентов реализован:
+
+```text
+factory/golden_bundle/schema/golden_bundle.schema.json  normative schema
+factory/golden_bundle/README.md                          формат и правила bundle
+factory/golden_bundle/example_bundle.json                пример полного инвентаря реестра
+src/golden_bundle/                                       load, build, lifecycle, validation
+tests/test_golden_bundle.py                              focused tests
+```
+
+Golden Bundle фиксирует явные версии компонентов и artifact identity,
+идентифицируется `bundle_id + version + digest`, имеет явный lifecycle
+`draft → candidate → certified → deprecated → revoked`, фиксирует проверенные
+попарные отношения совместимости закреплённого набора и проверяет их против
+authoritative Component Registry. Он не решает и не подставляет зависимости,
+не собирает платформу и не становится вторым источником истины (ADR-0015 §7).
+
 На момент этой актуализации **не считаются реализованными и доступными**:
 
-- Golden Bundles (Slice D);
 - Composer (Slice E);
 - Platform Instance assembly tooling.
 
 Slice A смержен (PR #63). Slice B смержен (PR #65). Slice C смержен (PR #67).
-Последующие slices требуют отдельных work item, проверки, независимого review
-и owner approval до merge.
+Slice D предложен PR-ом из Issue #71. Последующие slices требуют отдельных
+work item, проверки, независимого review и owner approval до merge.
 
 ## 6. Границы Level 2
 
@@ -155,17 +175,17 @@ Slice A смержен (PR #63). Slice B смержен (PR #65). Slice C сме
 
 ## 7. Документационная целостность
 
-`README.md` и `docs/adr/README.md` должны отражать, что Level 2 активирован, а фабричные механизмы вводятся инкрементально: Slice A/B/C реализованы, Slice D/E — нет.
+`README.md` и `docs/adr/README.md` должны отражать, что Level 2 активирован, а фабричные механизмы вводятся инкрементально: Slice A/B/C/D реализованы, Slice E — нет.
 
 Исторические conformance/audit документы не переписываются только потому, что проект развился после даты их снимка; они остаются историческими артефактами своего состояния.
 
 ## 8. Следующее изменение
 
-**Slice C — Platform Manifest реализован** (Issue #66, PR #67).
+**Slice D — Golden Bundles реализован** (Issue #71, PR ожидает review/merge).
 
-Следующим самостоятельным этапом является **Slice D — Golden Bundles**.
+Следующим самостоятельным этапом является **Slice E — Composer**.
 
-До начала реализации Slice D необходимо иметь отдельный утверждённый work item и сохранить границу:
+До начала реализации Slice E необходимо иметь отдельный утверждённый work item и сохранить границу:
 
 ```text
 ADR-0015 ratified
@@ -176,9 +196,11 @@ Slice B — Component Catalog (IMPLEMENTED, Issue #64, PR #65)
         ↓
 Slice C — Platform Manifest (IMPLEMENTED, Issue #66, PR #67)
         ↓
-approved implementation work item for Slice D
+Slice D — Golden Bundles (IMPLEMENTED, Issue #71)
         ↓
-Slice D — Golden Bundles
+approved implementation work item for Slice E
+        ↓
+Slice E — Composer
         ↓
 verification / independent review
         ↓
@@ -196,8 +218,9 @@ merge
 **Factory mechanisms:** Slice A — Component Registry `IMPLEMENTED`;
 Slice B — Component Catalog `IMPLEMENTED`;
 Slice C — Platform Manifest `IMPLEMENTED`;
-Golden Bundles и Composer `NOT YET IMPLEMENTED`.
+Slice D — Golden Bundles `IMPLEMENTED`;
+Composer `NOT YET IMPLEMENTED`.
 
 **Factory Gate #1: PASSED.**
 
-Документационный baseline отражает переход от foundation/standalone состояния к активированному Level 2 без ложного утверждения: Slice A/B/C зафиксированы как `IMPLEMENTED` только после фактического merge, а не реализованные Golden Bundles и Composer явно помечены как `NOT YET IMPLEMENTED`.
+Документационный baseline отражает переход от foundation/standalone состояния к активированному Level 2 без ложного утверждения: Slice A/B/C/D зафиксированы как `IMPLEMENTED` только после фактического merge или PR, а не реализованный Composer явно помечен как `NOT YET IMPLEMENTED`.
