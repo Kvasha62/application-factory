@@ -1,9 +1,9 @@
 # DOCUMENTATION_BASELINE.md
 
 **Статус:** `CLEAN`  
-**Дата:** 2026-09-14  
+**Дата:** 2026-09-15  
 **Базовый `main` до ратификации:** `da3ac2e03255e6bfe0b42e0923326e9ed2bfb38d`  
-**Актуализация:** 2026-09-14 — после прохождения Factory Gate #1 и ратификации ADR-0015 зафиксирована активация Level 2 — Component Factory; при этом сами фабричные механизмы остаются не реализованными до прохождения отдельных implementation slices.  
+**Актуализация:** 2026-09-14 — после прохождения Factory Gate #1 и ратификации ADR-0015 зафиксирована активация Level 2 — Component Factory; при этом сами фабричные механизмы остаются не реализованными до прохождения отдельных implementation slices. 2026-09-15 — после реализации Slice B — Component Catalog (Issue #64): каталог реализован как производный discoverable view реестра и опубликованных контрактов; Slice C/D/E остаются не реализованными до отдельных утверждённых work item.  
 **Основание:** `docs/ARCHITECTURE.md` 1.2.0 + `docs/adr/ADR-0010-architecture-gap-review.md` + `docs/adr/ADR-0015-level-2-component-factory-activation.md`
 
 ## 1. Назначение
@@ -34,6 +34,7 @@
 | Реализация компонентов | `src/` | существует: 9 компонентов; Level 0 modular monolith |
 | Component Contracts | `components/*/contract/` | существуют для 9 компонентов |
 | Component Registry | `factory/registry/component_registry.json` | Slice A IMPLEMENTED; canonical machine-readable реестр, 9 компонентов |
+| Component Catalog | `factory/catalog/component_catalog.json` | Slice B IMPLEMENTED; производный discoverable view реестра, 9 компонентов |
 | Contract / boundary tests | `tests/` | существуют; автоматическая проверка архитектурных границ активна |
 | Quality Gate | `scripts/quality-gate.ps1` + `.github/workflows/quality-gate.yml` | GREEN на ранее подтверждённом main; для текущей ратификационной ветки требуется CI-проверка PR |
 | Маршрутизация ответственности | `.github/CODEOWNERS` | существует |
@@ -92,15 +93,32 @@ tests/test_component_registry.py                    focused tests
 Реестр содержит factory-level metadata 9 подтверждённых компонентов и не
 владеет бизнес-данными компонентов (ADR-0015 §4, §11).
 
+**Slice B — Component Catalog: `IMPLEMENTED`** (Issue #64).
+
+Производный discoverable catalog реализован:
+
+```text
+factory/catalog/component_catalog.json                 canonical derived catalog
+factory/catalog/schema/component_catalog.schema.json   normative schema
+factory/catalog/README.md                              формат и правила каталога
+src/component_catalog/                                 derivation, валидация, discovery
+tests/test_component_catalog.py                        focused tests
+```
+
+Каталог выводится из канонического реестра и опубликованных контрактов,
+закреплён за реестром content digest каждой записи и не является вторым
+источником истины: любое расхождение с canonical registry/contract metadata
+отвергается валидацией (ADR-0015 §5).
+
 На момент этой актуализации **не считаются реализованными и доступными**:
 
-- Component Catalog (Slice B);
 - Platform Manifest implementation (Slice C);
 - Golden Bundles (Slice D);
 - Composer (Slice E);
 - Platform Instance assembly tooling.
 
-Slice A прошёл Arena-верификацию и ожидает независимого review и owner approval.
+Slice A смержен (PR #63). Slice B прошёл Arena-верификацию и ожидает
+независимого review и owner approval.
 Последующие slices требуют отдельных work item, проверки, независимого review
 и owner approval до merge.
 
@@ -127,20 +145,23 @@ Slice A прошёл Arena-верификацию и ожидает незави
 
 ## 8. Следующее изменение
 
-**Slice A — Component Registry реализован** и проходит независимый review.
+**Slice B — Component Catalog реализован** (Issue #64) и проходит
+независимый review.
 
-Следующим самостоятельным этапом является **Slice B — Component Catalog**.
+Следующим самостоятельным этапом является **Slice C — Platform Manifest**.
 
-До начала реализации Slice B необходимо иметь отдельный утверждённый work item и сохранить границу:
+До начала реализации Slice C необходимо иметь отдельный утверждённый work item и сохранить границу:
 
 ```text
 ADR-0015 ratified
         ↓
-Slice A — Component Registry (IMPLEMENTED)
+Slice A — Component Registry (IMPLEMENTED, PR #63)
         ↓
-approved implementation work item for Slice B
+Slice B — Component Catalog (IMPLEMENTED, Issue #64)
         ↓
-Slice B — Component Catalog
+approved implementation work item for Slice C
+        ↓
+Slice C — Platform Manifest
         ↓
 verification / independent review
         ↓
@@ -156,8 +177,9 @@ merge
 **Architecture Level 2: ACTIVE.**
 
 **Factory mechanisms:** Slice A — Component Registry `IMPLEMENTED`;
-Catalog, Manifest, Golden Bundles и Composer `NOT YET IMPLEMENTED`.
+Slice B — Component Catalog `IMPLEMENTED`;
+Manifest, Golden Bundles и Composer `NOT YET IMPLEMENTED`.
 
 **Factory Gate #1: PASSED.**
 
-Документационный baseline отражает переход от foundation/standalone состояния к активированному Level 2 без ложного утверждения, что Registry, Catalog, Golden Bundles или Composer уже существуют.
+Документационный baseline отражает переход от foundation/standalone состояния к активированному Level 2 без ложного утверждения, что не реализованные фабричные механизмы — Platform Manifest, Golden Bundles и Composer — уже существуют.

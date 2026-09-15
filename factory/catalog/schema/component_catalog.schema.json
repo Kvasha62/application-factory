@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory/catalog/schema/component_catalog.schema.json",
+  "title": "Application Factory — Component Catalog",
+  "description": "Normative schema of the canonical Component Catalog (Slice B, ADR-0015 §5). The catalog is a derived discoverable view of the canonical Component Registry and the published Component Contracts; it is never a second source of truth. Every entry is pinned to its whole canonical registry entry by an explicit content digest, and validation rejects any divergence from the deterministic derived form.",
+  "type": "object",
+  "required": [
+    "catalog_id",
+    "catalog_schema_version",
+    "derived_from",
+    "components"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "catalog_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identity of this catalog."
+    },
+    "catalog_schema_version": {
+      "$ref": "#/$defs/semver",
+      "description": "Version of the catalog document format itself."
+    },
+    "derived_from": {
+      "$ref": "#/$defs/derived_from",
+      "description": "Authoritative linkage to the canonical sources this view is derived from."
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/catalog_entry"
+      },
+      "description": "The discoverable component view, in canonical registry order; component identity is unique across this array."
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "description": "Explicit public SemVer MAJOR.MINOR.PATCH (ARCHITECTURE.md §11). A floating selector such as latest is not a version."
+    },
+    "component_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable, unique, deterministic component identity mirrored from the canonical registry (ARCHITECTURE.md §11)."
+    },
+    "repo_path": {
+      "type": "string",
+      "pattern": "^(?!.*(?:^|/)\\.(?:\\.\\.)?(?:/|$))[A-Za-z0-9._/-]+$",
+      "minLength": 1,
+      "description": "Repository-relative path to a published artifact: POSIX separators, no fragment, no absolute path and no traversal/normalization segment."
+    },
+    "data_scope": {
+      "type": "string",
+      "enum": [
+        "tenant-scoped",
+        "platform-scoped",
+        "system-scoped"
+      ],
+      "description": "Exactly one scope per dataset (ARCHITECTURE.md §5.4, LAW-16a)."
+    },
+    "registry_state": {
+      "type": "string",
+      "enum": [
+        "registered",
+        "deprecated",
+        "retired"
+      ],
+      "description": "Lifecycle state of the registry entry, mirrored verbatim from the canonical registry. registered certifies nothing: it does not make a component deployable or publishable (ARCHITECTURE.md §30)."
+    },
+    "sha256_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Immutable content digest that pins the whole canonical registry entry of this component. Any change to the registry entry makes this digest stale and the catalog invalid."
+    },
+    "derived_from": {
+      "type": "object",
+      "required": [
+        "canonical_registry",
+        "registry_id",
+        "component_contracts_root"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "canonical_registry": {
+          "const": "factory/registry/component_registry.json",
+          "description": "The one canonical machine-readable registry this catalog is derived from."
+        },
+        "registry_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identity of the canonical registry this catalog is derived from."
+        },
+        "component_contracts_root": {
+          "const": "components",
+          "description": "Root of the published component contracts the summaries are derived from."
+        }
+      }
+    },
+    "lifecycle_view": {
+      "type": "object",
+      "required": [
+        "registry_state",
+        "deployable",
+        "publishable"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "registry_state": {
+          "$ref": "#/$defs/registry_state"
+        },
+        "deployable": {
+          "type": "boolean"
+        },
+        "publishable": {
+          "type": "boolean"
+        },
+        "publishability_blockers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Reasons the component is not publishable (ARCHITECTURE.md §30), mirrored verbatim from the canonical registry."
+        }
+      }
+    },
+    "contracts_view": {
+      "type": "object",
+      "required": [
+        "component_contract"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "component_contract": {
+          "$ref": "#/$defs/repo_path",
+          "description": "Canonical path of the published component contract, mirrored from the canonical registry."
+        },
+        "openapi": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/repo_path"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Canonical path of the published OpenAPI document, or null when the component publishes none, mirrored from the canonical registry."
+        }
+      }
+    },
+    "catalog_entry": {
+      "type": "object",
+      "required": [
+        "component_id",
+        "component_version",
+        "class",
+        "scs_id",
+        "maturity_level",
+        "owner",
+        "data_scopes",
+        "lifecycle",
+        "contracts",
+        "summary",
+        "entry_digest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "component_id": {
+          "$ref": "#/$defs/component_id"
+        },
+        "component_version": {
+          "$ref": "#/$defs/semver",
+          "description": "Explicit public version, mirrored from the canonical registry."
+        },
+        "class": {
+          "type": "string",
+          "enum": [
+            "business_system",
+            "platform_service",
+            "computational_service",
+            "streaming_pipeline"
+          ],
+          "description": "Component class (ARCHITECTURE.md §3), mirrored from the canonical registry."
+        },
+        "scs_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "SCS identity of a Class A Business System (SCS-001, SCS-002, SCS-003), or null, mirrored from the canonical registry."
+        },
+        "maturity_level": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Architectural maturity level, mirrored from the canonical registry."
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Accountable owner of the component (ARCHITECTURE.md LAW-02), mirrored from the canonical registry."
+        },
+        "data_scopes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/data_scope"
+          },
+          "description": "Data scopes of the component's owned datasets, mirrored from the canonical registry."
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/lifecycle_view",
+          "description": "Lifecycle/release state, copied verbatim from the canonical registry."
+        },
+        "contracts": {
+          "$ref": "#/$defs/contracts_view",
+          "description": "Published contract references, copied verbatim from the canonical registry."
+        },
+        "summary": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Discovery summary mirroring the task statement of the published component contract verbatim; null when the contract declares none. Never an invented description."
+        },
+        "entry_digest": {
+          "$ref": "#/$defs/sha256_digest",
+          "description": "Content digest pinning the whole canonical registry entry of this component."
+        }
+      }
+    }
+  }
+}
