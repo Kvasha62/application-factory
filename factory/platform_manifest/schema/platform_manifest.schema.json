@@ -1,0 +1,374 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory/platform_manifest/schema/platform_manifest.schema.json",
+  "title": "Application Factory — Platform Manifest",
+  "description": "Normative schema of the Platform Manifest (Slice C, ARCHITECTURE.md §16, ADR-0015 §6). The manifest is the explicit, reproducible description of a Platform Instance composition: concrete component versions, artifact identities, manifest identity/version, lifecycle, and optional references to Golden Bundle, configuration, extensions and branding. It is validated against authoritative Component Registry/Catalog metadata and never uses floating selectors.",
+  "type": "object",
+  "required": [
+    "manifest_id",
+    "manifest_version",
+    "manifest_digest",
+    "lifecycle",
+    "components"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "manifest_id": {
+      "$ref": "#/$defs/manifest_id",
+      "description": "Stable identity of this platform manifest lineage."
+    },
+    "manifest_version": {
+      "$ref": "#/$defs/semver",
+      "description": "Explicit public SemVer version of this manifest."
+    },
+    "manifest_digest": {
+      "$ref": "#/$defs/sha256_digest",
+      "description": "Immutable content digest pinning this manifest's canonical form (excluding the digest field itself)."
+    },
+    "predecessor": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/predecessor"
+        }
+      ],
+      "description": "Reference to the previous manifest in this lineage, null for the first manifest."
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/lifecycle",
+      "description": "Lifecycle state and optional timestamps of this manifest."
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/component_entry"
+      },
+      "description": "Concrete component composition — explicit versions and artifact identities, in deterministic order."
+    },
+    "golden_bundle": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/golden_bundle_ref"
+        }
+      ],
+      "description": "Optional reference to a Golden Bundle (Slice D), not its implementation. Null when no bundle is referenced."
+    },
+    "configuration": {
+      "type": "object",
+      "description": "Optional platform configuration (component-specific settings). Must not contain floating selectors.",
+      "additionalProperties": true
+    },
+    "extensions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/extension_entry"
+      },
+      "description": "Optional extensions applied to the platform."
+    },
+    "branding": {
+      "type": "object",
+      "description": "Optional branding metadata.",
+      "additionalProperties": true
+    },
+    "validation_attestation": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/validation_attestation"
+        }
+      ],
+      "description": "Optional standalone validation attestation (ARCHITECTURE.md §16)."
+    },
+    "approval": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/approval"
+        }
+      ],
+      "description": "Approval metadata, required when lifecycle is approved or later."
+    },
+    "publication": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/publication"
+        }
+      ],
+      "description": "Publication metadata, required when lifecycle is published or later."
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "description": "Explicit SemVer MAJOR.MINOR.PATCH (ARCHITECTURE.md §11). Floating selectors such as latest are not versions."
+    },
+    "manifest_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([_-][a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable, unique, deterministic platform manifest identity: lower snake_case or kebab-case, never reused as floating selector."
+    },
+    "component_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable component identity mirrored from the canonical registry (ARCHITECTURE.md §11)."
+    },
+    "bundle_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([_-][a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable Golden Bundle identity (Slice D reference only)."
+    },
+    "extension_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([_-][a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable extension identity."
+    },
+    "sha256_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Immutable content digest: sha256 followed by 64 hex characters."
+    },
+    "sha256_digest_nullable": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^(sha256:)?[0-9a-f]{64}$"
+        }
+      ],
+      "description": "Nullable artifact digest: null when no artifact, otherwise sha256 hex (with optional sha256: prefix for registry compatibility)."
+    },
+    "iso8601_utc": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+      "description": "UTC timestamp in ISO8601 format, e.g. 2026-09-15T00:00:00Z."
+    },
+    "lifecycle_state": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "validated",
+        "approved",
+        "published",
+        "deployed",
+        "superseded",
+        "retired"
+      ],
+      "description": "Lifecycle state of the manifest (ARCHITECTURE.md §16)."
+    },
+    "artifact_type": {
+      "type": "string",
+      "enum": [
+        "none",
+        "container_image",
+        "source_package"
+      ],
+      "description": "Kind of artifact. none means no deployable artifact is published."
+    },
+    "lifecycle": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/lifecycle_state"
+        },
+        "created_at": {
+          "$ref": "#/$defs/iso8601_utc"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "artifact_type",
+        "digest",
+        "pinned"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "artifact_type": {
+          "$ref": "#/$defs/artifact_type"
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256_digest_nullable"
+        },
+        "pinned": {
+          "type": "boolean",
+          "description": "True only when the artifact is selected by an immutable digest."
+        }
+      }
+    },
+    "component_entry": {
+      "type": "object",
+      "required": [
+        "component_id",
+        "component_version",
+        "artifact"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "component_id": {
+          "$ref": "#/$defs/component_id"
+        },
+        "component_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "artifact": {
+          "$ref": "#/$defs/artifact"
+        }
+      }
+    },
+    "predecessor": {
+      "type": "object",
+      "required": [
+        "manifest_id",
+        "manifest_version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "manifest_id": {
+          "$ref": "#/$defs/manifest_id"
+        },
+        "manifest_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "manifest_digest": {
+          "$ref": "#/$defs/sha256_digest"
+        }
+      }
+    },
+    "golden_bundle_ref": {
+      "type": "object",
+      "required": [
+        "bundle_id",
+        "bundle_version",
+        "bundle_digest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "$ref": "#/$defs/bundle_id"
+        },
+        "bundle_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "bundle_digest": {
+          "$ref": "#/$defs/sha256_digest"
+        }
+      }
+    },
+    "extension_entry": {
+      "type": "object",
+      "required": [
+        "extension_id"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "extension_id": {
+          "$ref": "#/$defs/extension_id"
+        },
+        "extension_version": {
+          "$ref": "#/$defs/semver"
+        }
+      }
+    },
+    "validation_attestation": {
+      "type": "object",
+      "required": [
+        "validated_by",
+        "validated_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "validated_by": {
+          "type": "string",
+          "minLength": 1
+        },
+        "validated_at": {
+          "$ref": "#/$defs/iso8601_utc"
+        },
+        "validation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "required": [
+        "approved_by",
+        "approved_at",
+        "approval_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "approved_by": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approved_at": {
+          "$ref": "#/$defs/iso8601_utc"
+        },
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "publication": {
+      "type": "object",
+      "required": [
+        "published_by",
+        "published_at",
+        "publication_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "published_by": {
+          "type": "string",
+          "minLength": 1
+        },
+        "published_at": {
+          "$ref": "#/$defs/iso8601_utc"
+        },
+        "publication_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
