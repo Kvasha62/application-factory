@@ -137,22 +137,48 @@ def _contains_floating_selector_recursive(value: object, path: str) -> list[str]
 # --------------------------------------------------------------------------
 
 
-def _load_registry(root: Path):
-    """Load canonical registry strictly, or None if not loadable."""
+def _registry_unavailable_error(root: Path, error: BaseException) -> str:
+    """Render an unloadable authoritative registry as a validation error."""
+    # The canonical registry error already names the registry document path.
+    reason = str(error).strip() or error.__class__.__name__
+    return (
+        "$.components: authoritative Component Registry cannot be loaded: "
+        f"{reason}; Platform Manifest validation fails closed — composition "
+        "cannot be checked against missing or invalid authoritative metadata "
+        "(ADR-0015 §4, §6)"
+    )
+
+
+def _load_registry(root: Path) -> tuple[Any, list[str]]:
+    """Load the authoritative Component Registry — **fail-closed**.
+
+    Returns ``(registry, errors)``. ``registry`` is ``None`` only when the
+    authoritative registry cannot be loaded, and in that case ``errors`` is
+    non-empty: the caller reports the failure as a validation error instead of
+    continuing with "no registry to check against".
+
+    A registry that is missing, malformed, schema-invalid, carrying invalid
+    dependency or artifact metadata, or that its canonical loader refuses, is
+    never degraded into an empty registry and never skipped. The Component
+    Registry is the authoritative factory metadata source, so an unavailable
+    registry is a validation failure of the manifest (ADR-0015 §4).
+    """
     try:
         from component_registry import load_registry
         from component_registry.errors import RegistryError
+    except ImportError as error:
+        return None, [_registry_unavailable_error(root, error)]
 
-        return load_registry(root)
-    except (
-        RegistryError,
-        FileNotFoundError,
-        TypeError,
-        ValueError,
-        KeyError,
-        AttributeError,
-    ):
-        return None
+    try:
+        registry = load_registry(root)
+    except RegistryError as error:
+        # Canonical registry error model: reuse it, never invent a second one.
+        return None, [_registry_unavailable_error(root, error)]
+    except Exception as error:  # noqa: BLE001 — fail closed, never fail open
+        # Any other refusal of the authoritative loader is reported, not hidden.
+        return None, [_registry_unavailable_error(root, error)]
+
+    return registry, []
 
 
 def _registry_component_ids(registry) -> set[str]:
@@ -162,6 +188,90 @@ def _registry_component_ids(registry) -> set[str]:
         return set(registry.component_ids)
     except (AttributeError, KeyError, TypeError, ValueError):
         return set()
+
+
+def _registry_entry(registry, component_id: object) -> Mapping | None:
+    """Return the authoritative entry for ``component_id``, or None."""
+    if registry is None or not isinstance(component_id, str) or not component_id:
+        return None
+    if component_id not in _registry_component_ids(registry):
+        return None
+    return registry.entry(component_id)
+
+
+def _canonical_digest(value: object) -> object:
+    """Normalise a digest value for comparison.
+
+    The optional ``sha256:`` prefix is a notation, not part of the digest
+    value, so ``sha256:<hex>`` and ``<hex>`` denote the same artifact
+    content. Every other value (including ``None``) is compared as declared.
+    """
+    if not isinstance(value, str):
+        return value
+    return value.strip().removeprefix("sha256:")
+
+
+def _artifact_authority_errors(
+    entry_path: str,
+    artifact: Mapping,
+    registry_artifact: object,
+) -> list[str]:
+    """Compare manifest artifact identity with authoritative registry metadata.
+
+    The Component Registry is the authoritative factory metadata source, so a
+    manifest must not invent, upgrade or redefine an artifact identity: it may
+    only restate the identity the registry declares for the component.
+
+    The comparison follows the registry's own artifact semantics instead of
+    demanding a byte-for-byte copy of an unrelated shape:
+
+    * ``artifact_type`` is compared exactly — it declares *what* the artifact
+      is, and ``none`` is the explicit statement that nothing is published;
+    * ``digest`` is compared as a canonical digest value;
+    * ``pinned`` is compared exactly.
+
+    Consequently ``artifact_type: none`` with ``digest: null`` and
+    ``pinned: false`` is authoritative metadata, not an omission: a manifest
+    that claims a published, pinned artifact for such a component is an
+    invalid composition.
+    """
+    if not _is_mapping(registry_artifact):
+        message = (
+            f"{entry_path}.artifact: canonical Component Registry declares no "
+            "authoritative artifact metadata for this component"
+        )
+        return [message]
+
+    errors: list[str] = []
+
+    registry_type = registry_artifact.get("artifact_type")
+    manifest_type = artifact.get("artifact_type")
+    if manifest_type != registry_type:
+        errors.append(
+            f"{entry_path}.artifact.artifact_type: manifest declares "
+            f"{manifest_type!r}, canonical Component Registry declares "
+            f"{registry_type!r}"
+        )
+
+    registry_digest = registry_artifact.get("digest")
+    manifest_digest = artifact.get("digest")
+    if _canonical_digest(manifest_digest) != _canonical_digest(registry_digest):
+        errors.append(
+            f"{entry_path}.artifact.digest: manifest declares "
+            f"{manifest_digest!r}, canonical Component Registry declares "
+            f"{registry_digest!r}"
+        )
+
+    registry_pinned = registry_artifact.get("pinned")
+    manifest_pinned = artifact.get("pinned")
+    if manifest_pinned != registry_pinned:
+        errors.append(
+            f"{entry_path}.artifact.pinned: manifest declares "
+            f"{manifest_pinned!r}, canonical Component Registry declares "
+            f"{registry_pinned!r}"
+        )
+
+    return errors
 
 
 # --------------------------------------------------------------------------
@@ -491,25 +601,21 @@ def _component_errors(document: Mapping, path: str, root: Path, registry) -> lis
             )
 
         # registry consistency
-        if registry is not None and comp_id not in registered_ids:
+        reg_entry = _registry_entry(registry, comp_id)
+        if registry is not None and reg_entry is None:
             errors.append(
                 f"{entry_path}.component_id: component {comp_id!r} is not registered in the canonical Component Registry"
             )
-        elif registry is not None:
-            try:
-                reg_entry = registry.entry(comp_id)
-                reg_version = reg_entry.get("component_version")
-                if (
-                    isinstance(comp_version, str)
-                    and isinstance(reg_version, str)
-                    and comp_version != reg_version
-                ):
-                    errors.append(
-                        f"{entry_path}.component_version: manifest declares {comp_version!r}, canonical registry declares {reg_version!r} for {comp_id!r}"
-                    )
-            except KeyError:
-                # Already reported as not registered
-                pass
+        elif reg_entry is not None:
+            reg_version = reg_entry.get("component_version")
+            if (
+                isinstance(comp_version, str)
+                and isinstance(reg_version, str)
+                and comp_version != reg_version
+            ):
+                errors.append(
+                    f"{entry_path}.component_version: manifest declares {comp_version!r}, canonical registry declares {reg_version!r} for {comp_id!r}"
+                )
 
         # artifact checks
         if not _is_mapping(artifact):
@@ -576,6 +682,17 @@ def _component_errors(document: Mapping, path: str, root: Path, registry) -> lis
         # but we can warn if same component_id appears twice (already checked).
         # For adversarial: duplicate artifact identities with same digest but different component_id
         # is allowed (shared base image), so no error.
+
+        # Artifact authority: the manifest restates the artifact identity that
+        # the authoritative Component Registry declares. It must not invent,
+        # upgrade or redefine it (ADR-0015 §4 — registry is the authoritative
+        # factory metadata source).
+        if reg_entry is not None:
+            errors.extend(
+                _artifact_authority_errors(
+                    entry_path, artifact, reg_entry.get("artifact")
+                )
+            )
 
     # Validate the explicit composition against dependencies declared by the
     # authoritative Component Registry. Missing or incompatible dependencies
@@ -831,7 +948,10 @@ def validate_document(document: object, *, root: Path | None = None) -> list[str
     errors.extend(_predecessor_errors(document, "$"))
     errors.extend(_lifecycle_errors(document, "$"))
 
-    registry = _load_registry(base)
+    # Authoritative Component Registry — fail-closed: when it cannot be
+    # loaded, that is a validation error, never a silent skip.
+    registry, registry_errors = _load_registry(base)
+    errors.extend(registry_errors)
 
     errors.extend(_component_errors(document, "$", base, registry))
     errors.extend(_golden_bundle_errors(document, "$"))

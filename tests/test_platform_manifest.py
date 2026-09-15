@@ -17,12 +17,16 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
-from component_registry import load_registry
+from component_registry import REGISTRY_PATH, load_registry
+from component_registry.errors import RegistryValidationError
+from component_registry.registry import Registry
+from component_registry.schema import SCHEMA_PATH as REGISTRY_SCHEMA_PATH
 from platform_manifest import (
     LIFECYCLE_ORDER,
     LIFECYCLE_STATES,
@@ -41,6 +45,7 @@ from platform_manifest import (
     validate_document,
     validate_transition,
 )
+from platform_manifest import validation as platform_validation
 from platform_manifest.lifecycle import (
     is_allowed_transition,
     is_forward_transition,
@@ -429,18 +434,25 @@ def test_artifact_none_is_valid(full_manifest_doc, root: Path) -> None:
     assert errors_for(full_manifest_doc, root) == []
 
 
-def test_artifact_with_digest_is_valid_when_pinned(
-    full_manifest_doc, root: Path
+def test_artifact_none_is_authoritative_and_matches_registry(
+    full_manifest_doc, registry, root: Path
 ) -> None:
-    digest = "sha256:" + "a" * 64
-    doc = with_artifact_field(
-        full_manifest_doc,
-        full_manifest_doc["components"][0]["component_id"],
-        artifact_type="container_image",
-        digest=digest,
-        pinned=True,
-    )
-    assert errors_for(doc, root) == []
+    """Test D — manifest restates the authoritative artifact: accepted.
+
+    Here the authoritative artifact is ``artifact_type: none`` (Level 0: no
+    deployable artifact). Restating it is the valid composition: the check is
+    a comparison against authoritative metadata, not a demand that every
+    artifact be a published image.
+    """
+    for comp in full_manifest_doc["components"]:
+        authored = next(
+            entry
+            for entry in registry.entries
+            if entry["component_id"] == comp["component_id"]
+        )
+        assert comp["artifact"] == authored["artifact"]
+
+    assert errors_for(full_manifest_doc, root) == []
 
 
 # ---------------------------------------------------------------------------
@@ -708,6 +720,208 @@ def test_invalid_artifact_type_is_rejected(full_manifest_doc, root: Path) -> Non
     target = full_manifest_doc["components"][0]["component_id"]
     doc = with_artifact_field(full_manifest_doc, target, artifact_type="tarball")
     assert errors_for(doc, root)
+
+
+# ---------------------------------------------------------------------------
+# Artifact authority — the Component Registry is the authoritative source of
+# artifact identity (ADR-0015 §4). A manifest restates it; it never invents,
+# upgrades or redefines it (BLOCKER 1).
+#
+# The comparison follows the registry's own artifact semantics: artifact_type
+# and pinned are compared exactly, digests are compared as canonical digest
+# values (the optional "sha256:" prefix is notation, not content). It is
+# therefore not a byte-for-byte copy rule, and it is not a rule that every
+# artifact must be a published image: artifact_type none / digest null /
+# pinned false is authoritative metadata on Level 0.
+# ---------------------------------------------------------------------------
+
+PUBLISHED_DIGEST = "sha256:" + "a" * 64
+SUBSTITUTED_DIGEST = "sha256:" + "b" * 64
+
+
+def _registry_entry_by_id(document: Mapping, component_id: str) -> dict:
+    return next(
+        item for item in document["components"] if item["component_id"] == component_id
+    )
+
+
+def _registry_variant_with_artifact(
+    registry, component_id: str, **artifact
+) -> Registry:
+    """A registry variant that still passes the registry's own validation."""
+    document = copy.deepcopy(dict(registry.document))
+    _registry_entry_by_id(document, component_id)["artifact"] = dict(artifact)
+    variant = Registry(document=document, root=registry.root, path=registry.path)
+    # The fixture must be authoritative metadata in its own right, otherwise it
+    # would prove nothing about manifest-vs-registry authority.
+    assert variant.validate() == []
+    return variant
+
+
+@pytest.fixture
+def published_artifact_registry(registry) -> Registry:
+    """Registry where ``tenant_authority`` publishes a pinned artifact."""
+    return _registry_variant_with_artifact(
+        registry,
+        "tenant_authority",
+        artifact_type="container_image",
+        digest=PUBLISHED_DIGEST,
+        pinned=True,
+    )
+
+
+def _use_registry(monkeypatch, variant: Registry) -> None:
+    monkeypatch.setattr(
+        platform_validation,
+        "_load_registry",
+        lambda root: (variant, []),
+    )
+
+
+def _manifest_with_artifact(
+    valid_components, component_id: str, manifest_id: str, **artifact
+) -> Mapping:
+    doc = build_manifest_document(
+        manifest_id=manifest_id,
+        manifest_version="0.1.0",
+        lifecycle_state="draft",
+        components=[component_by_id(valid_components, component_id)],
+    )
+    return with_artifact_field(doc, component_id, **artifact)
+
+
+def test_manifest_must_not_invent_artifact_type_absent_from_registry(
+    full_manifest_doc, registry, root: Path
+) -> None:
+    """Test A — artifact type mismatch against the authoritative registry.
+
+    The canonical registry declares ``artifact_type: none`` for every
+    registered component (no deployable artifact on Level 0). A manifest that
+    declares a published container image for such a component invents an
+    artifact identity the registry does not authorise.
+    """
+    target = full_manifest_doc["components"][0]["component_id"]
+    authored = next(
+        entry for entry in registry.entries if entry["component_id"] == target
+    )
+    assert authored["artifact"]["artifact_type"] == "none"
+
+    doc = with_artifact_field(
+        full_manifest_doc,
+        target,
+        artifact_type="container_image",
+        digest=PUBLISHED_DIGEST,
+        pinned=True,
+    )
+
+    errors = errors_for(doc, root)
+
+    assert any(
+        ".artifact.artifact_type" in error
+        and "manifest declares 'container_image'" in error
+        and "canonical Component Registry declares 'none'" in error
+        for error in errors
+    )
+    assert any(
+        ".artifact.digest" in error
+        and "canonical Component Registry declares None" in error
+        for error in errors
+    )
+    assert any(
+        ".artifact.pinned" in error
+        and "canonical Component Registry declares False" in error
+        for error in errors
+    )
+
+
+def test_manifest_artifact_digest_must_match_authoritative_registry(
+    root: Path, valid_components, published_artifact_registry, monkeypatch
+) -> None:
+    """Test B — digest mismatch against the authoritative registry."""
+    _use_registry(monkeypatch, published_artifact_registry)
+
+    doc = _manifest_with_artifact(
+        valid_components,
+        "tenant_authority",
+        "artifact-digest-mismatch-platform",
+        artifact_type="container_image",
+        digest=SUBSTITUTED_DIGEST,
+        pinned=True,
+    )
+
+    errors = errors_for(doc, root)
+
+    assert any(
+        ".artifact.digest" in error
+        and f"manifest declares {SUBSTITUTED_DIGEST!r}" in error
+        and f"canonical Component Registry declares {PUBLISHED_DIGEST!r}" in error
+        for error in errors
+    )
+
+
+def test_manifest_artifact_pinned_must_match_authoritative_registry(
+    root: Path, valid_components, published_artifact_registry, monkeypatch
+) -> None:
+    """Test C — pinned mismatch against the authoritative registry."""
+    _use_registry(monkeypatch, published_artifact_registry)
+
+    doc = _manifest_with_artifact(
+        valid_components,
+        "tenant_authority",
+        "artifact-pinned-mismatch-platform",
+        artifact_type="container_image",
+        digest=PUBLISHED_DIGEST,
+        pinned=False,
+    )
+
+    errors = errors_for(doc, root)
+
+    assert any(
+        ".artifact.pinned" in error
+        and "manifest declares False" in error
+        and "canonical Component Registry declares True" in error
+        for error in errors
+    )
+
+
+def test_manifest_matching_published_artifact_is_accepted(
+    root: Path, valid_components, published_artifact_registry, monkeypatch
+) -> None:
+    """Test D — manifest restates a published artifact: accepted.
+
+    The registry authorises ``container_image`` + digest + pinned, so the
+    manifest that restates exactly that identity is valid.
+    """
+    _use_registry(monkeypatch, published_artifact_registry)
+
+    doc = _manifest_with_artifact(
+        valid_components,
+        "tenant_authority",
+        "artifact-match-platform",
+        artifact_type="container_image",
+        digest=PUBLISHED_DIGEST,
+        pinned=True,
+    )
+
+    assert errors_for(doc, root) == []
+
+
+def test_manifest_digest_prefix_notation_is_not_an_artifact_change(
+    root: Path, valid_components, published_artifact_registry, monkeypatch
+) -> None:
+    """The ``sha256:`` prefix is notation, not part of the digest value."""
+    _use_registry(monkeypatch, published_artifact_registry)
+
+    doc = _manifest_with_artifact(
+        valid_components,
+        "tenant_authority",
+        "artifact-digest-notation-platform",
+        artifact_type="container_image",
+        digest=PUBLISHED_DIGEST.removeprefix("sha256:"),
+        pinned=True,
+    )
+
+    assert errors_for(doc, root) == []
 
 
 # ---------------------------------------------------------------------------
@@ -1516,6 +1730,148 @@ def test_non_strict_loading_reports_violations(
 
 
 # ---------------------------------------------------------------------------
+# Fail-closed Registry loading (BLOCKER 2)
+#
+# Platform Manifest validation checks composition *against* the authoritative
+# Component Registry (ADR-0015 §4). A registry that cannot be loaded —
+# absent, malformed, schema-invalid, carrying invalid dependency or artifact
+# metadata, or refused by its canonical loader — is a validation failure. It
+# is never degraded into "no registry", never skipped, and never lets the
+# manifest pass with fewer checks.
+# ---------------------------------------------------------------------------
+
+REGISTRY_UNAVAILABLE = "authoritative Component Registry cannot be loaded"
+
+
+@pytest.fixture
+def isolated_root(tmp_path: Path, root: Path):
+    """Build isolated repository roots that carry the manifest schema.
+
+    Only the registry document varies between the fail-closed cases: absent,
+    malformed, invalid, or a faithful copy of the canonical registry.
+    """
+
+    def build(name: str, *, registry_document=None, registry_text=None) -> Path:
+        base = tmp_path / name
+        for schema_path in (SCHEMA_PATH, REGISTRY_SCHEMA_PATH):
+            schema_target = base / schema_path
+            schema_target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(root / schema_path, schema_target)
+        # Registry validation checks the registry against the components that
+        # publish contracts under components/.
+        shutil.copytree(root / "components", base / "components")
+
+        if registry_document is not None or registry_text is not None:
+            registry_target = base / REGISTRY_PATH
+            registry_target.parent.mkdir(parents=True, exist_ok=True)
+            text = (
+                registry_text
+                if registry_text is not None
+                else json.dumps(registry_document)
+            )
+            registry_target.write_text(text, encoding="utf-8")
+
+        return base
+
+    return build
+
+
+def _invalid_artifact_metadata(document: Mapping) -> None:
+    """Artifact metadata the registry's own validation rejects."""
+    _registry_entry_by_id(document, "tenant_authority")["artifact"] = {
+        "artifact_type": "none",
+        "digest": SUBSTITUTED_DIGEST,
+        "pinned": True,
+    }
+
+
+def _invalid_dependency_metadata(document: Mapping) -> None:
+    """Dependency metadata the registry's own validation rejects."""
+    entry = _registry_entry_by_id(document, "authorization")
+    dependency = next(
+        item for item in entry["dependencies"] if item["component_id"] == "identity"
+    )
+    dependency["version_range"] = "latest"
+
+
+def test_missing_registry_fails_validation(
+    root: Path, isolated_root, minimal_manifest_doc
+) -> None:
+    """Test E — no canonical registry: validation fails closed."""
+    base = isolated_root("missing-registry")
+
+    assert not (base / REGISTRY_PATH).is_file()
+    # The same document is valid against the real authoritative registry, so a
+    # failure here can only come from the missing registry.
+    assert errors_for(minimal_manifest_doc, root) == []
+
+    errors = validate_document(minimal_manifest_doc, root=base)
+
+    assert any(REGISTRY_UNAVAILABLE in error for error in errors)
+
+
+def test_malformed_registry_fails_validation(
+    isolated_root, minimal_manifest_doc
+) -> None:
+    """Test F — malformed registry: validation fails closed."""
+    base = isolated_root("malformed-registry", registry_text="{ not json")
+
+    errors = validate_document(minimal_manifest_doc, root=base)
+
+    assert any(REGISTRY_UNAVAILABLE in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [_invalid_artifact_metadata, _invalid_dependency_metadata],
+    ids=["artifact-metadata", "dependency-metadata"],
+)
+def test_invalid_registry_metadata_fails_validation(
+    registry, isolated_root, minimal_manifest_doc, mutation
+) -> None:
+    """Test G — registry that fails its own validation: fails closed."""
+    document = copy.deepcopy(dict(registry.document))
+    mutation(document)
+    base = isolated_root("invalid-registry", registry_document=document)
+
+    # The registry really is invalid for the canonical loader...
+    with pytest.raises(RegistryValidationError):
+        load_registry(base)
+
+    # ...and that refusal is reported as a manifest validation failure.
+    errors = validate_document(minimal_manifest_doc, root=base)
+
+    assert any(REGISTRY_UNAVAILABLE in error for error in errors)
+
+
+def test_valid_registry_in_isolated_root_is_accepted(registry, isolated_root) -> None:
+    """Test H — loadable authoritative registry: validation proceeds."""
+    base = isolated_root(
+        "valid-registry", registry_document=copy.deepcopy(dict(registry.document))
+    )
+    loaded = load_registry(base)
+
+    components = [
+        {
+            "component_id": entry["component_id"],
+            "component_version": entry["component_version"],
+            "artifact": dict(entry["artifact"]),
+        }
+        for entry in loaded.entries
+    ]
+    components.sort(key=lambda item: item["component_id"])
+
+    doc = build_manifest_document(
+        manifest_id="isolated-root-platform",
+        manifest_version="0.1.0",
+        lifecycle_state="draft",
+        components=components,
+    )
+
+    assert validate_document(doc, root=base) == []
+
+
+# ---------------------------------------------------------------------------
 # Architecture boundaries: no DB, no internal imports
 # ---------------------------------------------------------------------------
 
@@ -1608,9 +1964,6 @@ def test_manifest_rejects_dependency_outside_required_version_range(
     )
     identity_dependency["version_range"] = ">=0.4.0,<0.5.0"
 
-    from component_registry.registry import Registry
-    from platform_manifest import validation as platform_validation
-
     modified_registry = Registry(
         document=registry_document,
         root=registry.root,
@@ -1619,7 +1972,7 @@ def test_manifest_rejects_dependency_outside_required_version_range(
     monkeypatch.setattr(
         platform_validation,
         "_load_registry",
-        lambda root: modified_registry,
+        lambda root: (modified_registry, []),
     )
 
     doc = build_manifest_document(
