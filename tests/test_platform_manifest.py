@@ -48,6 +48,7 @@ from platform_manifest.lifecycle import (
     requires_publication,
 )
 from platform_manifest.schema import SCHEMA_PATH, load_schema
+from platform_manifest.validation import _version_satisfies_range
 
 EXPECTED_INVENTORY = (
     "authorization",
@@ -89,6 +90,14 @@ def _valid_components_from_registry(registry) -> list[dict]:
     return sorted(comps, key=lambda e: e["component_id"])
 
 
+def component_by_id(valid_components, component_id: str):
+    return next(
+        component
+        for component in valid_components
+        if component["component_id"] == component_id
+    )
+
+
 @pytest.fixture(scope="module")
 def valid_components(registry):
     return _valid_components_from_registry(registry)
@@ -101,7 +110,9 @@ def minimal_manifest_doc(valid_components, root: Path) -> Mapping:
         manifest_id="test-platform",
         manifest_version="1.0.0",
         lifecycle_state="draft",
-        components=[valid_components[0]],
+        components=[
+            component_by_id(valid_components, "tenant_authority")
+        ],
     )
     return doc
 
@@ -232,7 +243,9 @@ def test_manifest_with_one_component_is_valid(root: Path, valid_components) -> N
         manifest_id="single-component-platform",
         manifest_version="0.1.0",
         lifecycle_state="draft",
-        components=[valid_components[0]],
+        components=[
+            component_by_id(valid_components, "tenant_authority")
+        ],
     )
     assert errors_for(doc, root) == []
 
@@ -924,7 +937,9 @@ def test_minimal_manifest_one_component(root: Path, valid_components) -> None:
         manifest_id="minimal-platform",
         manifest_version="0.1.0",
         lifecycle_state="draft",
-        components=[valid_components[0]],
+        components=[
+            component_by_id(valid_components, "tenant_authority")
+        ],
     )
     assert errors_for(doc, root) == []
 
@@ -967,6 +982,156 @@ def test_maximal_manifest_all_components_with_optional_fields(
         },
     )
     assert errors_for(doc, root) == []
+
+
+def test_manifest_with_dependency_closed_component_is_valid(
+    root: Path, valid_components
+) -> None:
+    components = [
+        component
+        for component in valid_components
+        if component["component_id"] in {
+            "authorization",
+            "identity",
+            "tenant_authority",
+        }
+    ]
+
+    doc = build_manifest_document(
+        manifest_id="dependency-closed-platform",
+        manifest_version="0.1.0",
+        lifecycle_state="draft",
+        components=components,
+    )
+
+    assert errors_for(doc, root) == []
+
+
+def test_manifest_rejects_missing_dependency(
+    root: Path, valid_components
+) -> None:
+    authorization = component_by_id(valid_components, "authorization")
+
+    doc = build_manifest_document(
+        manifest_id="missing-dependency-platform",
+        manifest_version="0.1.0",
+        lifecycle_state="draft",
+        components=[authorization],
+    )
+
+    errors = errors_for(doc, root)
+
+    assert any(
+        "requires dependency 'identity', but it is absent from the manifest"
+        in error
+        for error in errors
+    )
+    assert any(
+        "requires dependency 'tenant_authority', but it is absent from the manifest"
+        in error
+        for error in errors
+    )
+
+
+def test_dependency_version_range_lower_bound_is_inclusive() -> None:
+    assert _version_satisfies_range("0.3.0", ">=0.3.0,<0.4.0")
+
+
+def test_dependency_version_range_upper_bound_is_exclusive() -> None:
+    assert not _version_satisfies_range("0.4.0", ">=0.3.0,<0.4.0")
+
+
+def test_dependency_version_range_supports_combined_constraints() -> None:
+    assert _version_satisfies_range("1.5.0", ">=1.0.0,<2.0.0")
+    assert not _version_satisfies_range("2.0.0", ">=1.0.0,<2.0.0")
+
+
+def test_dependency_version_range_rejects_invalid_constraints() -> None:
+    assert not _version_satisfies_range("0.3.0", "latest")
+    assert not _version_satisfies_range("0.3.0", "")
+    assert not _version_satisfies_range("0.3.0", ">=0.3")
+    assert not _version_satisfies_range("0.3.0", ">=0.3.0,")
+    assert not _version_satisfies_range("not-a-version", ">=0.3.0")
+
+
+def test_transitive_dependency_is_enforced(
+    root: Path, valid_components
+) -> None:
+    # authorization -> identity -> tenant_authority
+    authorization = component_by_id(valid_components, "authorization")
+
+    identity = component_by_id(valid_components, "identity")
+
+    doc = build_manifest_document(
+        manifest_id="transitive-dependency-platform",
+        manifest_version="0.1.0",
+        lifecycle_state="draft",
+        components=[
+            authorization,
+            identity,
+        ],
+    )
+
+    errors = errors_for(doc, root)
+
+    assert any(
+        "component 'identity'" in error
+        and "dependency 'tenant_authority'" in error
+        for error in errors
+    )
+
+
+def test_multiple_dependencies_are_all_checked(
+    root: Path, valid_components
+) -> None:
+    learning = component_by_id(valid_components, "learning")
+
+    doc = build_manifest_document(
+        manifest_id="multiple-dependencies-platform",
+        manifest_version="0.1.0",
+        lifecycle_state="draft",
+        components=[learning],
+    )
+
+    errors = errors_for(doc, root)
+
+    assert any(
+        "component 'learning'" in error
+        and "dependency 'authorization'" in error
+        for error in errors
+    )
+    assert any(
+        "component 'learning'" in error
+        and "dependency 'idempotency'" in error
+        for error in errors
+    )
+    assert any(
+        "component 'learning'" in error
+        and "dependency 'identity'" in error
+        for error in errors
+    )
+
+
+def test_dependency_validation_does_not_auto_add_missing_component(
+    root: Path, valid_components
+) -> None:
+    authorization = component_by_id(valid_components, "authorization")
+
+    doc = build_manifest_document(
+        manifest_id="no-auto-add-platform",
+        manifest_version="0.1.0",
+        lifecycle_state="draft",
+        components=[authorization],
+    )
+
+    before = list(doc["components"])
+    errors = errors_for(doc, root)
+
+    assert len(doc["components"]) == len(before)
+    assert [c["component_id"] for c in doc["components"]] == [
+        c["component_id"] for c in before
+    ]
+    assert errors
 
 
 def test_empty_configuration_is_valid(full_manifest_doc, root: Path) -> None:
@@ -1420,3 +1585,59 @@ def test_manifest_never_touches_component_database(root: Path) -> None:
         text = src.read_text(encoding="utf-8").lower()
         for kw in ("sqlite", "psycopg", ".execute(", "cursor(", "create table"):
             assert kw not in text, (src.name, kw)
+
+# ==============
+def test_manifest_rejects_dependency_outside_required_version_range(
+    root: Path, valid_components, registry, monkeypatch
+) -> None:
+    authorization = component_by_id(valid_components, "authorization")
+    identity = component_by_id(valid_components, "identity")
+    tenant_authority = component_by_id(valid_components, "tenant_authority")
+
+    registry_document = copy.deepcopy(registry.document)
+    authorization_entry = next(
+        entry
+        for entry in registry_document["components"]
+        if entry["component_id"] == "authorization"
+    )
+
+    identity_dependency = next(
+        dependency
+        for dependency in authorization_entry["dependencies"]
+        if dependency["component_id"] == "identity"
+    )
+    identity_dependency["version_range"] = ">=0.4.0,<0.5.0"
+
+    from component_registry.registry import Registry
+    from platform_manifest import validation as platform_validation
+
+    modified_registry = Registry(
+        document=registry_document,
+        root=registry.root,
+        path=registry.path,
+    )
+    monkeypatch.setattr(
+        platform_validation,
+        "_load_registry",
+        lambda root: modified_registry,
+    )
+
+    doc = build_manifest_document(
+        manifest_id="incompatible-dependency-platform",
+        manifest_version="0.1.0",
+        lifecycle_state="draft",
+        components=[
+            authorization,
+            identity,
+            tenant_authority,
+        ],
+    )
+
+    errors = errors_for(doc, root)
+
+    assert any(
+        "component 'authorization'" in error
+        and "requires 'identity' in range '>=0.4.0,<0.5.0'" in error
+        and "manifest selects '0.3.0'" in error
+        for error in errors
+    )

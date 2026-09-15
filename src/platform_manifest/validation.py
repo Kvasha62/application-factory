@@ -400,6 +400,43 @@ def _lifecycle_errors(document: Mapping, path: str = "$") -> list[str]:
     return errors
 
 
+_VERSION_CONSTRAINT_RE = re.compile(
+    r"^(<=|>=|==|<|>)(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
+)
+
+
+def _version_satisfies_range(version: object, version_range: object) -> bool:
+    """Check an explicit registry dependency range without resolving anything."""
+    if parse_semver(version) is None or not isinstance(version_range, str):
+        return False
+
+    constraints = [part.strip() for part in version_range.split(",")]
+    if not constraints or any(not part for part in constraints):
+        return False
+
+    for constraint in constraints:
+        match = _VERSION_CONSTRAINT_RE.fullmatch(constraint)
+        if match is None:
+            return False
+
+        operator = match.group(1)
+        bound = ".".join(match.group(i) for i in range(2, 5))
+        comparison = compare_semver(version, bound)
+
+        if operator == ">=" and comparison < 0:
+            return False
+        if operator == ">" and comparison <= 0:
+            return False
+        if operator == "<=" and comparison > 0:
+            return False
+        if operator == "<" and comparison >= 0:
+            return False
+        if operator == "==" and comparison != 0:
+            return False
+
+    return True
+
+
 def _component_errors(document: Mapping, path: str, root: Path, registry) -> list[str]:
     errors: list[str] = []
     components = document.get("components")
@@ -539,6 +576,87 @@ def _component_errors(document: Mapping, path: str, root: Path, registry) -> lis
         # but we can warn if same component_id appears twice (already checked).
         # For adversarial: duplicate artifact identities with same digest but different component_id
         # is allowed (shared base image), so no error.
+
+    # Validate the explicit composition against dependencies declared by the
+    # authoritative Component Registry. Missing or incompatible dependencies
+    # are errors; this validator never adds, substitutes, or resolves them.
+    if registry is not None:
+        selected_versions = {
+            entry.get("component_id"): entry.get("component_version")
+            for entry in components
+            if _is_mapping(entry)
+            and isinstance(entry.get("component_id"), str)
+            and parse_semver(entry.get("component_version")) is not None
+        }
+
+        for index, entry in enumerate(components):
+            if not _is_mapping(entry):
+                continue
+
+            comp_id = entry.get("component_id")
+            if not isinstance(comp_id, str) or comp_id not in registered_ids:
+                continue
+
+            reg_entry = registry.entry(comp_id)
+            dependencies = reg_entry.get("dependencies", [])
+            entry_path = f"{path}.components[{index}]"
+
+            if not isinstance(dependencies, list):
+                errors.append(
+                    f"{entry_path}: canonical registry dependencies for "
+                    f"{comp_id!r} must be a list"
+                )
+                continue
+
+            for dep_index, dependency in enumerate(dependencies):
+                dep_path = f"{entry_path}.dependencies[{dep_index}]"
+
+                if not _is_mapping(dependency):
+                    errors.append(f"{dep_path}: canonical dependency must be an object")
+                    continue
+
+                dep_id = dependency.get("component_id")
+                version_range = dependency.get("version_range")
+
+                if not isinstance(dep_id, str) or not dep_id:
+                    errors.append(
+                        f"{dep_path}.component_id: dependency identity is required"
+                    )
+                    continue
+
+                if is_floating_selector(dep_id):
+                    errors.append(
+                        f"{dep_path}.component_id: {dep_id!r} is a floating selector"
+                    )
+                    continue
+
+                if not isinstance(version_range, str) or not version_range.strip():
+                    errors.append(
+                        f"{dep_path}.version_range: explicit SemVer constraints are required"
+                    )
+                    continue
+
+                if is_floating_selector(version_range):
+                    errors.append(
+                        f"{dep_path}.version_range: {version_range!r} is a floating selector"
+                    )
+                    continue
+
+                selected_version = selected_versions.get(dep_id)
+
+                if selected_version is None:
+                    errors.append(
+                        f"{entry_path}.component_id: component {comp_id!r} "
+                        f"requires dependency {dep_id!r}, but it is absent from the manifest"
+                    )
+                    continue
+
+                if not _version_satisfies_range(selected_version, version_range):
+                    errors.append(
+                        f"{entry_path}.component_version: component {comp_id!r} "
+                        f"requires {dep_id!r} in range {version_range!r}, "
+                        f"but manifest selects {selected_version!r}"
+                    )
 
     # Ensure deterministic order: components should be sorted by component_id for reproducibility.
     # If not sorted, we report error to enforce determinism.
