@@ -18,6 +18,11 @@ only. The result carries a deterministic assembly identity
 (``instance_digest``, sha256 over canonical JSON) with no dependence on
 time, randomness, machine state or network.
 
+The canonical instance document is constructed only by the internal
+``_build_instance_document`` helper, after the validation gate has accepted
+the manifest: there is no public raw constructor that could bypass
+validation.
+
 This slice is a representation step, not a deployment step: it deploys,
 provisions, rolls out, approves and publishes nothing, introduces no new
 lifecycle vocabulary, creates no second source of truth and never mutates
@@ -30,7 +35,6 @@ Public surface:
 * :func:`assemble_manifest_path` — load, validate and assemble;
 * :func:`assembly_diagnostics` — every violation, deterministically, without
   raising;
-* :func:`build_instance_document` — deterministic construction;
 * :func:`validate_instance_document` — deterministic validation of an
   instance against its bound manifest and the applicable factory contracts;
 * :class:`Instance` — read access and deterministic digest;
@@ -45,7 +49,6 @@ from platform_instance.assembly import (
     assemble_document,
     assemble_manifest_path,
     assembly_diagnostics,
-    build_instance_document,
 )
 from platform_instance.errors import (
     AssemblyRejectedError,
@@ -87,7 +90,6 @@ __all__ = [
     "assemble_document",
     "assemble_manifest_path",
     "assembly_diagnostics",
-    "build_instance_document",
     "canonical_json",
     "compute_instance_digest",
     "discover_root",

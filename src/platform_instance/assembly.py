@@ -17,8 +17,6 @@ manifest. This module is the single programmatic door to that behaviour:
 * :func:`assemble_manifest_path` — load, validate and assemble;
 * :func:`assembly_diagnostics` — every violation of an assembly, sorted,
   without raising;
-* :func:`build_instance_document` — deterministic construction of the
-  canonical instance document.
 
 Assembly is a **representation step, not a deployment step**. It creates no
 runtime, provisions nothing, rolls nothing out, approves nothing and
@@ -71,13 +69,19 @@ PLATFORM_ID_PATTERN = r"^[a-z][a-z0-9]*([_-][a-z0-9]+)*$"
 _PLATFORM_ID_RE = re.compile(PLATFORM_ID_PATTERN)
 
 
-def build_instance_document(
+def _build_instance_document(
     *,
     platform_id: str,
     manifest_document: Document,
     schema_path: str = SCHEMA_PATH,
 ) -> dict[str, Any]:
     """Build an instance document deterministically and compute its digest.
+
+    Internal helper: the only public assembly path is :func:`assemble` /
+    :func:`assemble_document` / :func:`assemble_manifest_path`, which run the
+    full validation gate first. This builder performs no validation of its
+    own and is therefore deliberately private — a public raw constructor
+    would be a bypass of that gate.
 
     The caller provides the Platform Instance identity and the validated
     manifest document; this function inherits the manifest's composition
@@ -138,14 +142,18 @@ def _platform_id_errors(platform_id: object) -> list[str]:
     return errors
 
 
-def _manifest_errors(manifest: Document) -> list[str]:
-    """Validate the bound manifest by the normative Slice C surface."""
+def _manifest_errors(manifest: Document, root: Path) -> list[str]:
+    """Validate the bound manifest by the normative Slice C surface.
+
+    ``root`` is the caller-supplied authoritative repository root: manifest
+    validation is always evaluated against exactly the root the caller
+    passed, never against a re-discovered checkout.
+    """
     from platform_manifest import validate_document as validate_manifest_document
 
-    base = discover_root()
     return [
         f"$.manifest: the bound Platform Manifest is invalid — {error}"
-        for error in validate_manifest_document(manifest, root=base)
+        for error in validate_manifest_document(manifest, root=root)
     ]
 
 
@@ -191,12 +199,19 @@ def assembly_diagnostics(
     state and the fully assembled instance are checked together, so a caller
     sees the complete, deterministic list. The same inputs always produce the
     same report.
+
+    The explicitly supplied ``root`` is authoritative for every check: when
+    given, all manifest validation and composition surfaces are evaluated
+    against exactly that repository root (an isolated/temporary root is
+    honoured, never silently replaced by the ambient checkout).
     """
     if not isinstance(manifest_document, Mapping):
         return ["$: platform manifest must be a JSON object"]
 
+    base = root if root is not None else discover_root()
+
     errors = list(_platform_id_errors(platform_id))
-    errors.extend(_manifest_errors(manifest_document))
+    errors.extend(_manifest_errors(manifest_document, base))
     errors.extend(_digest_errors(manifest_document))
     errors.extend(_state_errors(manifest_document))
     if errors:
@@ -208,10 +223,10 @@ def assembly_diagnostics(
     # validation against its manifest — a belt-and-braces handoff gate: an
     # instance that cannot be validated is never produced (ARCHITECTURE.md
     # §17 discipline, applied to assembly).
-    document = build_instance_document(
+    document = _build_instance_document(
         platform_id=platform_id, manifest_document=manifest_document
     )
-    errors.extend(validate_instance_document(document, manifest_document, root=root))
+    errors.extend(validate_instance_document(document, manifest_document, root=base))
     return sorted(set(errors))
 
 
@@ -273,7 +288,7 @@ def _assemble_checked(
     errors = assembly_diagnostics(manifest_document, platform_id=platform_id, root=root)
     if errors:
         raise AssemblyRejectedError(errors)
-    return build_instance_document(
+    return _build_instance_document(
         platform_id=platform_id, manifest_document=manifest_document
     )
 
@@ -286,5 +301,4 @@ __all__ = [
     "assemble_document",
     "assemble_manifest_path",
     "assembly_diagnostics",
-    "build_instance_document",
 ]

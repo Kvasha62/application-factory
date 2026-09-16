@@ -52,17 +52,19 @@ from platform_instance import (
     AssemblyRejectedError,
     InstanceNotFoundError,
     assemble_document,
+    assemble_manifest_path,
     assembly_diagnostics,
-    build_instance_document,
     compute_instance_digest,
     discover_root,
     load_instance_document,
     render_instance_document,
     validate_instance_document,
 )
+from platform_instance.assembly import _build_instance_document
 from platform_manifest import (
     LIFECYCLE_STATES,
     compute_manifest_digest,
+    render_manifest_document,
     validate_document,
 )
 
@@ -172,6 +174,18 @@ def materialize(tmp_path: Path) -> Path:
     shutil.copytree(source / "factory", target / "factory")
     shutil.copy(source / "pyproject.toml", target / "pyproject.toml")
     return target
+
+
+def registry_document(root: Path) -> dict:
+    return json.loads(
+        (root / "factory/registry/component_registry.json").read_text(encoding="utf-8")
+    )
+
+
+def write_registry(root: Path, document: Mapping) -> None:
+    (root / "factory/registry/component_registry.json").write_text(
+        json.dumps(document, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def canonical(value: object) -> str:
@@ -829,6 +843,149 @@ class TestNegativeAssembly:
 # ---------------------------------------------------------------------------
 
 
+class TestSuppliedRoot:
+    """The explicitly supplied ``root`` is authoritative for manifest validation.
+
+    Regression guard for the review finding that ``assembly_diagnostics()``
+    re-discovered the ambient repository root inside manifest validation,
+    making ``root=`` an isolated root partially ignored. The test below
+    constructs a manifest that is valid **only** against the supplied
+    isolated root: the ambient checkout's registry declares a different
+    ``learning`` version, so any implementation that validates the manifest
+    against a re-discovered root produces a version-mismatch violation and
+    this test fails.
+    """
+
+    def _isolated_root_declaring_learning(self, tmp_path: Path, version: str) -> Path:
+        """An isolated root whose authoritative metadata pins ``version`` for
+        ``learning`` (registry entry and published contract kept consistent,
+        as Slice A validation requires)."""
+        root = materialize(tmp_path)
+        registry = registry_document(root)
+        for entry in registry["components"]:
+            if entry["component_id"] == "learning":
+                entry["component_version"] = version
+        write_registry(root, registry)
+        contract_path = root / "components/learning/contract/component_contract.json"
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["component_version"] = version
+        contract_path.write_text(
+            json.dumps(contract, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        return root
+
+    def test_manifest_diagnostics_use_supplied_root(self, tmp_path: Path) -> None:
+        root = self._isolated_root_declaring_learning(tmp_path, "0.2.0")
+        request = build_request_document(
+            manifest_id="learning-platform",
+            manifest_version="1.0.0",
+            components=[{"component_id": "learning", "component_version": "0.2.0"}],
+        )
+        manifest = compose_request_document(request, root=root).document
+        document = validated(manifest)
+        assert validate_document(document, root=root) == []
+
+        # Valid against the supplied root; the ambient checkout (registry
+        # declares learning 0.3.0) must not take part in the verdict.
+        errors = assembly_diagnostics(
+            document, platform_id="learning-platform", root=root
+        )
+        assert errors == [], "\n".join(errors)
+
+        instance = assemble_document(
+            document, platform_id="learning-platform", root=root
+        )
+        assert instance.component_ids == LEARNING_CLOSURE
+
+    def test_assembly_via_manifest_path_uses_supplied_root(
+        self, tmp_path: Path
+    ) -> None:
+        root = self._isolated_root_declaring_learning(tmp_path, "0.2.0")
+        request = build_request_document(
+            manifest_id="learning-platform",
+            manifest_version="1.0.0",
+            components=[{"component_id": "learning", "component_version": "0.2.0"}],
+        )
+        document = validated(compose_request_document(request, root=root).document)
+        assert validate_document(document, root=root) == []
+
+        path = tmp_path / "repo" / "learning_manifest.json"
+        path.write_text(render_manifest_document(document), encoding="utf-8")
+        instance = assemble_manifest_path(
+            path, platform_id="learning-platform", root=root
+        )
+        assert instance.manifest_id == "learning-platform"
+        assert instance.manifest_state == "validated"
+
+
+class TestPublicAssemblyGate:
+    """The public API has no raw construction bypass of the validation gate.
+
+    Regression guard for the review finding that a publicly exported
+    ``build_instance_document()`` could produce an instance document from an
+    arbitrary manifest — draft, tampered or otherwise unvalidated. The only
+    public assembly path is ``assemble*()``, and it always runs the gate.
+    """
+
+    def test_raw_builder_is_not_public_api(self, root: Path) -> None:
+        import platform_instance
+        import platform_instance.assembly as assembly_module
+
+        assert not hasattr(platform_instance, "build_instance_document")
+        assert not hasattr(assembly_module, "build_instance_document")
+        assert "build_instance_document" not in platform_instance.__all__
+        assert "build_instance_document" not in assembly_module.__all__
+
+        # No public top-level definition of the old name anywhere in the
+        # package sources (the private underscore helper is allowed).
+        for source in sorted((root / "src" / "platform_instance").glob("*.py")):
+            tree = ast.parse(source.read_text(encoding="utf-8"))
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    assert node.name != "build_instance_document", source.name
+
+    def test_public_api_rejects_a_draft_manifest(
+        self, root: Path, example_request: dict, tmp_path: Path
+    ) -> None:
+        manifest = compose_request_document(example_request, root=root).document
+        assert manifest["lifecycle"]["state"] == "draft"
+
+        with pytest.raises(AssemblyRejectedError):
+            assemble_document(manifest, platform_id="example-platform", root=root)
+
+        path = tmp_path / "draft_manifest.json"
+        path.write_text(render_manifest_document(manifest), encoding="utf-8")
+        with pytest.raises(AssemblyRejectedError):
+            assemble_manifest_path(path, platform_id="example-platform", root=root)
+
+        errors = assembly_diagnostics(
+            manifest, platform_id="example-platform", root=root
+        )
+        assert any("not assemblable" in error for error in errors)
+
+    def test_public_api_rejects_a_tampered_manifest(
+        self, root: Path, example_manifest: dict, tmp_path: Path
+    ) -> None:
+        document = clone(example_manifest)
+        document["manifest_digest"] = "sha256:" + "0" * 64
+
+        with pytest.raises(AssemblyRejectedError):
+            assemble_document(document, platform_id="example-platform", root=root)
+
+        path = tmp_path / "tampered_manifest.json"
+        path.write_text(render_manifest_document(document), encoding="utf-8")
+        with pytest.raises(AssemblyRejectedError):
+            assemble_manifest_path(path, platform_id="example-platform", root=root)
+
+        errors = assembly_diagnostics(
+            document, platform_id="example-platform", root=root
+        )
+        assert any(
+            "does not match the computed content digest" in error for error in errors
+        )
+
+
 class TestDeterminism:
     def test_same_inputs_same_document_and_digest(
         self, root: Path, example_manifest: dict
@@ -1156,14 +1313,19 @@ class TestBoundary:
             "schema/platform_instance.schema.json",
         }
 
-    def test_build_instance_document_is_pure(
+    def test_internal_build_helper_is_pure(
         self, root: Path, example_manifest: dict
     ) -> None:
+        """The internal builder constructs deterministically and never mutates
+        its input. It is reachable only as the private
+        ``platform_instance.assembly._build_instance_document`` — the public
+        assembly path runs the validation gate first (see
+        ``TestPublicAssemblyGate``)."""
         snapshot = clone(example_manifest)
-        first = build_instance_document(
+        first = _build_instance_document(
             platform_id="example-platform", manifest_document=example_manifest
         )
-        second = build_instance_document(
+        second = _build_instance_document(
             platform_id="example-platform", manifest_document=example_manifest
         )
         assert first == second
