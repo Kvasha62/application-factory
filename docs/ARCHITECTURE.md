@@ -116,7 +116,7 @@ PLATFORM FACTORY
 
 ### 2.2. Platform Instance
 
-Platform Instance — конкретный развёрнутый продукт заказчика.
+Platform Instance — детерминированное представление желаемого состояния (desired state) конкретной платформы заказчика: точные версии компонентов, artifact identities и configuration bindings в пределах действующей архитектуры.
 
 ```
 Platform Instance =
@@ -126,6 +126,8 @@ Platform Instance =
   + Branding
   + Environment-specific settings
 ```
+
+Platform Instance — это deployment input / desired state для Deployment & Operations (§37.1), а не runtime state: создание Platform Instance не означает, что платформа уже развёрнута или запущена. Фактически развёрнутый и работающий продукт заказчика — Running Platform — получается из Platform Instance стадией Deployment & Operations (ADR-0016).
 
 ### 2.3. Tenant
 
@@ -590,7 +592,59 @@ docs/adr/
          |
          v
     PLATFORM INSTANCE
+         |
+         v
+ DEPLOYMENT & OPERATIONS
+         |
+         v
+    RUNNING PLATFORM
 ```
+
+Стадия после PLATFORM INSTANCE определена в §37.1.
+
+### 37.1. Deployment & Operations (ADR-0016)
+
+Главная модель не заканчивается на Platform Instance:
+
+```
+Factory
+    ↓
+Platform Manifest
+    ↓
+Platform Instance
+    ↓
+Deployment & Operations
+    ↓
+Running Platform
+```
+
+**Граница фабрики.** Фабрика заканчивается на детерминированном Platform Instance. Фабрика отвечает за Component Contract, Registry, Catalog, Golden Bundles, Composer, Platform Manifest, детерминированную сборку Platform Instance, version binding, artifact identity, validation и publication/delivery of desired state. Фабрика не является deployment engine: она не выполняет provisioning и deployment, не хранит runtime/deployment state, не управляет health/readiness, upgrade, rollback и не оркестрирует migrations против реальных окружений.
+
+**Desired State / Actual State.**
+
+```
+Platform Instance = desired state / deployment input
+Running Platform  = actual runtime state
+```
+
+Deployment & Operations — отдельная capability вне фабрики, следующая за Platform Instance. Она отвечает за переход от Platform Instance к Running Platform и за поддержание соответствия actual state желаемому. Её ответственность: provisioning; deployment; deployment state; migration orchestration; runtime management; health/readiness; upgrade; rollback; operational observability.
+
+Deployment & Operations не имеет права:
+
+- изменять Platform Manifest;
+- подменять версии;
+- менять artifact identity;
+- использовать floating selectors;
+- получать право менять ownership бизнес-данных;
+- становиться бизнес-системой/SCS.
+
+**Immutable Manifest Principle.** Deployment & Operations не мутирует опубликованный Manifest ради deployment/runtime нужд. Любое изменение desired state проходит только через новый versioned Manifest → новый Platform Instance (§16, §17).
+
+**Ownership.** Владение бизнес-данными остаётся у соответствующих компонентов (LAW-03, §5). Tenant Authority остаётся владельцем tenant lifecycle (§2.3). Deployment & Operations не становится владельцем бизнес-данных.
+
+**Versioning.** Запрет floating selectors действует и на этой границе (§1.3): `latest`, `current`, `default`, `stable`, `edge`, `main`, `master`, `head`, `tip`, `*` и эквиваленты не могут быть deployment input. Deployment работает только с конкретно зафиксированными версиями и artifact identities (§11).
+
+**Technology neutrality.** Эта граница определяет ответственность, а не реализацию: конкретный deployment engine, orchestration, провайдер и CI/CD здесь не выбираются (§36). Стадия введена как Level C изменение через ADR-0016 (§34.1); её реализация требует отдельного утверждённого work item и не считается существующей только на основании этого раздела (§40).
 
 ---
 
