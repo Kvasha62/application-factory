@@ -27,8 +27,8 @@ What the operation refuses to do is as much of the slice as what it does:
   (ADR-0017 §34);
 * it never leaves deployment state dishonest: a failure at any stage is
   recorded at the stage where it happened, and no claim survives it (§9, §20);
-* it owns no business data: migrations are component-owned code executed in the
-  component's own runtime process, stores stay with their components, and no
+* it owns no business data: migrations are component-owned code executed from
+  the component's own deployment, stores stay with their components, and no
   component database is ever opened here (§6, §14; LAW-03, LAW-04).
 """
 
@@ -78,7 +78,6 @@ from deployment_operations.health import (
 )
 from deployment_operations.provisioning import provision
 from deployment_operations.runtime import (
-    OP_MIGRATE,
     OP_PROBE,
     OP_START,
     LocalProcessRuntime,
@@ -252,17 +251,25 @@ class Deployment:
     def stop(self) -> DeploymentRecord:
         """Stop the platform's runtime elements (ADR-0016 §18).
 
-        An operational action, not a lifecycle change: it is reflected in
-        deployment state (``running`` becomes false) and in the operational
-        events. Restart policy, ongoing runtime management and drift handling
-        are later stages (ADR-0017 §39) and are not implemented here.
+        An operational action, not a lifecycle change: the record keeps saying
+        what this operation did (``realized``, with the identity/version/digest
+        verification it performed) and stops claiming a Running Platform where
+        there is none — nothing is running, the verified operational condition
+        no longer holds, and so no ``deployed`` claim stands (§10, §33).
+
+        Restart policy, ongoing runtime management and drift handling are later
+        stages (ADR-0017 §39) and are not implemented here; stopping twice is
+        idempotent and records nothing twice (§20).
         """
         at = self._clock()
         for handle in self._handles:
             if self._runtime is not None:
                 self._runtime.stop(handle)
-        record = self.record.mark_running(at=at, running=False)
-        record = record.with_operational_action("platform_stopped", at=at)
+        record = self.record.mark_stopped(at=at)
+        if record is self.record:
+            # Already stopped: stopping again changes nothing and records
+            # nothing twice (§20).
+            return record
         self.record = record
         if self._store is not None:
             self._store.write(record, secrets=self._secrets)
@@ -651,7 +658,7 @@ def deploy(
                 immutability,
                 DeploymentInputRejected(immutability, stage="deploying"),
             )
-        _run_migrations(recorder, adapter, verification, elements, handles)
+        _run_migrations(recorder, adapter, verification, elements)
         recorder.stage(
             "deploying",
             STAGE_COMPLETED,
@@ -665,6 +672,8 @@ def deploy(
         )
 
         # -- starting ------------------------------------------------------
+        # The platform's runtime elements are started here and only here: the
+        # earlier stages materialize and migrate, they do not run the platform.
         recorder.stage("starting", STAGE_IN_PROGRESS)
         _start_elements(recorder, adapter, elements, handles)
         recorder.running(True)
@@ -741,10 +750,13 @@ def deploy(
         # -- realized / deployed -------------------------------------------
         recorder.realized()
     except DeploymentOperationsError:
+        # Fail-closed: nothing half-verified keeps running. The record keeps the
+        # history (the stages that completed, the verification that failed) and
+        # stops claiming a platform that is no longer running (§20).
         for handle in handles.values():
             adapter.stop(handle)
         if recorder.record.running:
-            recorder.running(False)
+            recorder.update(recorder.record.mark_stopped(at=recorder.clock()))
         raise
 
     return Deployment(
@@ -857,23 +869,26 @@ def _run_migrations(
     adapter: RuntimeAdapter,
     verification: InstanceVerification,
     elements: Mapping[str, RuntimeElement],
-    handles: dict[str, RuntimeHandle],
 ) -> None:
     """Execute the component-defined migrations the instance requires (§14).
 
     Bounded by ADR-0017 §10: only the migrations the accepted instance needs as
     part of this deployment, in the order the components declare them, forward
-    only. A component's migrations run inside the component's own runtime
-    process, against the component's own deployment — this capability orders
-    and records execution, it owns no migration and no data.
+    only. A component's migrations execute against the component's own
+    deployment, from the component's own code — this capability orders and
+    records execution, it owns no migration and no data.
+
+    Migrations run in their own execution session, never by starting one of the
+    platform's runtime elements: the platform is started in the ``starting``
+    stage alone (§36–§37), and reaching ``ready`` requires runtime elements that
+    were started there, not a migration session that has already ended.
     """
     for binding in verification.components:
         element = elements[binding.component_id]
         if element.binding.migrations is None:
             continue
-        handle = _start_element(recorder, adapter, element, handles)
         try:
-            answer = adapter.request(handle, OP_MIGRATE)
+            answer = adapter.migrate(element)
         except RuntimeProcessError as error:
             recorder.migration(
                 MigrationRecord(

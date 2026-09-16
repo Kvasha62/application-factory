@@ -275,12 +275,17 @@ class DeploymentRecord:
     def deployed(self) -> bool:
         """True only for a verified, honest ``deployed`` claim (ADR-0016 §10).
 
-        ``ready`` is necessary but not sufficient (ADR-0017 §34): the claim
-        additionally requires the exact identity/version/digest verification of
-        what is actually running.
+        ``deployed`` is a claim about an **actual, observable Running
+        Platform**: the instance was realized on it (``lifecycle``), it is
+        running now (``running``), the verified operational condition holds
+        (``ready``, ADR-0017 §33) and what is actually running was verified
+        against the pinned instance (``identity_verified``). Each of these is
+        necessary — ``ready`` alone is not sufficient (§34) — and a platform
+        whose runtime elements are no longer running holds no such claim.
         """
         return (
             self.lifecycle == LIFECYCLE_REALIZED
+            and self.running
             and self.ready
             and self.identity_verified
             and self.failure is None
@@ -358,6 +363,23 @@ class DeploymentRecord:
 
     def mark_running(self, *, at: str, running: bool) -> DeploymentRecord:
         return replace(self, running=running, updated_at=at)
+
+    def mark_stopped(self, *, at: str) -> DeploymentRecord:
+        """Record that the platform's runtime elements are no longer running (§18).
+
+        An operational action, not a lifecycle transition: ``realized`` states
+        what this deployment operation did — it realized the verified instance —
+        while the operational conditions state how the platform is **now**. A
+        stopped platform is running nothing, holds no verified operational
+        condition (``ready`` is a condition *of the Running Platform*, §33), and
+        therefore holds no ``deployed`` claim (§10). Nothing here invents a
+        lifecycle position: ``stopped`` is not one of the positions established
+        by ADR-0016 §9, and this record does not create one.
+        """
+        if not self.running:
+            return self
+        stopped = replace(self, running=False, ready=False, updated_at=at)
+        return stopped.with_operational_action("platform_stopped", at=at)
 
     def mark_ready(self, *, at: str) -> DeploymentRecord:
         """Record ``ready`` — a verified operational condition (ADR-0017 §33).

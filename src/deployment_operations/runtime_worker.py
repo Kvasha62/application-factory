@@ -2,7 +2,12 @@
 
 One runtime element of a platform is one component, running in its own OS
 process, started by Deployment & Operations from the runtime spec of a
-deployment operation. This module is the entrypoint of that process::
+deployment operation. This module is the entrypoint of that process — and also
+of the component's transient **migration session**: the same component code, the
+same pinned spec, but a session that runs the required migrations and ends
+instead of becoming part of the Running Platform. Both roles are the *same*
+protocol; which one a process is playing is decided by the engine that started
+it, and only ``start`` makes it a runtime element of the platform (§36–§37)::
 
     python -m deployment_operations.runtime_worker <spec.json>
 

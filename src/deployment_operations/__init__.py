@@ -20,6 +20,16 @@ minimal observable path of ADR-0017 §36 — ``requested`` → ``validated`` →
 verified operational condition **and** the exact identity/version/digest
 verification of what is actually running hold together (ADR-0017 §33–§35).
 
+Two consequences of that path are deliberate and easy to get wrong:
+
+* the required component-owned migrations run in their own transient session
+  before the platform is started: ``deploying`` never starts a runtime element,
+  ``starting`` does (§36–§37);
+* ``deployed`` is a claim about an **actual, observable Running Platform**
+  (§10), so stopping the platform withdraws it — the record keeps what the
+  operation did and the verification it performed, and stops claiming a
+  platform that is no longer running.
+
 What is deliberately absent: upgrade, rollback, ``superseded`` handling, drift
 reconciliation, fleet management, autoscaling, scheduling and any general
 deployment platform (ADR-0017 §38–§39). Nothing in this package owns business

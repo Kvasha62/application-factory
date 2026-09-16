@@ -46,6 +46,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import ClassVar
 
@@ -70,6 +71,7 @@ from _deployment_helpers import (
 from deployment_operations import (
     DEPLOYABLE_INSTANCE_STATES,
     LIFECYCLE_FAILED,
+    LIFECYCLE_IN_PROGRESS,
     LIFECYCLE_REALIZED,
     STAGES,
     ArtifactSource,
@@ -506,8 +508,10 @@ class TestDeploymentProgression:
 class TestHonestDeployedClaim:
     """``ready`` alone fixes nothing; both dimensions must hold together."""
 
-    def test_premature_realized_is_impossible(self):
-        record = DeploymentRecord.initial(
+    @staticmethod
+    def record() -> DeploymentRecord:
+        """A brand-new deployment operation record, before any stage ran."""
+        return DeploymentRecord.initial(
             deployment_id="dep-x",
             environment_id="local",
             attempt=1,
@@ -519,35 +523,77 @@ class TestHonestDeployedClaim:
             instance_digest="sha256:" + "0" * 64,
             at="2026-09-16T00:00:00Z",
         )
+
+    def test_premature_realized_is_impossible(self):
+        record = self.record()
         with refusal(InvalidDeploymentStateTransition, "not ready"):
             record.mark_realized(at="2026-09-16T00:00:01Z")
 
-        ready_only = record.mark_ready(at="2026-09-16T00:00:01Z")
+        started = record.mark_running(at="2026-09-16T00:00:01Z", running=True)
+        assert started.deployed is False, "a started process is not a deployed platform"
+
+        ready_only = started.mark_running(
+            at="2026-09-16T00:00:02Z", running=True
+        ).mark_ready(at="2026-09-16T00:00:02Z")
         assert ready_only.ready is True
         assert ready_only.deployed is False
         with refusal(InvalidDeploymentStateTransition, "identity"):
-            ready_only.mark_realized(at="2026-09-16T00:00:02Z")
+            ready_only.mark_realized(at="2026-09-16T00:00:03Z")
 
-        verified = ready_only.mark_identity_verified(at="2026-09-16T00:00:02Z")
-        realized = verified.mark_realized(at="2026-09-16T00:00:03Z")
+        verified = ready_only.mark_identity_verified(at="2026-09-16T00:00:03Z")
+        realized = verified.mark_realized(at="2026-09-16T00:00:04Z")
         assert realized.lifecycle == LIFECYCLE_REALIZED
         assert realized.deployed is True
 
     def test_identity_verification_cannot_precede_ready(self):
-        record = DeploymentRecord.initial(
-            deployment_id="dep-y",
-            environment_id="local",
-            attempt=1,
-            platform_id=PLATFORM_ID,
-            manifest_id="m",
-            manifest_version="1.0.0",
-            manifest_digest="sha256:" + "0" * 64,
-            manifest_state="validated",
-            instance_digest="sha256:" + "0" * 64,
-            at="2026-09-16T00:00:00Z",
-        )
+        record = self.record().mark_running(at="2026-09-16T00:00:01Z", running=True)
         with refusal(InvalidDeploymentStateTransition, "not ready"):
-            record.mark_identity_verified(at="2026-09-16T00:00:01Z")
+            record.mark_identity_verified(at="2026-09-16T00:00:02Z")
+
+    def test_a_claim_without_a_running_platform_is_not_deployed(self):
+        """``deployed`` is a claim about an actual, observable Running Platform."""
+        record = (
+            self.record()
+            .mark_running(at="2026-09-16T00:00:01Z", running=True)
+            .mark_ready(at="2026-09-16T00:00:02Z")
+            .mark_identity_verified(at="2026-09-16T00:00:02Z")
+            .mark_realized(at="2026-09-16T00:00:03Z")
+        )
+        assert record.deployed is True
+
+        stopped = record.mark_stopped(at="2026-09-16T00:00:04Z")
+        assert stopped.running is False
+        assert (
+            stopped.ready is False
+        ), "a stopped platform holds no ready condition (§33)"
+        assert stopped.deployed is False, "no Running Platform, no deployed claim (§10)"
+        assert stopped.lifecycle == LIFECYCLE_REALIZED, (
+            "the operation did realize this instance; stopping the platform is an "
+            "operational action (§18), not a lifecycle position ADR-0016 §9 "
+            "establishes"
+        )
+        assert (
+            stopped.identity_verified is True
+        ), "the verification that happened stands"
+        assert [action.name for action in stopped.operational_actions] == [
+            "platform_stopped"
+        ]
+
+    def test_stopping_again_changes_nothing(self):
+        """Operational actions repeat without duplicating their effects (§20)."""
+        record = (
+            self.record()
+            .mark_running(at="2026-09-16T00:00:01Z", running=True)
+            .mark_ready(at="2026-09-16T00:00:02Z")
+            .mark_identity_verified(at="2026-09-16T00:00:02Z")
+            .mark_realized(at="2026-09-16T00:00:03Z")
+            .mark_stopped(at="2026-09-16T00:00:04Z")
+        )
+        again = record.mark_stopped(at="2026-09-16T00:00:05Z")
+        assert again is record
+        assert [action.name for action in again.operational_actions] == [
+            "platform_stopped"
+        ]
 
     def test_healthcheck_success_is_not_a_deployed_claim(
         self, tmp_path, instance, manifest
@@ -562,14 +608,23 @@ class TestHonestDeployedClaim:
             deploy(request)
 
         record = read_state(environment, instance)
-        assert record.ready is True, "the operational condition was genuinely verified"
+        # The platform really did reach the verified operational condition —
+        # recorded as the completed ``ready`` stage of this operation…
+        ready_stage = record.stage("ready")
+        assert ready_stage.status == "completed"
+        assert ready_stage.detail["ready"] is True
+        events = read_events(environment, instance)
+        assert any(entry["event"] == "ready_reached" for entry in events)
+        # …and still no deployed claim stands: identity verification failed and
+        # the platform was stopped rather than left running half-verified.
         assert record.identity_verified is False
         assert record.lifecycle == LIFECYCLE_FAILED
+        assert record.ready is False, "nothing is running, so no ready condition holds"
+        assert record.running is False
         assert record.deployed is False
         assert record.failure is not None
         assert record.failure.stage == "ready"
         assert any("9.9.9" in error for error in record.failure.errors)
-        events = read_events(environment, instance)
         assert [entry["event"] for entry in events][-1] == "deployment_failed"
         assert not any(entry["event"] == "deployment_realized" for entry in events)
 
@@ -585,7 +640,9 @@ class TestHonestDeployedClaim:
         record = read_state(environment, instance)
         assert record.deployed is False
         assert record.identity_verified is False
-        assert record.ready is True
+        assert record.stage("ready").status == "completed"
+        assert record.ready is False
+        assert record.running is False
 
 
 # ---------------------------------------------------------------------------
@@ -706,6 +763,93 @@ class TestProvisioning:
         environment = environment_for(tmp_path / "runtime", bindings=(broken,))
         with refusal(ProvisioningFailed, "import_paths"):
             deploy(request_for(instance, manifest, environment))
+
+
+# ---------------------------------------------------------------------------
+# A spy over the runtime adapter: the evidence is the calls actually made
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RuntimeSpy:
+    """Wraps a runtime adapter and records the operations actually performed.
+
+    Test evidence must be the real behaviour of the deployment path, not a
+    narrative about it: this adapter records which adapter operations ran, in
+    which order, how many runtime elements of the platform existed at each
+    moment, and what the component's own workspace contained when each element
+    was started.
+    """
+
+    inner: object
+    calls: list[tuple[str, str]] = field(default_factory=list)
+    starts: list[str] = field(default_factory=list)
+    starts_when_migrating: list[tuple[str, ...]] = field(default_factory=list)
+    starts_after_migrating: list[tuple[str, ...]] = field(default_factory=list)
+    migrations_when_starting: list[tuple[str, ...]] = field(default_factory=list)
+    platform_log_when_migrating: list[bool] = field(default_factory=list)
+
+    # -- the adapter protocol ---------------------------------------------
+    def materialize(self, element):
+        self.calls.append(("materialize", element.component.component_id))
+        return self.inner.materialize(element)
+
+    def migrate(self, element):
+        component_id = element.component.component_id
+        self.starts_when_migrating.append(tuple(self.starts))
+        self.platform_log_when_migrating.append(
+            (element.workspace / "runtime.log").exists()
+        )
+        self.calls.append(("migrate", component_id))
+        answer = self.inner.migrate(element)
+        self.starts_after_migrating.append(tuple(self.starts))
+        return answer
+
+    def start(self, element):
+        component_id = element.component.component_id
+        migrations = tuple(
+            sorted(path.name for path in element.workspace.glob("migration-*.done"))
+        )
+        self.migrations_when_starting.append(migrations)
+        self.calls.append(("start", component_id))
+        handle = self.inner.start(element)
+        self.starts.append(component_id)
+        return handle
+
+    def request(self, handle, operation, *, timeout=None):
+        self.calls.append((f"request:{operation}", handle.component_id))
+        return self.inner.request(handle, operation, timeout=timeout)
+
+    def stop(self, handle):
+        self.calls.append(("stop", handle.component_id))
+        return self.inner.stop(handle)
+
+    # -- what the recordings say ------------------------------------------
+    @property
+    def operations(self) -> list[str]:
+        return [name for name, _ in self.calls]
+
+    def count(self, operation: str) -> int:
+        return self.operations.count(operation)
+
+
+def spy_runtime(*, migrating: bool = False, failing_migration: bool = False):
+    """Return (spy, environment keyword) for a deployment watched by the spy."""
+    if failing_migration:
+        migrations = MigrationBinding(
+            module="failing_migration_component", attribute="MIGRATIONS"
+        )
+        component = fixture_binding(
+            "failing_migration_component", migrations=migrations
+        )
+    elif migrating:
+        migrations = MigrationBinding(
+            module="migrating_component", attribute="MIGRATIONS"
+        )
+        component = fixture_binding("migrating_component", migrations=migrations)
+    else:
+        component = fixture_binding("migrating_component")
+    return RuntimeSpy(inner=LocalProcessRuntime()), (component,)
 
 
 # ---------------------------------------------------------------------------
@@ -832,6 +976,141 @@ class TestMigrationOrchestration:
     ):
         with deploy_canonical(tmp_path, instance, manifest) as deployment:
             assert deployment.record.migrations == ()
+
+
+# ---------------------------------------------------------------------------
+# AC7 / AC8 — the platform is started in ``starting``, never by migrating
+# ---------------------------------------------------------------------------
+
+
+class TestMigrationRuntimeOrdering:
+    """Migration executes before the platform's runtime elements are started.
+
+    The path of ADR-0017 §36–§37 keeps the two apart: ``deploying`` materializes
+    and migrates, ``starting`` starts the platform's runtime elements. These
+    tests assert that on the **actual adapter calls** — a spy records every
+    operation the deployment performed — and on what the component's own
+    workspace contained when each element was started. Event ordering alone is
+    deliberately not treated as proof.
+    """
+
+    def test_no_runtime_element_is_started_before_the_starting_stage(
+        self, tmp_path, instance, manifest
+    ):
+        spy, (component,) = spy_runtime(migrating=True)
+        environment = environment_for(tmp_path / "runtime", bindings=(component,))
+        deployment = deploy(request_for(instance, manifest, environment), runtime=spy)
+        try:
+            assert spy.count("migrate") == 1
+            assert spy.count("start") == 1
+            assert spy.starts_when_migrating == [
+                ()
+            ], "no runtime element of the platform existed while migrations ran"
+            assert spy.starts_after_migrating == [
+                ()
+            ], "migrations left no runtime element running behind them"
+            assert spy.operations.index("migrate") < spy.operations.index(
+                "start"
+            ), "the component-defined migrations ran before the platform started"
+            assert spy.calls.index(("migrate", COMPONENT_ID)) < spy.calls.index(
+                ("start", COMPONENT_ID)
+            )
+            assert spy.platform_log_when_migrating == [
+                False
+            ], "no process of the platform had been spawned while migrations ran"
+            workspace = (
+                environment.deployments_dir
+                / deployment.record.deployment_id
+                / "components"
+                / COMPONENT_ID
+            )
+            assert (
+                workspace / "runtime.log"
+            ).is_file(), (
+                "the platform's runtime element was started in the starting stage"
+            )
+        finally:
+            deployment.stop()
+
+    def test_the_platform_starts_only_after_its_migrations_completed(
+        self, tmp_path, instance, manifest
+    ):
+        spy, (component,) = spy_runtime(migrating=True)
+        environment = environment_for(tmp_path / "runtime", bindings=(component,))
+        deployment = deploy(request_for(instance, manifest, environment), runtime=spy)
+        try:
+            assert spy.migrations_when_starting == [
+                (
+                    "migration-0001-seed-platform.done",
+                    "migration-0002-record-platform-identity.done",
+                )
+            ], (
+                "when the platform's runtime element was started, the required "
+                "component-owned migrations had already run"
+            )
+            record = deployment.record
+            assert record.running is True
+            assert record.ready is True
+            assert record.deployed is True
+        finally:
+            deployment.stop()
+
+    def test_migrations_do_not_produce_a_running_platform_by_themselves(
+        self, tmp_path, instance, manifest
+    ):
+        """A migration session is not a Running Platform: only ``starting`` is."""
+        spy, (component,) = spy_runtime(migrating=True)
+        environment = environment_for(tmp_path / "runtime", bindings=(component,))
+        request = request_for(instance, manifest, environment)
+        deploy(request, runtime=spy)
+        record = read_state(environment, instance)
+        started = [operation for operation in spy.operations if operation == "start"]
+        assert started == [
+            "start"
+        ], "the platform was started exactly once, in the starting stage"
+        assert record.running is True and record.ready is True
+
+    def test_a_failed_migration_never_starts_the_runtime(
+        self, tmp_path, instance, manifest
+    ):
+        spy, (component,) = spy_runtime(failing_migration=True)
+        environment = environment_for(tmp_path / "runtime", bindings=(component,))
+        request = request_for(instance, manifest, environment)
+        with refusal(MigrationOrchestrationFailed, "migration 0002"):
+            deploy(request, runtime=spy)
+
+        assert (
+            spy.count("start") == 0
+        ), "a migration that failed must not be followed by a started platform"
+        assert spy.starts == []
+        assert ("start", COMPONENT_ID) not in spy.calls
+        assert spy.starts_after_migrating == [()]
+
+        record = read_state(environment, instance)
+        assert record.lifecycle == LIFECYCLE_FAILED
+        assert record.running is False
+        assert record.ready is False
+        assert record.deployed is False
+        assert record.stage("starting").status != "completed"
+        assert (
+            not (environment.deployments_dir / record.deployment_id)
+            .joinpath("components", COMPONENT_ID, "runtime.log")
+            .is_file()
+        ), "no runtime element of the platform was ever started"
+
+    def test_a_component_without_migrations_is_not_migrated(
+        self, tmp_path, instance, manifest
+    ):
+        """Bounded orchestration: no declaration, no migration session (§10)."""
+        spy = RuntimeSpy(inner=LocalProcessRuntime())
+        environment = environment_for(tmp_path / "runtime")
+        deployment = deploy(request_for(instance, manifest, environment), runtime=spy)
+        try:
+            assert spy.count("migrate") == 0
+            assert spy.count("start") == 1
+            assert deployment.record.migrations == ()
+        finally:
+            deployment.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -1486,6 +1765,19 @@ class TestObservability:
 class TestRuntimeOperation:
     """Stopping the platform is an operational action, not a lifecycle change."""
 
+    def test_a_successful_deployment_claims_exactly_what_it_verified(
+        self, tmp_path, instance, manifest
+    ):
+        """Before any stop: realized, verified, ready and actually running."""
+        with deploy_canonical(tmp_path, instance, manifest) as deployment:
+            record = deployment.record
+            assert record.lifecycle == LIFECYCLE_REALIZED
+            assert record.running is True
+            assert record.ready is True
+            assert record.identity_verified is True
+            assert record.deployed is True
+            assert record.failure is None
+
     def test_stop_records_an_operational_action(self, tmp_path, instance, manifest):
         deployment = deploy_canonical(tmp_path, instance, manifest)
         record = deployment.stop()
@@ -1499,11 +1791,182 @@ class TestRuntimeOperation:
     def test_a_stopped_platform_is_reported_honestly(
         self, tmp_path, instance, manifest
     ):
+        """The persisted record stops claiming a Running Platform that is gone."""
+        deployment = deploy_canonical(tmp_path, instance, manifest)
+        assert load_record(deployment.state_path).deployed is True
+
+        deployment.stop()
+
+        reloaded = load_record(deployment.state_path)
+        assert reloaded.running is False, "nothing is running any more"
+        assert reloaded.ready is False, "a stopped platform holds no ready condition"
+        assert (
+            reloaded.deployed is False
+        ), "no Running Platform exists, so no deployed claim may stand (ADR-0016 §10)"
+        assert (
+            reloaded.lifecycle == LIFECYCLE_REALIZED
+        ), "the operation's own verified outcome is history, not a runtime claim"
+        assert reloaded.identity_verified is True
+        assert (
+            reloaded.stage("ready").detail["ready"] is True
+        ), "the record keeps the evidence that ready was reached"
+        assert [action.name for action in reloaded.operational_actions] == [
+            "platform_stopped"
+        ]
+
+        journal = json.loads(
+            deployment.events_path.read_text(encoding="utf-8").splitlines()[-1]
+        )
+        assert journal["event"] == "platform_stopped"
+        assert (
+            journal["platform_instance"]["instance_digest"] == instance.instance_digest
+        )
+
+    def test_a_stopped_deployment_does_not_report_itself_as_deployed(
+        self, tmp_path, instance, manifest
+    ):
         deployment = deploy_canonical(tmp_path, instance, manifest)
         deployment.stop()
-        reloaded = load_record(deployment.state_path)
-        assert reloaded.running is False
-        assert reloaded.ready is True
+        assert deployment.deployed is False
+        assert deployment.record.deployed is False
+
+    def test_stopping_twice_records_one_operational_action(
+        self, tmp_path, instance, manifest
+    ):
+        deployment = deploy_canonical(tmp_path, instance, manifest)
+        first = deployment.stop()
+        second = deployment.stop()
+        assert second.operational_actions == first.operational_actions
+        assert [event.event for event in deployment.events()].count(
+            "platform_stopped"
+        ) == 1
+        assert load_record(deployment.state_path).deployed is False
+
+
+# ---------------------------------------------------------------------------
+# The five states the slice must keep apart — read back from persisted state
+# ---------------------------------------------------------------------------
+
+
+class TestDeploymentStateScenarios:
+    """Every outcome is re-read from the persisted record, never from memory.
+
+    ``(lifecycle, running, ready, identity_verified, deployed)`` is the whole
+    vocabulary of deployment state, and no scenario may mix it up: above all,
+    a deployment may never claim ``deployed`` while nothing is running.
+    """
+
+    @staticmethod
+    def persisted(environment, instance):
+        return read_state(environment, instance)
+
+    def test_success(self, tmp_path, instance, manifest):
+        environment = environment_for(tmp_path / "runtime")
+        deployment = deploy(request_for(instance, manifest, environment))
+        try:
+            record = self.persisted(environment, instance)
+            assert record.lifecycle == LIFECYCLE_REALIZED
+            assert (record.running, record.ready, record.identity_verified) == (
+                True,
+                True,
+                True,
+            )
+            assert record.deployed is True
+        finally:
+            deployment.stop()
+
+    def test_migration_failure(self, tmp_path, instance, manifest):
+        spy, (component,) = spy_runtime(failing_migration=True)
+        environment = environment_for(tmp_path / "runtime", bindings=(component,))
+        with refusal(MigrationOrchestrationFailed, "migration 0002"):
+            deploy(request_for(instance, manifest, environment), runtime=spy)
+        record = self.persisted(environment, instance)
+        assert record.lifecycle == LIFECYCLE_FAILED
+        assert (record.running, record.ready, record.identity_verified) == (
+            False,
+            False,
+            False,
+        )
+        assert record.deployed is False
+        assert spy.count("start") == 0
+        assert record.failure is not None and record.failure.stage == "deploying"
+
+    def test_startup_failure(self, tmp_path, instance, manifest):
+        environment = environment_for(
+            tmp_path / "runtime",
+            bindings=(fixture_binding("broken_startup_component"),),
+        )
+        with refusal(StartupFailed, "not running"):
+            deploy(request_for(instance, manifest, environment))
+        record = self.persisted(environment, instance)
+        assert record.lifecycle == LIFECYCLE_FAILED
+        assert (record.running, record.ready, record.identity_verified) == (
+            False,
+            False,
+            False,
+        )
+        assert record.deployed is False
+        assert record.failure is not None and record.failure.stage == "starting"
+
+    def test_health_failure(self, tmp_path, instance, manifest):
+        spy = RuntimeSpy(inner=LocalProcessRuntime())
+        environment = environment_for(
+            tmp_path / "runtime", bindings=(fixture_binding("unhealthy_component"),)
+        )
+        with refusal(HealthCheckFailed, "not ready"):
+            deploy(request_for(instance, manifest, environment), runtime=spy)
+        record = self.persisted(environment, instance)
+        assert record.lifecycle == LIFECYCLE_FAILED
+        assert (record.running, record.ready, record.identity_verified) == (
+            False,
+            False,
+            False,
+        )
+        assert record.deployed is False
+        assert record.failure is not None and record.failure.stage == "health_check"
+        assert spy.count("start") == 1, (
+            "the runtime element was started — that is precisely why starting is "
+            "not the same as deployed"
+        )
+
+    def test_stop_after_success(self, tmp_path, instance, manifest):
+        environment = environment_for(tmp_path / "runtime")
+        deployment = deploy(request_for(instance, manifest, environment))
+        assert self.persisted(environment, instance).deployed is True
+        deployment.stop()
+        record = self.persisted(environment, instance)
+        assert (record.running, record.ready, record.deployed) == (False, False, False)
+        assert (
+            record.lifecycle == LIFECYCLE_REALIZED
+        ), "the operation really did realize the verified instance"
+        assert record.identity_verified is True
+
+    def test_no_scenario_reports_a_deployed_platform_that_is_not_running(self):
+        """The invariant every scenario above is an instance of."""
+        states = [
+            (LIFECYCLE_IN_PROGRESS, False, False, False),
+            (LIFECYCLE_FAILED, False, False, False),
+            (LIFECYCLE_FAILED, False, True, False),
+            (LIFECYCLE_REALIZED, False, False, True),
+            (LIFECYCLE_REALIZED, True, True, True),
+        ]
+        for lifecycle, running, ready, verified in states:
+            record = TestHonestDeployedClaim.record()
+            record = replace(
+                record,
+                lifecycle=lifecycle,
+                running=running,
+                ready=ready,
+                identity_verified=verified,
+            )
+            assert record.deployed is (running and ready and verified), (
+                f"deployed must follow from an actually running, verified platform: "
+                f"{record}"
+            )
+            if not running:
+                assert (
+                    record.deployed is False
+                ), "nothing running may ever be claimed deployed (ADR-0016 §10)"
 
 
 # ---------------------------------------------------------------------------
@@ -1680,11 +2143,13 @@ class TestFactoryRegression:
         first = deploy(
             request_for(instance, manifest, environment_for(tmp_path / "runtime"))
         )
+        assert first.record.deployed is True
         first.stop()
+        assert first.record.deployed is False
         second = deploy(
             request_for(instance, manifest, environment_for(tmp_path / "runtime"))
         )
-        second.stop()
-        assert first.record.deployed is True
         assert second.record.deployed is True
+        second.stop()
+        assert second.record.deployed is False
         assert first.record.deployment_id == second.record.deployment_id

@@ -11,12 +11,22 @@ The capability talks to its environment through one narrow seam,
 :class:`RuntimeAdapter`. The only implementation shipped with this slice is
 :class:`LocalProcessRuntime`: one OS process per component of the instance,
 speaking the JSON protocol of :mod:`deployment_operations.runtime_worker` over
-stdin/stdout. That choice is an **implementation detail, not an architectural
-decision**: it selects no deployment engine, no orchestrator and no cloud
-provider (ADR-0016 §23; ADR-0017 §40), it changes no contract, ownership or
-lifecycle rule, and a different adapter — another process model, another
-runtime, another environment — replaces it without the Platform Instance, the
-Manifest or this boundary changing (ADR-0016 §11).
+stdin/stdout.
+
+That choice is an **implementation detail, not an architectural decision**: it
+selects no deployment engine, no orchestrator and no cloud provider (ADR-0016
+§23; ADR-0017 §40), it changes no contract, ownership or lifecycle rule, and a
+different adapter — another process model, another runtime, another environment
+— replaces it without the Platform Instance, the Manifest or this boundary
+changing (ADR-0016 §11).
+
+Two of the adapter's operations are easy to confuse and are kept apart on
+purpose: :meth:`RuntimeAdapter.migrate` runs the component-defined migrations the
+accepted instance requires in a **transient execution session** that ends when
+they have run, and :meth:`RuntimeAdapter.start` creates a **runtime element of
+the Running Platform**. Migrations therefore never start the platform: the
+platform's elements are created in the ``starting`` stage, and only there
+(ADR-0017 §36–§37).
 
 What the adapter must never do is implicit in the protocol: it starts what the
 instance pinned, it materializes what the instance pinned, and it reports what
@@ -120,6 +130,16 @@ class RuntimeAdapter(Protocol):
     """The seam between the deployment operation and its environment."""
 
     def materialize(self, element: RuntimeElement) -> MaterializedComponent: ...
+
+    def migrate(self, element: RuntimeElement) -> Mapping[str, Any]:
+        """Execute the component-defined migrations the instance requires (§14).
+
+        Deliberately a separate operation from :meth:`start`: the migration
+        session is a component-owned execution context for the migrations this
+        deployment needs, while ``start`` creates a runtime element of the
+        Running Platform. A deployment that only migrates has started nothing.
+        """
+        ...
 
     def start(self, element: RuntimeElement) -> RuntimeHandle: ...
 
@@ -232,9 +252,31 @@ class LocalProcessRuntime:
             errors=tuple(errors),
         )
 
+    # -- migrations --------------------------------------------------------
+    def migrate(self, element: RuntimeElement) -> Mapping[str, Any]:
+        """Run the component's required migrations in a transient session (§14).
+
+        The session exists only for the component-defined migrations the
+        accepted instance requires: it constructs the component's own
+        deployment, executes those migrations forward-only, and terminates. It
+        is **not** a runtime element of the platform — nothing is left running
+        when it ends, and it is never what the ``starting`` stage starts
+        (§36–§37). Failures are answered, not raised: the orchestration layer
+        decides how an unanswered or refused declaration is recorded (§20).
+        """
+        handle = self._spawn(element, log_name="migration.log")
+        try:
+            return self.request(handle, OP_MIGRATE)
+        finally:
+            self.stop(handle)
+
     # -- runtime -----------------------------------------------------------
     def start(self, element: RuntimeElement) -> RuntimeHandle:
-        """Start the component's runtime process from its pinned spec."""
+        """Start one runtime element of the platform from its pinned spec."""
+        return self._spawn(element, log_name="runtime.log")
+
+    def _spawn(self, element: RuntimeElement, *, log_name: str) -> RuntimeHandle:
+        """Start one component process and return its protocol handle."""
         paths: list[str] = [str(path) for path in element.source_paths]
         paths.extend(str(path) for path in element.binding.import_paths)
         environment = {
@@ -248,7 +290,7 @@ class LocalProcessRuntime:
         environment.update({key: value for key, value in element.secrets.items()})
 
         element.workspace.mkdir(parents=True, exist_ok=True)
-        log_path = element.workspace / "runtime.log"
+        log_path = element.workspace / log_name
         log_stream = log_path.open("a", encoding="utf-8")
         try:
             process = subprocess.Popen(
