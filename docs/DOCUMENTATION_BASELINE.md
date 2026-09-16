@@ -1,7 +1,7 @@
 # DOCUMENTATION_BASELINE.md
 
 **Статус:** `CLEAN`  
-**Дата:** 2026-09-15  
+**Дата:** 2026-09-16  
 **Базовый `main` до ратификации:** `da3ac2e03255e6bfe0b42e0923326e9ed2bfb38d`  
 **Актуализация:** 2026-09-14 — после прохождения Factory Gate #1 и ратификации ADR-0015 зафиксирована активация Level 2 — Component Factory; при этом сами фабричные механизмы остаются не реализованными до прохождения отдельных implementation slices. 2026-09-15 — после реализации Slice B — Component Catalog (Issue #64): каталог реализован как производный discoverable view реестра и опубликованных контрактов; после реализации Slice C — Platform Manifest (Issue #66, PR #67): манифест реализован как явный машинно-читаемый артефакт композиции платформы; после реализации Slice D — Golden Bundles (Issue #71): Golden Bundle реализован как явный машинно-читаемый артефакт сертифицированного воспроизводимого набора совместимых версий компонентов; Slice E остаётся не реализованным до отдельного утверждённого work item.
 **Основание:** `docs/ARCHITECTURE.md` 1.2.0 + `docs/adr/ADR-0010-architecture-gap-review.md` + `docs/adr/ADR-0015-level-2-component-factory-activation.md`
@@ -110,7 +110,7 @@ tests/test_component_catalog.py                        focused tests
 Каталог выводится из канонического реестра и опубликованных контрактов,
 закреплён за реестром content digest каждой записи и не является вторым
 источником истины: любое расхождение с canonical registry/contract metadata
-отвергается валидацией (ADR-0015 §5).
+отвергается валидации (ADR-0015 §5).
 
 **Slice C — Platform Manifest: `IMPLEMENTED`** (Issue #66, PR #67).
 
@@ -155,8 +155,8 @@ authoritative Component Registry. Он не решает и не подстав�
 - Platform Instance assembly tooling.
 
 Slice A смержен (PR #63). Slice B смержен (PR #65). Slice C смержен (PR #67).
-Slice D предложен PR-ом из Issue #71. Последующие slices требуют отдельных
-work item, проверки, независимого review и owner approval до merge.
+Slice D находится в отдельном PR #72 и ожидает owner approval до merge.
+Последующие slices требуют отдельных work item, проверки, независимого review и owner approval до merge.
 
 ## 6. Границы Level 2
 
@@ -181,9 +181,9 @@ work item, проверки, независимого review и owner approval �
 
 ## 8. Следующее изменение
 
-**Slice D — Golden Bundles реализован** (Issue #71, PR ожидает review/merge).
+**Slice D — Golden Bundles: `IMPLEMENTED`** (Issue #71, PR #72 открыт; ожидается owner approval и merge).
 
-Следующим самостоятельным этапом является **Slice E — Composer**.
+Следующим самостоятельным этапом является **Slice E — Composer**, но только после отдельного утверждённого work item и после завершения governance-процесса Slice D.
 
 До начала реализации Slice E необходимо иметь отдельный утверждённый work item и сохранить границу:
 
@@ -196,7 +196,7 @@ Slice B — Component Catalog (IMPLEMENTED, Issue #64, PR #65)
         ↓
 Slice C — Platform Manifest (IMPLEMENTED, Issue #66, PR #67)
         ↓
-Slice D — Golden Bundles (IMPLEMENTED, Issue #71)
+Slice D — Golden Bundles (IMPLEMENTED in PR #72; awaiting owner approval/merge)
         ↓
 approved implementation work item for Slice E
         ↓
@@ -218,9 +218,9 @@ merge
 **Factory mechanisms:** Slice A — Component Registry `IMPLEMENTED`;
 Slice B — Component Catalog `IMPLEMENTED`;
 Slice C — Platform Manifest `IMPLEMENTED`;
-Slice D — Golden Bundles `IMPLEMENTED`;
+Slice D — Golden Bundles `IMPLEMENTED in PR #72; pending merge`;
 Composer `NOT YET IMPLEMENTED`.
 
 **Factory Gate #1: PASSED.**
 
-Документационный baseline отражает переход от foundation/standalone состояния к активированному Level 2 без ложного утверждения: Slice A/B/C/D зафиксированы как `IMPLEMENTED` только после фактического merge или PR, а не реализованный Composer явно помечен как `NOT YET IMPLEMENTED`.
+Документационный baseline отражает переход от foundation/standalone состояния к активированному Level 2. Slice A/B/C зафиксированы как `IMPLEMENTED` после merge; Slice D отражён как реализованный в PR #72, но ещё не смерженный; Composer явно помечен как `NOT YET IMPLEMENTED`.
