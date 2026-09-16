@@ -135,8 +135,23 @@ Registry и Catalog и не создаёт второй источник ист�
 draft Platform Manifest с передачей на validation Slice C — в
 `src/composer/`, тесты в `tests/test_composer.py`.
 
+**Slice F — Platform Instance Assembly: реализован** (Issue #74).
+Детерминированная assembly конкретного Platform Instance из принятого/
+валидного Platform Manifest — схема в
+`factory/platform_instance/schema/`, правила в
+`factory/platform_instance/README.md`, сборка, валидация и digest в
+`src/platform_instance/`, тесты в `tests/test_platform_instance.py`.
+Instance привязан точно к identity/version/digest манифеста, наследует
+конкретные версии компонентов, artifact identities, configuration,
+extensions, branding и ссылку на Golden Bundle (либо явный статус
+uncertified), environment-specific settings входят через существующий
+контрактный путь configuration (§20). Результат детерминирован: без
+зависимости от времени, случайности, окружения и сети. Это representation
+step, а не deployment: ничего не разворачивается и не публикуется.
+
 На текущем этапе ещё не считаются реализованными:
-Platform Instance assembly tooling.
+deployment/provisioning/rollout-исполнение поверх собранного
+Platform Instance.
 Каждый следующий этап требует отдельного work item, проверки, независимого
 review и owner approval до merge.
 

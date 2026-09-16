@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory/platform_instance/schema/platform_instance.schema.json",
+  "title": "Application Factory — Platform Instance (assembly representation)",
+  "description": "Normative schema of the deterministic Platform Instance assembly representation (Slice F, ARCHITECTURE.md §2.2, §31, ADR-0015 §15). A Platform Instance document is factory-level composition metadata: it binds a Platform Instance identity (platform_id) exactly to one validated Platform Manifest identity/version/digest and preserves that manifest's concrete component versions, artifact identities, Golden Bundle reference (or explicit uncertified status), configuration, extensions and branding. It adds no new lifecycle vocabulary and no composition of its own: every value is inherited verbatim from the authoritative manifest, which is re-validated fail-closed at assembly and at every validation. It does not deploy, provision or roll out anything and never carries business data or secrets.",
+  "type": "object",
+  "required": [
+    "platform_id",
+    "instance_digest",
+    "manifest",
+    "manifest_state",
+    "components",
+    "golden_bundle"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "platform_id": {
+      "$ref": "#/$defs/platform_id",
+      "description": "Stable identity of the Platform Instance (ARCHITECTURE.md §26 vocabulary; the same identity component configuration schemas call 'the identifier of the Platform Instance this component serves'). Chosen explicitly at assembly; never generated, never a floating selector."
+    },
+    "instance_digest": {
+      "$ref": "#/$defs/sha256_digest",
+      "description": "Immutable content digest pinning this instance document's canonical form (excluding the digest field itself) — the deterministic assembly identity/result."
+    },
+    "manifest": {
+      "$ref": "#/$defs/manifest_binding",
+      "description": "Exact binding of this instance to its source Platform Manifest identity/version/digest (LAW-09: the instance is reproducible from this manifest)."
+    },
+    "manifest_state": {
+      "$ref": "#/$defs/manifest_state",
+      "description": "Lifecycle state of the bound Platform Manifest at assembly, in the existing manifest lifecycle vocabulary (ARCHITECTURE.md §16). The instance introduces no lifecycle of its own."
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/component_entry"
+      },
+      "description": "Concrete component identities, versions and artifact identities, preserved exactly from the authoritative manifest (deterministic order — sorted by component_id)."
+    },
+    "golden_bundle": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/golden_bundle_ref"
+        }
+      ],
+      "description": "Golden Bundle reference preserved from the manifest; null is the explicit uncertified status (ARCHITECTURE.md §31)."
+    },
+    "configuration": {
+      "type": "object",
+      "description": "Platform configuration preserved exactly from the manifest (component-scoped, ARCHITECTURE.md §20). Component-declared environment keys — the existing contract path for environment-specific settings — are carried here. Absent when the manifest carries no configuration.",
+      "additionalProperties": true
+    },
+    "extensions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/extension_entry"
+      },
+      "description": "Extensions preserved exactly from the manifest (ARCHITECTURE.md §21). Absent when the manifest carries none."
+    },
+    "branding": {
+      "type": "object",
+      "description": "Branding preserved exactly from the manifest. Absent when the manifest carries no branding.",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "platform_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([_-][a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable, unique, deterministic Platform Instance identity: lower snake_case or kebab-case, never a floating selector, never generated at assembly time."
+    },
+    "manifest_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([_-][a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable platform manifest identity, mirrored from the bound Platform Manifest (Slice C)."
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "description": "Explicit SemVer MAJOR.MINOR.PATCH (ARCHITECTURE.md §11). Floating selectors such as latest are not versions."
+    },
+    "sha256_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Immutable content digest: sha256 followed by 64 hex characters."
+    },
+    "manifest_state": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "validated",
+        "approved",
+        "published",
+        "deployed",
+        "superseded",
+        "retired"
+      ],
+      "description": "Existing Platform Manifest lifecycle vocabulary (ARCHITECTURE.md §16). No new instance-specific states are introduced."
+    },
+    "artifact_type": {
+      "type": "string",
+      "enum": [
+        "none",
+        "container_image",
+        "source_package"
+      ],
+      "description": "Kind of artifact, as defined by the Platform Manifest contract."
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "artifact_type",
+        "digest",
+        "pinned"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "artifact_type": {
+          "$ref": "#/$defs/artifact_type"
+        },
+        "digest": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^(sha256:)?[0-9a-f]{64}$"
+            }
+          ],
+          "description": "Nullable artifact digest, exactly as the manifest states it."
+        },
+        "pinned": {
+          "type": "boolean",
+          "description": "True only when the artifact is selected by an immutable digest."
+        }
+      }
+    },
+    "component_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable component identity mirrored from the canonical registry (ARCHITECTURE.md §11)."
+    },
+    "component_entry": {
+      "type": "object",
+      "required": [
+        "component_id",
+        "component_version",
+        "artifact"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "component_id": {
+          "$ref": "#/$defs/component_id"
+        },
+        "component_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "artifact": {
+          "$ref": "#/$defs/artifact"
+        }
+      }
+    },
+    "bundle_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([_-][a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable Golden Bundle identity (Slice D reference only)."
+    },
+    "golden_bundle_ref": {
+      "type": "object",
+      "required": [
+        "bundle_id",
+        "bundle_version",
+        "bundle_digest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "$ref": "#/$defs/bundle_id"
+        },
+        "bundle_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "bundle_digest": {
+          "$ref": "#/$defs/sha256_digest"
+        }
+      }
+    },
+    "extension_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([_-][a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable extension identity."
+    },
+    "extension_entry": {
+      "type": "object",
+      "required": [
+        "extension_id"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "extension_id": {
+          "$ref": "#/$defs/extension_id"
+        },
+        "extension_version": {
+          "$ref": "#/$defs/semver"
+        }
+      }
+    },
+    "manifest_binding": {
+      "type": "object",
+      "required": [
+        "manifest_id",
+        "manifest_version",
+        "manifest_digest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "manifest_id": {
+          "$ref": "#/$defs/manifest_id"
+        },
+        "manifest_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "manifest_digest": {
+          "$ref": "#/$defs/sha256_digest"
+        }
+      }
+    }
+  }
+}
