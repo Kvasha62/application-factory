@@ -127,9 +127,17 @@ Registry и Catalog и не создаёт второй источник ист�
 идентифицируется `bundle_id + version + digest`, фиксирует проверенные
 отношения совместимости и не решает/не подставляет зависимости.
 
+**Slice E — Composer: реализован.** Детерминированная композиция и
+детерминированное отклонение несовместимых или contract-invalid сборок
+платформы — схема запроса в `factory/composer/schema/`, правила в
+`factory/composer/README.md`, разрешение зависимостей, выбор версий,
+проверки совместимости, контрактов, configuration и extensions, сборка
+draft Platform Manifest с передачей на validation Slice C — в
+`src/composer/`, тесты в `tests/test_composer.py`.
+
 На текущем этапе ещё не считаются реализованными:
-Composer (Slice E) и Platform Instance assembly tooling.
-Каждый slice требует отдельного work item, проверки, независимого
+Platform Instance assembly tooling.
+Каждый следующий этап требует отдельного work item, проверки, независимого
 review и owner approval до merge.
 
 Границы бизнес-систем, владение данными, опубликованные контракты,

@@ -1,0 +1,41 @@
+{
+  "$schema": "factory/composer/schema/composition_request.schema.json",
+  "components": [
+    {
+      "component_id": "booking",
+      "component_version": "0.1.0"
+    },
+    {
+      "component_id": "commerce",
+      "component_version": "0.2.0"
+    },
+    {
+      "component_id": "learning",
+      "component_version": "0.3.0"
+    }
+  ],
+  "configuration": {
+    "authorization": {
+      "platform_id": "example-platform"
+    },
+    "booking": {
+      "platform_id": "example-platform"
+    },
+    "commerce": {
+      "platform_id": "example-platform"
+    },
+    "identity": {
+      "current_platform_id": "example-platform"
+    },
+    "learning": {
+      "platform_id": "example-platform"
+    },
+    "tenant_authority": {
+      "platform_id": "example-platform"
+    }
+  },
+  "manifest": {
+    "manifest_id": "example-platform",
+    "manifest_version": "1.0.0"
+  }
+}

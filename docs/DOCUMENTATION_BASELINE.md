@@ -3,7 +3,7 @@
 **Статус:** `CLEAN`  
 **Дата:** 2026-09-16  
 **Базовый `main` до ратификации:** `da3ac2e03255e6bfe0b42e0923326e9ed2bfb38d`  
-**Актуализация:** 2026-09-14 — после прохождения Factory Gate #1 и ратификации ADR-0015 зафиксирована активация Level 2 — Component Factory; при этом сами фабричные механизмы остаются не реализованными до прохождения отдельных implementation slices. 2026-09-15 — после реализации Slice B — Component Catalog (Issue #64): каталог реализован как производный discoverable view реестра и опубликованных контрактов; после реализации Slice C — Platform Manifest (Issue #66, PR #67): манифест реализован как явный машинно-читаемый артефакт композиции платформы; после реализации Slice D — Golden Bundles (Issue #71): Golden Bundle реализован как явный машинно-читаемый артефакт сертифицированного воспроизводимого набора совместимых версий компонентов; Slice E остаётся не реализованным до отдельного утверждённого work item.
+**Актуализация:** 2026-09-14 — после прохождения Factory Gate #1 и ратификации ADR-0015 зафиксирована активация Level 2 — Component Factory; при этом сами фабричные механизмы остаются не реализованными до прохождения отдельных implementation slices. 2026-09-15 — после реализации Slice B — Component Catalog (Issue #64): каталог реализован как производный discoverable view реестра и опубликованных контрактов; после реализации Slice C — Platform Manifest (Issue #66, PR #67): манифест реализован как явный машинно-читаемый артефакт композиции платформы; после реализации Slice D — Golden Bundles (Issue #71): Golden Bundle реализован как явный машинно-читаемый артефакт сертифицированного воспроизводимого набора совместимых версий компонентов; Slice E — Composer реализован (Issue #73, PR открыт): детерминированная композиция и детерминированное отклонение несовместимых или contract-invalid сборок платформы; Platform Instance assembly tooling остаётся не реализованным и требует отдельного work item.
 **Основание:** `docs/ARCHITECTURE.md` 1.2.0 + `docs/adr/ADR-0010-architecture-gap-review.md` + `docs/adr/ADR-0015-level-2-component-factory-activation.md`
 
 ## 1. Назначение
@@ -37,6 +37,7 @@
 | Component Catalog | `factory/catalog/component_catalog.json` | Slice B IMPLEMENTED; производный discoverable view реестра, 9 компонентов |
 | Platform Manifest | `factory/platform_manifest/schema/platform_manifest.schema.json` + `src/platform_manifest/` | Slice C IMPLEMENTED; явный машинно-читаемый артефакт композиции платформы |
 | Golden Bundle | `factory/golden_bundle/schema/golden_bundle.schema.json` + `src/golden_bundle/` | Slice D IMPLEMENTED; явный машинно-читаемый артефакт сертифицированного воспроизводимого набора совместимых версий компонентов |
+| Composer | `factory/composer/schema/composition_request.schema.json` + `src/composer/` | Slice E IMPLEMENTED; детерминированная композиция платформы и отклонение несовместимых или contract-invalid сборок |
 | Contract / boundary tests | `tests/` | существуют; автоматическая проверка архитектурных границ активна |
 | Quality Gate | `scripts/quality-gate.ps1` + `.github/workflows/quality-gate.yml` | GREEN на ранее подтверждённом main; для текущей ратификационной ветки требуется CI-проверка PR |
 | Маршрутизация ответственности | `.github/CODEOWNERS` | существует |
@@ -149,14 +150,33 @@ Golden Bundle фиксирует явные версии компонентов 
 authoritative Component Registry. Он не решает и не подставляет зависимости,
 не собирает платформу и не становится вторым источником истины (ADR-0015 §7).
 
+**Slice E — Composer: `IMPLEMENTED`** (Issue #73).
+
+Детерминированная композиция платформы реализована:
+
+```text
+factory/composer/schema/composition_request.schema.json  normative schema
+factory/composer/README.md                                формат и правила Composer
+factory/composer/example_request.json                     детерминированный пример
+src/composer/                                             resolution, проверки, сборка Manifest
+tests/test_composer.py                                    focused tests
+```
+
+Composer разрешает объявленные зависимости, выбирает версии детерминированно,
+проверяет совместимость, contract validity, configuration (§20) и extensions
+(§21), собирает draft Platform Manifest и передаёт его на validation Slice C.
+Composer не утверждает, не публикует и не разворачивает платформу, не вводит
+собственный индекс версий и не становится вторым источником истины
+(ADR-0015 §8, §11; ARCHITECTURE.md §17).
+
 На момент этой актуализации **не считаются реализованными и доступными**:
 
-- Composer (Slice E);
-- Platform Instance assembly tooling.
+- Platform Instance assembly tooling (provisioning, deployment, rollout).
 
 Slice A смержен (PR #63). Slice B смержен (PR #65). Slice C смержен (PR #67).
-Slice D находится в отдельном PR #72 и ожидает owner approval до merge.
-Последующие slices требуют отдельных work item, проверки, независимого review и owner approval до merge.
+Slice D смержен (PR #72, merge `d199f7a`). Slice E находится в отдельном PR и
+ожидает owner approval до merge. Последующие этапы требуют отдельных work item,
+проверки, независимого review и owner approval до merge.
 
 ## 6. Границы Level 2
 
@@ -175,17 +195,20 @@ Slice D находится в отдельном PR #72 и ожидает owner 
 
 ## 7. Документационная целостность
 
-`README.md` и `docs/adr/README.md` должны отражать, что Level 2 активирован, а фабричные механизмы вводятся инкрементально: Slice A/B/C/D реализованы, Slice E — нет.
+`README.md` и `docs/adr/README.md` должны отражать, что Level 2 активирован, а фабричные механизмы вводятся инкрементально: Slice A/B/C/D/E реализованы, Platform Instance assembly tooling — нет.
 
 Исторические conformance/audit документы не переписываются только потому, что проект развился после даты их снимка; они остаются историческими артефактами своего состояния.
 
 ## 8. Следующее изменение
 
-**Slice D — Golden Bundles: `IMPLEMENTED`** (Issue #71, PR #72 открыт; ожидается owner approval и merge).
+**Slice E — Composer: `IMPLEMENTED`** (Issue #73; PR открыт; ожидается owner
+approval и merge).
 
-Следующим самостоятельным этапом является **Slice E — Composer**, но только после отдельного утверждённого work item и после завершения governance-процесса Slice D.
+Следующим самостоятельным этапом является **Platform Instance assembly
+tooling**, но только после отдельного утверждённого work item и после
+завершения governance-процесса Slice E.
 
-До начала реализации Slice E необходимо иметь отдельный утверждённый work item и сохранить границу:
+До начала следующего этапа необходимо сохранить границу:
 
 ```text
 ADR-0015 ratified
@@ -196,11 +219,13 @@ Slice B — Component Catalog (IMPLEMENTED, Issue #64, PR #65)
         ↓
 Slice C — Platform Manifest (IMPLEMENTED, Issue #66, PR #67)
         ↓
-Slice D — Golden Bundles (IMPLEMENTED in PR #72; awaiting owner approval/merge)
+Slice D — Golden Bundles (IMPLEMENTED, Issue #71, PR #72, merge d199f7a)
         ↓
-approved implementation work item for Slice E
+Slice E — Composer (IMPLEMENTED in this PR; awaiting owner approval/merge)
         ↓
-Slice E — Composer
+approved implementation work item for the next stage
+        ↓
+Platform Instance assembly tooling
         ↓
 verification / independent review
         ↓
@@ -218,9 +243,10 @@ merge
 **Factory mechanisms:** Slice A — Component Registry `IMPLEMENTED`;
 Slice B — Component Catalog `IMPLEMENTED`;
 Slice C — Platform Manifest `IMPLEMENTED`;
-Slice D — Golden Bundles `IMPLEMENTED in PR #72; pending merge`;
-Composer `NOT YET IMPLEMENTED`.
+Slice D — Golden Bundles `IMPLEMENTED`;
+Slice E — Composer `IMPLEMENTED in this PR; pending merge`;
+Platform Instance assembly tooling `NOT YET IMPLEMENTED`.
 
 **Factory Gate #1: PASSED.**
 
-Документационный baseline отражает переход от foundation/standalone состояния к активированному Level 2. Slice A/B/C зафиксированы как `IMPLEMENTED` после merge; Slice D отражён как реализованный в PR #72, но ещё не смерженный; Composer явно помечен как `NOT YET IMPLEMENTED`.
+Документационный baseline отражает переход от foundation/standalone состояния к активированному Level 2. Slice A–D зафиксированы как `IMPLEMENTED` после merge; Slice E — Composer отражён как реализованный в текущем PR и ожидающий merge; Platform Instance assembly tooling явно помечен как `NOT YET IMPLEMENTED`.

@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory/composer/schema/composition_request.schema.json",
+  "title": "Application Factory — Composition Request",
+  "description": "Normative schema of the Composer input (Slice E, ARCHITECTURE.md §17, ADR-0015 §8, §15). A composition request is factory-level composition metadata: it names the Platform Manifest identity to produce, the requested components with explicit versions or explicit version constraints, and optional Golden Bundle reference, configuration, extensions and branding. The Composer resolves the declared dependency closure, verifies compatibility and contract validity, applies configuration, checks extensions, produces a reproducible Platform Manifest and hands it to Platform Manifest validation (Slice C). The request never selects a floating version, never carries artifact identity of its own (artifact identity is repeated from the authoritative Component Registry) and never holds business data.",
+  "type": "object",
+  "required": [
+    "manifest",
+    "components"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "manifest": {
+      "$ref": "#/$defs/manifest_request",
+      "description": "Identity of the Platform Manifest this composition produces. The Composer produces a draft manifest; approval and publication stay outside the Composer (ARCHITECTURE.md §16)."
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/requested_component"
+      },
+      "description": "Components the platform asks for, in deterministic order (sorted by component_id). Each entry states either an explicit component_version or an explicit version_range; the Composer adds the declared dependency closure on top of this set and never substitutes a version silently."
+    },
+    "golden_bundle": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/golden_bundle_reference"
+        }
+      ],
+      "description": "Optional Golden Bundle the composition is built from (ARCHITECTURE.md §14; ADR-0015 §8). When present, the bundle must be certified and the composed platform must equal the bundle's pinned set exactly."
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      },
+      "description": "Component-scoped configuration: key = component_id, value = that component's declarative configuration (ARCHITECTURE.md §20). A key the component does not declare is a BUILD ERROR, and secrets have no representation here (secrets never enter the Platform Manifest)."
+    },
+    "extensions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/extension_entry"
+      },
+      "description": "Extensions applied through a component's published contract only (ARCHITECTURE.md §21)."
+    },
+    "branding": {
+      "type": "object",
+      "description": "Optional branding metadata passed into the manifest."
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "description": "Explicit SemVer MAJOR.MINOR.PATCH (ARCHITECTURE.md §11). A floating selector such as latest is not a version."
+    },
+    "manifest_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([_-][a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable platform manifest identity (lower snake_case or kebab-case), never a floating selector."
+    },
+    "component_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable component identity mirrored from the canonical Component Registry."
+    },
+    "bundle_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([_-][a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable Golden Bundle identity."
+    },
+    "extension_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([_-][a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Stable extension identity."
+    },
+    "sha256_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Immutable content digest: sha256 followed by 64 hex characters."
+    },
+    "repo_path": {
+      "type": "string",
+      "pattern": "^(?!.*(?:^|/)\\.(?:\\.)?(?:/|$))[A-Za-z0-9._/-]+$",
+      "minLength": 1,
+      "description": "Repository-relative path to a published artifact: POSIX separators, no fragment, no absolute path and no traversal/normalization segment."
+    },
+    "version_range": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Explicit comma-separated version constraints, each with an operator and an exact SemVer version (for example >=0.3.0,<0.4.0). A floating selector such as latest is never accepted (ARCHITECTURE.md §1.3)."
+    },
+    "extension_mechanism": {
+      "type": "string",
+      "enum": [
+        "webhook",
+        "custom_fields",
+        "ui_widget",
+        "theme",
+        "plugin",
+        "official_extension_api"
+      ],
+      "description": "Permitted extension mechanisms (ARCHITECTURE.md §21). database, internal code, private schema and internal queue are not extension mechanisms and have no representation here."
+    },
+    "manifest_request": {
+      "type": "object",
+      "required": [
+        "manifest_id",
+        "manifest_version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "manifest_id": {
+          "$ref": "#/$defs/manifest_id"
+        },
+        "manifest_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "predecessor": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "manifest_id",
+                "manifest_version"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "manifest_id": {
+                  "$ref": "#/$defs/manifest_id"
+                },
+                "manifest_version": {
+                  "$ref": "#/$defs/semver"
+                },
+                "manifest_digest": {
+                  "$ref": "#/$defs/sha256_digest"
+                }
+              }
+            }
+          ],
+          "description": "Predecessor of the produced manifest (ARCHITECTURE.md §13, §16). Null for the first manifest of the lineage."
+        }
+      }
+    },
+    "requested_component": {
+      "type": "object",
+      "required": [
+        "component_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "component_id": {
+          "$ref": "#/$defs/component_id"
+        },
+        "component_version": {
+          "$ref": "#/$defs/semver",
+          "description": "Explicit requested version. It must be the version the authoritative Component Registry publishes for this component; the Composer never substitutes another one."
+        },
+        "version_range": {
+          "$ref": "#/$defs/version_range",
+          "description": "Explicit requested constraint, evaluated against the registered version only. A constraint that the registered version does not satisfy is a deterministic rejection, never a substitution."
+        }
+      },
+      "description": "Exactly one of component_version (pin) or version_range (constraint) is required."
+    },
+    "golden_bundle_reference": {
+      "type": "object",
+      "required": [
+        "bundle_id",
+        "bundle_version",
+        "bundle_digest",
+        "path"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "$ref": "#/$defs/bundle_id"
+        },
+        "bundle_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "bundle_digest": {
+          "$ref": "#/$defs/sha256_digest"
+        },
+        "path": {
+          "$ref": "#/$defs/repo_path",
+          "description": "Canonical repository-relative location of the bundle document that carries this identity. The Composer reads and validates it (Slice D validation) and rejects any identity/content mismatch."
+        }
+      }
+    },
+    "extension_entry": {
+      "type": "object",
+      "required": [
+        "extension_id",
+        "component_id",
+        "mechanism",
+        "contract"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "extension_id": {
+          "$ref": "#/$defs/extension_id"
+        },
+        "extension_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "component_id": {
+          "$ref": "#/$defs/component_id",
+          "description": "Component the extension extends. It must be part of the composed platform."
+        },
+        "mechanism": {
+          "$ref": "#/$defs/extension_mechanism"
+        },
+        "contract": {
+          "$ref": "#/$defs/repo_path",
+          "description": "Published contract of the extended component that the extension works through. It must be one of the contract references the authoritative Component Registry publishes for that component."
+        }
+      }
+    }
+  }
+}
