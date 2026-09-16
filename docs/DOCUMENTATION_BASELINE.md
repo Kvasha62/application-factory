@@ -110,7 +110,7 @@ tests/test_component_catalog.py                        focused tests
 Каталог выводится из канонического реестра и опубликованных контрактов,
 закреплён за реестром content digest каждой записи и не является вторым
 источником истины: любое расхождение с canonical registry/contract metadata
-отвергается валидации (ADR-0015 §5).
+отвергается валидацией (ADR-0015 §5).
 
 **Slice C — Platform Manifest: `IMPLEMENTED`** (Issue #66, PR #67).
 
