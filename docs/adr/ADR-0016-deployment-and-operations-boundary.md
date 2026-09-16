@@ -1,8 +1,10 @@
 # ADR-0016 — Deployment and Operations Boundary
 
-**Status:** `PROPOSED`
+**Status:** `RATIFIED`
 
 **Date:** 2026-09-16
+
+**Ratified:** 2026-09-16 by project owner
 
 **Level:** C — platform architecture (deployment model; `docs/ARCHITECTURE.md` §34.1)
 
@@ -424,9 +426,9 @@ The update is a separate controlled change after ratification. This PR performs 
 
 > **Final decision. The Deployment and Operations boundary is established as the platform capability between Factory output and runtime: `Factory → Platform Manifest → Platform Instance → Deployment & Operations → Running Platform`. The Platform Instance is the boundary artifact — desired state, immutable and digest-bound. Deployment & Operations owns provisioning, deployment, migration orchestration, runtime management, health/readiness, deployment state, upgrade, rollback and operational observability; it owns no business data, changes no Factory behavior, becomes neither a deployment engine inside the Factory nor a Business System, selects no technology and permits no floating selectors. `docs/ARCHITECTURE.md` is deliberately unchanged: the controlled update follows only after owner ratification, and implementation follows only after a separate approved work item.**
 
-**Status:** `PROPOSED` (2026-09-16). This ADR is not ratified and is not part of the ratified architecture while `PROPOSED`.
+**Status:** `RATIFIED` (2026-09-16). This ADR is ratified by the project owner and is part of the confirmed decision record (§31).
 
-**Next action:**
+**Next action — as recorded while `PROPOSED`:**
 
 ```text
 1. independent architectural review
@@ -437,4 +439,15 @@ The update is a separate controlled change after ratification. This PR performs 
 
 No merge, ratification or architecture edit is performed by this document itself.
 
-**ADR-0016 status: PROPOSED.**
+## 33. Ratification
+
+RATIFIED by the project owner on 2026-09-16. The ratification confirms the decision as written: the Deployment and Operations boundary is established as a Level C stage (`docs/ARCHITECTURE.md` §34.1).
+
+Recorded state after ratification:
+
+- the controlled `docs/ARCHITECTURE.md` update required by §29 is executed as a separate documentation change after this ratification: §2.2 no longer defines Platform Instance as the deployed product, §37 gains the stage `PLATFORM INSTANCE → DEPLOYMENT & OPERATIONS → RUNNING PLATFORM`, and §37.1 records the boundary;
+- per the Level C convention (ADR-0011), this ratification does not bump the architecture version: `docs/ARCHITECTURE.md` remains v1.2.0 RATIFIED, with this ADR referenced at the updated sections;
+- no implementation of Deployment & Operations is authorized by this ratification: implementation still requires a separate approved work item (§30), and no «Slice G» or any other implementation slice is approved or authorized;
+- this ADR enters the confirmed list of `docs/adr/README.md` upon ratification (§31).
+
+**ADR-0016 status: RATIFIED.**

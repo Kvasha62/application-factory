@@ -3,8 +3,8 @@
 **Статус:** `CLEAN`  
 **Дата:** 2026-09-16  
 **Базовый `main` до ратификации:** `da3ac2e03255e6bfe0b42e0923326e9ed2bfb38d`  
-**Актуализация:** 2026-09-14 — после прохождения Factory Gate #1 и ратификации ADR-0015 зафиксирована активация Level 2 — Component Factory; при этом сами фабричные механизмы остаются не реализованными до прохождения отдельных implementation slices. 2026-09-15 — после реализации Slice B — Component Catalog (Issue #64): каталог реализован как производный discoverable view реестра и опубликованных контрактов; после реализации Slice C — Platform Manifest (Issue #66, PR #67): манифест реализован как явный машинно-читаемый артефакт композиции платформы; после реализации Slice D — Golden Bundles (Issue #71): Golden Bundle реализован как явный машинно-читаемый артефакт сертифицированного воспроизводимого набора совместимых версий компонентов; Slice E — Composer реализован (Issue #73, merge `319ab4b`): детерминированная композиция и детерминированное отклонение несовместимых или contract-invalid сборок платформы. 2026-09-16 — после реализации Slice F — Platform Instance Assembly (Issue #74): assembly-представление конкретного Platform Instance реализовано как детерминированная привязка `platform_id` к принятому/валидному Platform Manifest; deployment/provisioning/rollout-исполнение остаётся не реализованным и требует отдельного work item.
-**Основание:** `docs/ARCHITECTURE.md` 1.2.0 + `docs/adr/ADR-0010-architecture-gap-review.md` + `docs/adr/ADR-0015-level-2-component-factory-activation.md`
+**Актуализация:** 2026-09-14 — после прохождения Factory Gate #1 и ратификации ADR-0015 зафиксирована активация Level 2 — Component Factory; при этом сами фабричные механизмы остаются не реализованными до прохождения отдельных implementation slices. 2026-09-15 — после реализации Slice B — Component Catalog (Issue #64): каталог реализован как производный discoverable view реестра и опубликованных контрактов; после реализации Slice C — Platform Manifest (Issue #66, PR #67): манифест реализован как явный машинно-читаемый артефакт композиции платформы; после реализации Slice D — Golden Bundles (Issue #71): Golden Bundle реализован как явный машинно-читаемый артефакт сертифицированного воспроизводимого набора совместимых версий компонентов; Slice E — Composer реализован (Issue #73, merge `319ab4b`): детерминированная композиция и детерминированное отклонение несовместимых или contract-invalid сборок платформы. 2026-09-16 — после реализации Slice F — Platform Instance Assembly (Issue #74): assembly-представление конкретного Platform Instance реализовано как детерминированная привязка `platform_id` к принятому/валидному Platform Manifest; deployment/provisioning/rollout-исполнение остаётся не реализованным и требует отдельного work item. 2026-09-16 — ADR-0016 — Deployment and Operations Boundary ратифицирован владельцем; выполнено контролируемое обновление `docs/ARCHITECTURE.md` (ADR-0016 §29): §2.2 — Platform Instance зафиксирован как desired state / deployment input, не runtime state; §37 — главная модель дополнена стадией Deployment & Operations → Running Platform; §37.1 — зафиксирована граница Deployment & Operations; версия документа не меняется (Level C, конвенция ADR-0011); реализация Deployment & Operations не выполнялась и требует отдельного утверждённого work item (ADR-0016 §30).
+**Основание:** `docs/ARCHITECTURE.md` 1.2.0 + `docs/adr/ADR-0010-architecture-gap-review.md` + `docs/adr/ADR-0015-level-2-component-factory-activation.md` + `docs/adr/ADR-0016-deployment-and-operations-boundary.md`
 
 ## 1. Назначение
 
@@ -25,7 +25,7 @@
 | Область | Источник | Статус |
 |---|---|---|
 | Архитектурный закон | `docs/ARCHITECTURE.md` | RATIFIED 1.2.0 |
-| Архитектурные решения | `docs/adr/` | ACTIVE; ADR-0010…ADR-0015 подтверждены, ADR-0015 RATIFIED 2026-09-14 |
+| Архитектурные решения | `docs/adr/` | ACTIVE; ADR-0010…ADR-0016 подтверждены, ADR-0015 RATIFIED 2026-09-14, ADR-0016 RATIFIED 2026-09-16 |
 | Активация Component Factory | `docs/adr/ADR-0015-level-2-component-factory-activation.md` | RATIFIED; Level 2 ACTIVE |
 | Документационный baseline | `docs/DOCUMENTATION_BASELINE.md` | CLEAN |
 | Операционная модель | `docs/OPERATING_MODEL.md` | RATIFIED 1.0.0 |
@@ -53,6 +53,7 @@
 - `ADR-0013` — Commerce Product Boundary / SCS-002 — `RATIFIED`.
 - `ADR-0014` — SCS-003 Booking Boundary — `RATIFIED`.
 - `ADR-0015` — Level 2 Component Factory activation after Factory Gate #1 — `RATIFIED` 2026-09-14.
+- `ADR-0016` — Deployment and Operations Boundary — `RATIFIED` 2026-09-16.
 
 `ADR-0009` отсутствует в подтверждённой истории и не реконструируется предположением.
 
