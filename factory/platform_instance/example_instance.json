@@ -1,0 +1,97 @@
+{
+  "$schema": "factory/platform_instance/schema/platform_instance.schema.json",
+  "components": [
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "authorization",
+      "component_version": "0.1.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "booking",
+      "component_version": "0.1.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "commerce",
+      "component_version": "0.2.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "idempotency",
+      "component_version": "0.1.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "identity",
+      "component_version": "0.3.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "learning",
+      "component_version": "0.3.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "tenant_authority",
+      "component_version": "0.1.0"
+    }
+  ],
+  "configuration": {
+    "authorization": {
+      "platform_id": "example-platform"
+    },
+    "booking": {
+      "platform_id": "example-platform"
+    },
+    "commerce": {
+      "platform_id": "example-platform"
+    },
+    "identity": {
+      "current_platform_id": "example-platform"
+    },
+    "learning": {
+      "platform_id": "example-platform"
+    },
+    "tenant_authority": {
+      "platform_id": "example-platform"
+    }
+  },
+  "golden_bundle": null,
+  "instance_digest": "sha256:b1a73f8a3dbd91b57ae1ff83167db4901f49e01aa5f4a20ef4d534d2abd98b42",
+  "manifest": {
+    "manifest_digest": "sha256:f8551aae2eb442f3a89ff1764f072ad400f01aa8efda92a9776cf74f1746dc0d",
+    "manifest_id": "example-platform",
+    "manifest_version": "1.0.0"
+  },
+  "manifest_state": "validated",
+  "platform_id": "example-platform"
+}
