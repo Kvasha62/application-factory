@@ -80,12 +80,16 @@ from deployment_operations.provisioning import provision
 from deployment_operations.runtime import (
     OP_PROBE,
     OP_START,
+    ExecutionBinding,
     LocalProcessRuntime,
+    MaterializedComponent,
     RuntimeAdapter,
     RuntimeElement,
     RuntimeHandle,
     RuntimeProcessError,
+    bind_execution,
     build_elements,
+    verify_bound_content,
 )
 from deployment_operations.state import (
     STAGE_COMPLETED,
@@ -437,6 +441,7 @@ class _Recorder:
                 detail={
                     "instance_digest": self.record.instance_digest,
                     "components": _component_ids(self.record),
+                    "executed_content": _executed_content(self.record),
                 },
             )
         )
@@ -479,6 +484,43 @@ class _Recorder:
 
 def _component_ids(record: DeploymentRecord) -> list[str]:
     return [component.component_id for component in record.components]
+
+
+def _executed_content(record: DeploymentRecord) -> dict[str, dict[str, str]]:
+    """The content this deployment bound and the content that reported running.
+
+    Recorded beside the instance digest so the operation's claim can always be
+    read back against concrete content, not only against an identity string.
+    """
+    content: dict[str, dict[str, str]] = {}
+    for component in record.components:
+        binding = component.execution
+        if not isinstance(binding, Mapping):
+            continue
+        modules = binding.get("modules")
+        entry = (
+            modules[0]
+            if isinstance(modules, Sequence)
+            and modules
+            and isinstance(modules[0], Mapping)
+            else {}
+        )
+        observed = component.observed_execution
+        observed_modules = (
+            observed.get("modules") if isinstance(observed, Mapping) else None
+        )
+        observed_entry = (
+            observed_modules[0]
+            if isinstance(observed_modules, Sequence)
+            and observed_modules
+            and isinstance(observed_modules[0], Mapping)
+            else {}
+        )
+        content[component.component_id] = {
+            "bound_digest": str(entry.get("digest")),
+            "observed_digest": str(observed_entry.get("digest")),
+        }
+    return content
 
 
 def _precheck(request: DeploymentRequest) -> list[str]:
@@ -647,7 +689,7 @@ def deploy(
     handles: dict[str, RuntimeHandle] = {}
 
     try:
-        _materialize(recorder, adapter, verification, elements)
+        materialized = _materialize(recorder, adapter, verification, elements)
         immutability = verify_input_unchanged(
             verification, request.instance_document, request.manifest_document
         )
@@ -658,12 +700,21 @@ def deploy(
                 immutability,
                 DeploymentInputRejected(immutability, stage="deploying"),
             )
-        _run_migrations(recorder, adapter, verification, elements)
+        executions = _bind_executions(recorder, verification, elements, materialized)
+        bound_elements = {
+            component_id: replace(element, execution=executions[component_id])
+            for component_id, element in elements.items()
+        }
+        _run_migrations(recorder, adapter, verification, bound_elements)
         recorder.stage(
             "deploying",
             STAGE_COMPLETED,
             detail={
                 "materialized": sorted(elements),
+                "execution": {
+                    component_id: executions[component_id].entry.digest
+                    for component_id in sorted(executions)
+                },
                 "migrations": [
                     f"{entry.component_id}:{entry.migration_id}"
                     for entry in recorder.record.migrations
@@ -675,7 +726,7 @@ def deploy(
         # The platform's runtime elements are started here and only here: the
         # earlier stages materialize and migrate, they do not run the platform.
         recorder.stage("starting", STAGE_IN_PROGRESS)
-        _start_elements(recorder, adapter, elements, handles)
+        _start_elements(recorder, adapter, bound_elements, handles)
         recorder.running(True)
         recorder.stage(
             "starting",
@@ -727,11 +778,26 @@ def deploy(
         )
 
         # -- identity/version/digest verification of the actual platform ----
+        # The running platform is verified against what this deployment bound
+        # before it started anything: the content each process was launched from
+        # (re-read by the engine, so a change during the operation is refused)
+        # and the content each process reported loading. Component identity,
+        # version and platform are compared as before — and none of it stands
+        # on the runtime's word alone (§9, §10).
         identity_errors = verify_identity(
             verification.components,
             observations,
             platform_id=verification.platform_id,
             instance_digest=verification.instance_digest,
+            executions={
+                component_id: execution.document()
+                for component_id, execution in executions.items()
+            },
+        )
+        identity_errors.extend(
+            error
+            for component_id in sorted(executions)
+            for error in verify_bound_content(executions[component_id])
         )
         identity_errors.extend(
             verify_input_unchanged(
@@ -778,11 +844,13 @@ def _materialize(
     adapter: RuntimeAdapter,
     verification: InstanceVerification,
     elements: Mapping[str, RuntimeElement],
-) -> None:
+) -> dict[str, MaterializedComponent]:
     """Materialize every pinned component into its runtime slot (§10, §7)."""
+    materialized: dict[str, MaterializedComponent] = {}
     for binding in verification.components:
         element = elements[binding.component_id]
         result = adapter.materialize(element)
+        materialized[binding.component_id] = result
         recorder.components(
             {
                 binding.component_id: {
@@ -806,6 +874,41 @@ def _materialize(
                 result.errors,
                 DeploymentExecutionFailed(result.errors),
             )
+    return materialized
+
+
+def _bind_executions(
+    recorder: _Recorder,
+    verification: InstanceVerification,
+    elements: Mapping[str, RuntimeElement],
+    materialized: Mapping[str, MaterializedComponent],
+) -> dict[str, ExecutionBinding]:
+    """Bind each component's process to the content it will execute (§9, §10).
+
+    The binding is established before anything is launched and recorded with the
+    operation, so the deployment's claim is relative to concrete content: what
+    the process is started from, with the digest the engine computed for it. A
+    component whose content cannot be bound — absent, ambiguous, or an artifact
+    that cannot be executed as the verified content — is refused here, before
+    any process exists.
+    """
+    bindings: dict[str, ExecutionBinding] = {}
+    for binding in verification.components:
+        component_id = binding.component_id
+        try:
+            execution = bind_execution(
+                elements[component_id], materialized=materialized.get(component_id)
+            )
+        except DeploymentExecutionFailed as error:
+            recorder.fail(
+                "deploying",
+                f"the execution content of {component_id!r} could not be bound",
+                error.errors,
+                error,
+            )
+        bindings[component_id] = execution
+        recorder.components({component_id: {"execution": execution.document()}})
+    return bindings
 
 
 def _start_element(
@@ -819,7 +922,19 @@ def _start_element(
     handle = handles.get(component_id)
     started_now = False
     if handle is None:
-        handle = adapter.start(element)
+        try:
+            handle = adapter.start(element)
+        except RuntimeProcessError as error:
+            # A process that is not started is a recorded failure, not an
+            # exception escaping the operation: state never claims a platform
+            # whose verified content was refused at launch (§9, §20).
+            errors = [*error.errors, str(error)]
+            recorder.fail(
+                "starting",
+                f"component {component_id!r} did not start",
+                errors,
+                StartupFailed(errors),
+            )
         handles[component_id] = handle
         started_now = True
     try:
@@ -1024,11 +1139,13 @@ def _probe(
             continue
         health = answer.get("health")
         readiness = answer.get("ready")
+        execution = answer.get("execution")
         observations.append(
             ComponentObservation(
                 component_id=binding.component_id,
                 health=health if isinstance(health, Mapping) else None,
                 readiness=readiness if isinstance(readiness, Mapping) else None,
+                execution=(dict(execution) if isinstance(execution, Mapping) else None),
             )
         )
     return observations, errors
@@ -1045,6 +1162,9 @@ def _record_observations(
             "observed_component_id": component_id,
             "observed_version": version,
             "observed_platform_id": platform_id,
+            "observed_execution": (
+                dict(observation.execution) if observation.execution else None
+            ),
             "health": dict(observation.health) if observation.health else None,
             "readiness": dict(observation.readiness) if observation.readiness else None,
             "healthy": observation.healthy,

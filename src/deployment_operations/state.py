@@ -124,6 +124,12 @@ class ComponentRecord:
     materialized: bool = False
     artifact_verified: bool = False
     runtime_started: bool = False
+    #: The content this deployment bound to the component's process before it
+    #: was started, and the digests the engine computed for it (§9, §10).
+    execution: Mapping[str, Any] | None = None
+    #: What the running process reported loading — evidence the engine checks
+    #: against the binding, never a substitute for it.
+    observed_execution: Mapping[str, Any] | None = None
     observed_component_id: str | None = None
     observed_version: str | None = None
     observed_platform_id: str | None = None
@@ -143,6 +149,10 @@ class ComponentRecord:
             "materialized": self.materialized,
             "artifact_verified": self.artifact_verified,
             "runtime_started": self.runtime_started,
+            "execution": dict(self.execution) if self.execution else None,
+            "observed_execution": (
+                dict(self.observed_execution) if self.observed_execution else None
+            ),
             "observed_component_id": self.observed_component_id,
             "observed_version": self.observed_version,
             "observed_platform_id": self.observed_platform_id,
@@ -618,6 +628,20 @@ def record_from_document(document: Mapping[str, Any]) -> DeploymentRecord:
                     materialized=bool(item.get("materialized", False)),
                     artifact_verified=bool(item.get("artifact_verified", False)),
                     runtime_started=bool(item.get("runtime_started", False)),
+                    # The execution binding and the evidence of what ran are
+                    # part of the record: state has to correlate the instance,
+                    # the boundary, the execution and the observation, or a
+                    # reader cannot tell what a claim stands on (§9, §10).
+                    execution=(
+                        item.get("execution")
+                        if isinstance(item.get("execution"), Mapping)
+                        else None
+                    ),
+                    observed_execution=(
+                        item.get("observed_execution")
+                        if isinstance(item.get("observed_execution"), Mapping)
+                        else None
+                    ),
                     observed_component_id=item.get("observed_component_id"),
                     observed_version=item.get("observed_version"),
                     observed_platform_id=item.get("observed_platform_id"),
