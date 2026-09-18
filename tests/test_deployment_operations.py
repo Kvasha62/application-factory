@@ -2591,9 +2591,10 @@ class TestExecutionContentBinding:
             bound_file = source / "bound_component.py"
             component = record.components[0]
             assert component.execution["modules"][0]["path"] == str(bound_file)
-            assert component.observed_execution["modules"][0][
-                "digest"
-            ] == content_digest(bound_file)
+            assert (
+                component.observed_execution["modules"][0]["digest"]
+                == content_digest(bound_file)
+            )
         finally:
             deployment.stop()
 
