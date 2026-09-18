@@ -1268,6 +1268,76 @@ class TestDeploymentExecution:
         assert record.ready is False
         assert record.running is False
 
+    def test_runtime_substitution_after_engine_verification_fails_closed(
+        self, tmp_path, instance, manifest
+    ):
+        """The child must enforce the engine's A digest, not establish B as truth.
+
+        The adapter deliberately substitutes B *after* the engine's final
+        pre-launch verification of A and before the worker starts. B reports the
+        expected component identity, version, platform, health and readiness.
+        The launch binding nevertheless carries A's engine-computed digest, so
+        the worker must reject B before any component code executes.
+        """
+        source = tmp_path / "verified-source" / "tenant_authority"
+        source.mkdir(parents=True)
+        (source / "__init__.py").write_text(
+            "COMPONENT_ID = 'tenant_authority'\n"
+            "COMPONENT_VERSION = '0.1.0'\n",
+            encoding="utf-8",
+        )
+        entry = source / "deployment.py"
+        entry.write_text(
+            "from fastapi import FastAPI\n"
+            "from tenant_authority import COMPONENT_ID, COMPONENT_VERSION\n"
+            "\n"
+            "def build_deployment(configuration):\n"
+            "    app = FastAPI()\n"
+            "    platform_id = configuration.get('platform_id')\n"
+            "    @app.get('/health')\n"
+            "    def health():\n"
+            "        return {'status': 'ok', 'component_id': COMPONENT_ID, 'version': COMPONENT_VERSION, 'platform_id': platform_id}\n"
+            "    @app.get('/ready')\n"
+            "    def ready():\n"
+            "        return {'status': 'ready', 'component_id': COMPONENT_ID}\n"
+            "    class Deployment:\n"
+            "        def contract_app(self):\n"
+            "            return app\n"
+            "    return Deployment()\n",
+            encoding="utf-8",
+        )
+        original = entry.read_bytes()
+        replacement = original + b"\n# runtime B: different bytes, same reported identity\n"
+        environment = environment_for(tmp_path / "runtime")
+
+        class LateSubstitutionRuntime(LocalProcessRuntime):
+            """Simulate A being replaced by B after the parent verification."""
+
+            def _spawn(self, element, *, log_name):
+                entry.write_bytes(replacement)
+                return super()._spawn(element, log_name=log_name)
+
+        runtime = LateSubstitutionRuntime(source_paths=(tmp_path / "verified-source",))
+        request = request_for(instance, manifest, environment)
+        with refusal(RuntimeProcessError, "digest mismatch|substituted content"):
+            deploy(
+                request,
+                runtime=runtime,
+                source_paths=(tmp_path / "verified-source",),
+            )
+
+        record = read_state(environment, instance)
+        assert record.identity_verified is False
+        assert record.ready is False
+        assert record.running is False
+        assert record.deployed is False
+        assert record.lifecycle == LIFECYCLE_FAILED
+        assert record.failure is not None
+        assert record.failure.stage == "starting"
+        # B was never allowed to become the running component: the child
+        # rejected it before loading the substituted bytes.
+        assert entry.read_bytes() == replacement
+
     def test_artifact_digest_substitution_is_caught_at_materialization(self, tmp_path):
         """Materializing verifies the digest of the content, not its declaration."""
         from deployment_operations import ComponentBinding
