@@ -176,6 +176,24 @@ def expect_failure(**environment: object) -> tuple[type[Exception], object]:
     """Return the expected failure type for an environment keyword set."""
     return (Exception, environment)
 
+def _cli_env() -> dict[str, str]:
+    """Build the isolated environment used by the CLI subprocess tests.
+
+    The CLI deliberately does not inherit the pytest process environment.
+    PYTHONPATH makes the uninstalled package importable, while PATH retains
+    the isolated value used by these tests. Windows requires SystemRoot for
+    the runtime worker to initialize its networking stack; forward it only
+    when the host provides it.
+    """
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "PYTHONPATH": str(ROOT / "src"),
+    }
+    system_root = os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT")
+    if system_root:
+        env["SystemRoot"] = system_root
+    return env
+
 
 # ---------------------------------------------------------------------------
 # AC1 — exact Platform Instance identity
@@ -1282,8 +1300,7 @@ class TestDeploymentExecution:
         source = tmp_path / "verified-source" / "tenant_authority"
         source.mkdir(parents=True)
         (source / "__init__.py").write_text(
-            "COMPONENT_ID = 'tenant_authority'\n"
-            "COMPONENT_VERSION = '0.1.0'\n",
+            "COMPONENT_ID = 'tenant_authority'\n" "COMPONENT_VERSION = '0.1.0'\n",
             encoding="utf-8",
         )
         entry = source / "deployment.py"
@@ -1627,7 +1644,7 @@ class TestOwnershipBoundary:
             "platform_instance",
             "platform_manifest",
             "re",
-            "select",
+            "threading",
             "shutil",
             "subprocess",
             "sysconfig",
@@ -1697,9 +1714,7 @@ class TestOwnershipBoundary:
                 "observed_version",
                 "readiness",
                 "runtime_started",
-            }, (
-                "the record holds the operational facts of the boundary, not business data"
-            )
+            }, "the record holds the operational facts of the boundary, not business data"
 
     def test_no_business_data_is_read_or_written(self, tmp_path, instance, manifest):
         with deploy_canonical(tmp_path, instance, manifest) as deployment:
@@ -2124,7 +2139,7 @@ class TestCommandLine:
             cwd=ROOT,
             capture_output=True,
             text=True,
-            env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(ROOT / "src")},
+            env=_cli_env(),
             check=False,
         )
         assert completed.returncode == 0, completed.stderr
@@ -2171,7 +2186,7 @@ class TestCommandLine:
             cwd=ROOT,
             capture_output=True,
             text=True,
-            env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(ROOT / "src")},
+            env=_cli_env(),
             check=False,
         )
         assert completed.returncode == 1
@@ -2212,7 +2227,7 @@ class TestCommandLine:
             cwd=ROOT,
             capture_output=True,
             text=True,
-            env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(ROOT / "src")},
+            env=_cli_env(),
             check=False,
         )
         assert completed.returncode == 2
@@ -2591,10 +2606,9 @@ class TestExecutionContentBinding:
             bound_file = source / "bound_component.py"
             component = record.components[0]
             assert component.execution["modules"][0]["path"] == str(bound_file)
-            assert (
-                component.observed_execution["modules"][0]["digest"]
-                == content_digest(bound_file)
-            )
+            assert component.observed_execution["modules"][0][
+                "digest"
+            ] == content_digest(bound_file)
         finally:
             deployment.stop()
 
@@ -2624,7 +2638,9 @@ class TestExecutionContentBinding:
         """
         source = bound_source(tmp_path)
         environment = environment_bound_to(tmp_path, source)
-        runtime = MisdirectingRuntime(inner=LocalProcessRuntime(), elsewhere=source / "elsewhere.py")
+        runtime = MisdirectingRuntime(
+            inner=LocalProcessRuntime(), elsewhere=source / "elsewhere.py"
+        )
         request = request_for(instance, manifest, environment)
 
         with refusal(
@@ -3101,8 +3117,12 @@ class TestVerifiedExecutionBoundary:
                 )
             },
         )
-        migrations = MigrationBinding(module="workspace_migration_component", attribute="MIGRATIONS")
-        environment = adversary_environment(tmp_path, (source,), route="bound", migrations=migrations)
+        migrations = MigrationBinding(
+            module="workspace_migration_component", attribute="MIGRATIONS"
+        )
+        environment = adversary_environment(
+            tmp_path, (source,), route="bound", migrations=migrations
+        )
         workspace = workspace_of(environment, instance)
         record, error = attempt(instance, manifest, environment)
         assert error is None
@@ -3164,7 +3184,9 @@ class TestVerifiedExecutionBoundary:
             "    raise AssertionError('the alternate root is not the execution source')\n",
             encoding="utf-8",
         )
-        environment = adversary_environment(tmp_path, (source, alternate), route="bound")
+        environment = adversary_environment(
+            tmp_path, (source, alternate), route="bound"
+        )
         workspace = workspace_of(environment, instance)
         record, error = attempt(instance, manifest, environment)
         assert error is None
@@ -3510,7 +3532,9 @@ class TestVerifiedExecutionBoundary:
         compiled from the bytes it verified, so it never runs under that name.
         """
         source = verified_root(tmp_path, helper=True)
-        environment = adversary_environment(tmp_path, (source,), route="marshalled_bound")
+        environment = adversary_environment(
+            tmp_path, (source,), route="marshalled_bound"
+        )
         workspace = workspace_of(environment, instance)
         record, error = attempt(instance, manifest, environment)
         assert isinstance(error, IdentityVerificationFailed)
@@ -3535,7 +3559,9 @@ class TestVerifiedExecutionBoundary:
         its filename, unverified bytes would become verified content by label.
         """
         source = verified_root(tmp_path, helper=True)
-        environment = adversary_environment(tmp_path, (source,), route="compile_bound_name")
+        environment = adversary_environment(
+            tmp_path, (source,), route="compile_bound_name"
+        )
         workspace = workspace_of(environment, instance)
         record, error = attempt(instance, manifest, environment)
         assert isinstance(error, IdentityVerificationFailed)
@@ -3740,7 +3766,9 @@ class TestVerifiedExecutionBoundary:
         source.mkdir()
         (source / "deployment.py").write_text(MANDATED_ENTRY, encoding="utf-8")
         (source / "helper.py").write_bytes(fixture_source_bytes("honest_helper.py"))
-        environment = adversary_environment(tmp_path, (source,), route="alias", module="deployment")
+        environment = adversary_environment(
+            tmp_path, (source,), route="alias", module="deployment"
+        )
         workspace = workspace_of(environment, instance)
         (workspace / "helper.py").write_bytes(substituted_helper())
 
@@ -3921,7 +3949,9 @@ class TestVerifiedExecutionBoundary:
         of this deployment's claim (§18).
         """
         source = verified_root(tmp_path, helper=True)
-        environment = adversary_environment(tmp_path, (source,), route="child_inherited")
+        environment = adversary_environment(
+            tmp_path, (source,), route="child_inherited"
+        )
         workspace = workspace_of(environment, instance)
         (workspace / "extra_helper.py").write_bytes(substituted_helper())
         record, error = attempt(instance, manifest, environment)
@@ -4057,7 +4087,9 @@ class TestVerifiedExecutionBoundary:
         migrations = MigrationBinding(
             module="workspace_migration_component", attribute="MIGRATIONS"
         )
-        environment = adversary_environment(named, (source,), route="bound", migrations=migrations)
+        environment = adversary_environment(
+            named, (source,), route="bound", migrations=migrations
+        )
         workspace = workspace_of(environment, instance)
         (workspace / "helper.py").write_bytes(substituted_helper())
         record, error = attempt(instance, manifest, environment)
@@ -4081,8 +4113,12 @@ class TestVerifiedExecutionBoundary:
                 )
             },
         )
-        migrations = MigrationBinding(module="dynamic_migration_component", attribute="MIGRATIONS")
-        environment = adversary_environment(dynamic, (source,), route="bound", migrations=migrations)
+        migrations = MigrationBinding(
+            module="dynamic_migration_component", attribute="MIGRATIONS"
+        )
+        environment = adversary_environment(
+            dynamic, (source,), route="bound", migrations=migrations
+        )
         workspace = workspace_of(environment, instance)
         (workspace / "helper.py").write_bytes(substituted_helper())
         record, error = attempt(instance, manifest, environment)
