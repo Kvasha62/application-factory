@@ -1699,7 +1699,9 @@ class TestOwnershipBoundary:
                 "observed_version",
                 "readiness",
                 "runtime_started",
-            }, "the record holds the operational facts of the boundary, not business data"
+            }, (
+                "the record holds the operational facts of the boundary, not business data"
+            )
 
     def test_no_business_data_is_read_or_written(self, tmp_path, instance, manifest):
         with deploy_canonical(tmp_path, instance, manifest) as deployment:
