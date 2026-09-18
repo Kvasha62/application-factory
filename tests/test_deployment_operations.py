@@ -1320,9 +1320,7 @@ class TestDeploymentExecution:
                 entry.write_bytes(replacement)
                 return super()._spawn(element, log_name=log_name)
 
-        runtime = LateSubstitutionRuntime(
-            source_paths=(tmp_path / "verified-source",)
-        )
+        runtime = LateSubstitutionRuntime(source_paths=(tmp_path / "verified-source",))
         request = request_for(instance, manifest, environment)
         with pytest.raises(StartupFailed):
             deploy(
