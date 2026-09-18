@@ -166,6 +166,7 @@ class _BoundContent:
 
     module: str
     path: Path
+    digest: str
     is_package: bool
 
 
@@ -212,6 +213,14 @@ class _BoundLoader(importlib.abc.Loader):
                 f"{content.module}: this process already loaded this module from "
                 f"{content.path} and the content there has changed since; the "
                 "content about to run is not the content that was verified"
+            )
+            self._boundary.record_refusal(message)
+            raise ExecutionBoundaryError(message)
+        if content.digest != fresh:
+            message = (
+                f"{content.module}: the content at {content.path} does not match "
+                f"the digest fixed by the engine ({content.digest}); refusing to "
+                "execute content different from the verified binding"
             )
             self._boundary.record_refusal(message)
             raise ExecutionBoundaryError(message)
@@ -548,9 +557,22 @@ class _ExecutionBoundary:
         for entry in binding["modules"]:
             module = str(entry["module"])
             path = Path(str(entry["path"]))
+            digest = entry.get("digest")
+            if not isinstance(digest, str) or not digest.startswith("sha256:"):
+                raise ExecutionBoundaryError(
+                    f"{module}: the launch binding carries no valid content digest"
+                )
+            hex_digest = digest.removeprefix("sha256:")
+            if len(hex_digest) != 64 or any(
+                character not in "0123456789abcdef" for character in hex_digest
+            ):
+                raise ExecutionBoundaryError(
+                    f"{module}: the launch binding carries an invalid content digest"
+                )
             self.bound_modules[module] = _BoundContent(
                 module=module,
                 path=path,
+                digest=digest,
                 is_package=path.name == "__init__.py",
             )
         self.bound_modules_order = [
@@ -687,20 +709,35 @@ class _ExecutionBoundary:
         sys.meta_path.insert(0, self._finder)
 
     def establish(self) -> None:
-        """Record the content this boundary is established on, before anything runs.
+        """Verify the launch content against the engine's immutable binding before execution.
 
-        The digest is taken from the files here, in this process, and is never
-        received from the engine: it is the content this process is running on,
-        and a load of anything else is refused rather than executed (§8).
+        The engine computes each digest before launching the process and carries
+        that value in the launch binding. This process may not establish its own
+        desired identity: it must first prove that the bytes present at the bound
+        path are exactly the bytes the engine verified. A mismatch aborts the
+        process before component code can run (§8–§10).
         """
+        errors: list[str] = []
         for name, content in self.bound_modules.items():
             try:
-                self._established[name] = _content_digest(content.path)
-            except OSError:
-                # Content the boundary cannot read is content it cannot be
-                # established on, and a module it was not established on never
-                # loads: the sentinel refuses it at load time (§8).
-                self._established[name] = ""
+                observed = _content_digest(content.path)
+            except OSError as error:
+                observed = ""
+                errors.append(
+                    f"{name}: the bound content {content.path} cannot be read "
+                    f"before execution ({error.__class__.__name__}: {error})"
+                )
+            self._established[name] = observed
+            if observed != content.digest:
+                errors.append(
+                    f"{name}: launch content digest mismatch: engine verified "
+                    f"{content.digest}, but the process found {observed or 'unreadable'} "
+                    f"at {content.path}; refusing to execute substituted content"
+                )
+        if errors:
+            for message in errors:
+                self.record_refusal(message)
+            raise ExecutionBoundaryError("; ".join(errors))
 
     def install(self) -> None:
         """Establish the boundary before any component content can be loaded."""
@@ -1120,16 +1157,28 @@ def _load_binding(raw: str) -> dict[str, Any]:
             raise RuntimeWorkerError("the launch binding carries an unusable entry")
         module = entry.get("module")
         path = entry.get("path")
+        digest = entry.get("digest")
         if not isinstance(module, str) or not module:
             raise RuntimeWorkerError("the launch binding names no module")
         if not isinstance(path, str) or not path:
             raise RuntimeWorkerError(
                 f"{module}: the launch binding names no content for this module"
             )
+        if not isinstance(digest, str) or not digest.startswith("sha256:"):
+            raise RuntimeWorkerError(
+                f"{module}: the launch binding names no content digest"
+            )
+        hex_digest = digest.removeprefix("sha256:")
+        if len(hex_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in hex_digest
+        ):
+            raise RuntimeWorkerError(
+                f"{module}: the launch binding carries an invalid content digest"
+            )
         if module in seen:
             raise RuntimeWorkerError(f"{module}: the launch binding repeats a module")
         seen.add(module)
-        parsed.append({"module": module, "path": path})
+        parsed.append({"module": module, "path": path, "digest": digest})
     return {
         "root": Path(root),
         "roots": _paths("roots"),
