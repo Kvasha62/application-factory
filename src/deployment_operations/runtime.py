@@ -839,18 +839,23 @@ class LocalProcessRuntime:
         # the component process and are never written anywhere (ADR-0016 §12).
         environment.update({key: value for key, value in element.secrets.items()})
 
-        # The launch instruction names the bound files and never the digests:
-        # the process reports the digests of what it actually loaded, and the
-        # engine compares that evidence with this binding. A process that is
-        # told the expected digest could echo it; one that is told the file
-        # cannot load anything else (§9).
+        # The launch instruction carries the engine's immutable content
+        # binding, including each digest. The digest is not a self-reported
+        # identity: the worker enforces it against the bytes it reads before
+        # component code can execute. This closes the verification/launch gap
+        # where content could be replaced after the engine's last pre-launch
+        # check (§8–§10).
         instruction = json.dumps(
             {
                 "root": str(execution.root),
                 "roots": [str(root) for root in execution.roots],
                 "untrusted": [str(path) for path in execution.untrusted],
                 "modules": [
-                    {"module": module.module, "path": str(module.path)}
+                    {
+                        "module": module.module,
+                        "path": str(module.path),
+                        "digest": module.digest,
+                    }
                     for module in execution.modules
                 ],
             },
