@@ -40,9 +40,8 @@ import ast
 import json
 import os
 import shutil
-import threading
 import subprocess
-import time
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
