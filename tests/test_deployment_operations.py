@@ -1320,7 +1320,9 @@ class TestDeploymentExecution:
                 entry.write_bytes(replacement)
                 return super()._spawn(element, log_name=log_name)
 
-        runtime = LateSubstitutionRuntime(source_paths=(tmp_path / "verified-source",))
+        runtime = LateSubstitutionRuntime(
+            source_paths=(tmp_path / "verified-source",)
+        )
         request = request_for(instance, manifest, environment)
         with pytest.raises(StartupFailed):
             deploy(
@@ -1337,11 +1339,23 @@ class TestDeploymentExecution:
         assert record.lifecycle == LIFECYCLE_FAILED
         assert record.failure is not None
         assert record.failure.stage == "starting"
-        log = (environment.deployments_dir / record.deployment_id / "components" / COMPONENT_ID / "runtime.log")
+        log = (
+            environment.deployments_dir
+            / record.deployment_id
+            / "components"
+            / COMPONENT_ID
+            / "runtime.log"
+        )
         assert "digest mismatch" in log.read_text(encoding="utf-8")
         # B was never allowed to become the running component: the child
         # rejected it before loading the substituted bytes.
-        assert not (environment.deployments_dir / record.deployment_id / "components" / COMPONENT_ID / "runtime-B-ran.marker").exists()
+        assert not (
+            environment.deployments_dir
+            / record.deployment_id
+            / "components"
+            / COMPONENT_ID
+            / "runtime-B-ran.marker"
+        ).exists()
         assert entry.read_bytes() == replacement
 
     def test_artifact_digest_substitution_is_caught_at_materialization(self, tmp_path):
