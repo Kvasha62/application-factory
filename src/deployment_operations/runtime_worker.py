@@ -158,10 +158,10 @@ class ExecutionBoundaryError(RuntimeWorkerError):
 class _BoundContent:
     """One module of the boundary: the file it must be loaded from, and its shape.
 
-    The boundary deliberately does not carry the expected digest into the
-    process: a process that is told the expected value could echo it, and the
-    digest it reports must be one it computed from the content it loaded. The
-    engine holds the bound digest and compares (ADR-0016 §9).
+    The boundary carries the engine-computed digest as an enforcement invariant,
+    not as runtime self-report. The worker compares the bytes it reads against
+    that digest before any component code can execute; later execution evidence
+    remains a separate observation checked by the engine (ADR-0016 §9–§10).
     """
 
     module: str
