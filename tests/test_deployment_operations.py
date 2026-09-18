@@ -176,6 +176,7 @@ def expect_failure(**environment: object) -> tuple[type[Exception], object]:
     """Return the expected failure type for an environment keyword set."""
     return (Exception, environment)
 
+
 def _cli_env() -> dict[str, str]:
     """Build the isolated environment used by the CLI subprocess tests.
 
