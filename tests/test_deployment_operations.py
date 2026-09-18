@@ -176,6 +176,24 @@ def expect_failure(**environment: object) -> tuple[type[Exception], object]:
     """Return the expected failure type for an environment keyword set."""
     return (Exception, environment)
 
+def _cli_env() -> dict[str, str]:
+    """Build the isolated environment used by the CLI subprocess tests.
+
+    The CLI deliberately does not inherit the pytest process environment.
+    PYTHONPATH makes the uninstalled package importable, while PATH retains
+    the isolated value used by these tests. Windows requires SystemRoot for
+    the runtime worker to initialize its networking stack; forward it only
+    when the host provides it.
+    """
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "PYTHONPATH": str(ROOT / "src"),
+    }
+    system_root = os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT")
+    if system_root:
+        env["SystemRoot"] = system_root
+    return env
+
 
 # ---------------------------------------------------------------------------
 # AC1 — exact Platform Instance identity
@@ -1539,7 +1557,7 @@ class TestOwnershipBoundary:
             "platform_instance",
             "platform_manifest",
             "re",
-            "select",
+            "threading",
             "shutil",
             "subprocess",
             "sysconfig",
@@ -2034,7 +2052,7 @@ class TestCommandLine:
             cwd=ROOT,
             capture_output=True,
             text=True,
-            env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(ROOT / "src")},
+            env=_cli_env(),
             check=False,
         )
         assert completed.returncode == 0, completed.stderr
@@ -2081,7 +2099,7 @@ class TestCommandLine:
             cwd=ROOT,
             capture_output=True,
             text=True,
-            env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(ROOT / "src")},
+            env=_cli_env(),
             check=False,
         )
         assert completed.returncode == 1
@@ -2122,7 +2140,7 @@ class TestCommandLine:
             cwd=ROOT,
             capture_output=True,
             text=True,
-            env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(ROOT / "src")},
+            env=_cli_env(),
             check=False,
         )
         assert completed.returncode == 2

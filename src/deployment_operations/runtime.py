@@ -39,8 +39,8 @@ from __future__ import annotations
 import ast
 import json
 import os
-import select
 import shutil
+import threading
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
@@ -835,6 +835,9 @@ class LocalProcessRuntime:
             # process and not for any Python process it starts (§6, §18).
             "PYTHONSAFEPATH": "1",
         }
+        system_root = os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT")
+        if system_root:
+            environment["SystemRoot"] = system_root
         # Secrets are operational inputs injected at the boundary: they reach
         # the component process and are never written anywhere (ADR-0016 §12).
         environment.update({key: value for key, value in element.secrets.items()})
@@ -976,19 +979,23 @@ def _read_line(process: subprocess.Popen[str], timeout: float) -> str | None:
     """Read one line from the process within the deadline, or return None."""
     if process.stdout is None:  # pragma: no cover - checked by the caller
         raise RuntimeProcessError("the runtime process has no stdout channel")
-    deadline = time.monotonic() + timeout
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return None
-        ready, _, _ = select.select([process.stdout], [], [], remaining)
-        if not ready:
-            return None
-        line = process.stdout.readline()
-        if not line:
-            return None
-        if line.strip():
-            return line
+
+    result: list[str | None] = [None]
+
+    def read() -> None:
+        result[0] = process.stdout.readline()
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    reader.join(timeout)
+
+    if reader.is_alive():
+        return None
+
+    line = result[0]
+    if not line or not line.strip():
+        return None
+    return line
 
 
 __all__ = [
