@@ -1307,7 +1307,10 @@ class TestDeploymentExecution:
             encoding="utf-8",
         )
         original = entry.read_bytes()
-        replacement = original + b"\n# runtime B: different bytes, same reported identity\n"
+        replacement = original + (
+            b"\nfrom pathlib import Path\n"
+            b"Path('runtime-B-ran.marker').write_text('B\\n', encoding='utf-8')\n"
+        )
         environment = environment_for(tmp_path / "runtime")
 
         class LateSubstitutionRuntime(LocalProcessRuntime):
@@ -1319,7 +1322,7 @@ class TestDeploymentExecution:
 
         runtime = LateSubstitutionRuntime(source_paths=(tmp_path / "verified-source",))
         request = request_for(instance, manifest, environment)
-        with refusal(RuntimeProcessError, "digest mismatch|substituted content"):
+        with pytest.raises(StartupFailed):
             deploy(
                 request,
                 runtime=runtime,
@@ -1334,8 +1337,11 @@ class TestDeploymentExecution:
         assert record.lifecycle == LIFECYCLE_FAILED
         assert record.failure is not None
         assert record.failure.stage == "starting"
+        log = (environment.deployments_dir / record.deployment_id / "components" / COMPONENT_ID / "runtime.log")
+        assert "digest mismatch" in log.read_text(encoding="utf-8")
         # B was never allowed to become the running component: the child
         # rejected it before loading the substituted bytes.
+        assert not (environment.deployments_dir / record.deployment_id / "components" / COMPONENT_ID / "runtime-B-ran.marker").exists()
         assert entry.read_bytes() == replacement
 
     def test_artifact_digest_substitution_is_caught_at_materialization(self, tmp_path):
