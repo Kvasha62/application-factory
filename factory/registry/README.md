@@ -230,6 +230,45 @@ Identity, Tenant Authority, Authorization; данными Records; состоя�
 `digest` не может быть `latest`, а опубликованный артефакт обязан быть
 pinned по digest.
 
+
+## 9.1 Canonical representation and artifact boundary — F-3B Deliverables 1–2 (Issue #84)
+
+Per ADR-0018 §3.1,§4,§5,§8,§13,§16,§21,§25-27,§31-32, ARCHITECTURE.md §11,§16,§31,§37.1. Это Factory/Registry contract как deliverable Issue #84, не изменение архитектуры и не implementation. `source_package` и `container_image` сейчас не публикуются (все entries `none` per §9) — контракт определяет как Factory должна определять canonical форму когда они будут публиковаться.
+
+### source_package
+
+- canonical representation — DELIVERABLE: immutable canonical representation defined by Factory; for source_package it MAY be realized as deterministic file set / archive, concrete form is a deliverable of #84, not an architectural mandate. Digest input includes content bytes, file names, directory/structural information, all in deterministic canonical order; timestamps and owner bits not part of executable semantics do NOT enter identity; metadata that really affects executable semantics MUST NOT be arbitrarily excluded from canonical representation. Technology-neutral, no specific archive format mandated.
+- sealed artifact unit — весь canonical representation как опубликован, identity = `artifact.digest` per §3.1,§4.
+- artifact boundary — DELIVERABLE: which component-owned executable bytes are inside sealed unit as defined by Factory; physical presence of a file inside canonical representation is NOT sufficient proof of ownership; only content that Factory defines as part of closed executable unit enters boundary; non-owned content inside sealed artifact is allowed only if non-executable; executable content inside sealed artifact MUST BE component-owned per Factory contract; Factory MUST NOT define executable content inside sealed artifact as non-owned; if ownership cannot be proven — fail-closed per §16.
+
+### container_image
+
+- canonical representation — DELIVERABLE: immutable image artifact defined by Factory; digest is identity of sealed unit, not only entrypoint. Concrete OCI layout is implementation detail, not an architectural requirement; concrete form is a deliverable of #84. Digest input same rules as for source_package: content bytes + file names + directory/structural information (image structure) in deterministic canonical order; timestamps/owner bits not part of executable semantics do NOT enter identity; executable-relevant metadata MUST NOT be arbitrarily excluded. Technology-neutral, no specific OCI layout mandated.
+- artifact boundary — DELIVERABLE: same rules as source_package: boundary = component-owned executable bytes inside canonical as defined by Factory; physical presence NOT sufficient; non-owned only if non-executable; executable MUST BE owned; MUST NOT define executable as non-owned; fail-closed if cannot prove.
+- host/container runtime — не является частью boundary per ADR-0018 §8.
+
+### Cross-type invariants
+
+- `artifact.digest` = identity sealed artifact unit, не identity execution graph — §4
+- Factory — единственный source of truth для canonical, boundary, digest, reproducibility — §5, §37.1
+- Manifest/Instance наследуют identity, не создают и не расширяют boundary, не хранят native graph / DT_NEEDED — §10,§11, Alt A/B rejected §23
+- D&O получает authoritative contract, проверяет, fail-closed, не создаёт boundary, не добавляет runtime-discovered — §6,§14,§16
+- Workspace, host search path, runtime-discovered files — не доказательство trust — §16,§17,§28
+- `artifact_type=none` — digest null, no artificial digest, не часть F-3B, при требовании F-3B → отказ per §16 — §9.1
+- `deployed` = ADR-0016 §10 + ADR-0017 §33-35, не изменяется — §9.1,§20,§32
+- Runtime discovery не расширяет trusted closure, DT_NEEDED может использоваться как enforcement mechanism, но не как source of truth — §6
+
+### What this contract does NOT prescribe
+
+- конкретный архивный формат (tar/zip/directory)
+- конкретный OCI/runtime implementation
+- ELF parser как обязательная архитектура
+- Python import hook как обязательная архитектура
+- DT_NEEDED в Manifest/Instance
+- native dependency graph в Manifest/Instance
+- VEB как source of truth
+- runtime auto-add / first-object-only verification
+
 ---
 
 ## 10. Lifecycle
