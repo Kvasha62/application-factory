@@ -249,7 +249,7 @@ def read_state(
     environment: DeploymentEnvironment, instance: Instance, *, attempt: int = 1
 ):
     """Read the deployment state record written by an operation."""
-    from deployment_operations import derive_deployment_id
+    from deployment_operations import DeploymentStateStore, derive_deployment_id
 
     deployment_id = derive_deployment_id(
         instance.document.get("platform_id"),
@@ -257,7 +257,7 @@ def read_state(
         environment.environment_id,
         attempt,
     )
-    path = environment.operations_dir / f"{deployment_id}.json"
+    path = DeploymentStateStore.path_for(environment.operations_dir, deployment_id)
     assert path.is_file(), f"deployment state was not written at {path}"
     return load_record(path)
 
@@ -266,7 +266,7 @@ def read_events(
     environment: DeploymentEnvironment, instance: Instance, *, attempt: int = 1
 ):
     """Read the operational event journal of an operation."""
-    from deployment_operations import derive_deployment_id
+    from deployment_operations import EventJournal, derive_deployment_id
 
     deployment_id = derive_deployment_id(
         instance.document.get("platform_id"),
@@ -274,7 +274,7 @@ def read_events(
         environment.environment_id,
         attempt,
     )
-    path = environment.operations_dir / f"{deployment_id}.events.jsonl"
+    path = EventJournal.path_for(environment.operations_dir, deployment_id)
     assert path.is_file(), f"the event journal was not written at {path}"
     return tuple(
         json.loads(line)

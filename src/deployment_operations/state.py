@@ -29,6 +29,7 @@ deferred to later slices (ADR-0017 §39); this slice never fabricates them.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from collections.abc import Callable, Mapping, Sequence
@@ -533,7 +534,8 @@ class DeploymentStateStore:
 
     @staticmethod
     def path_for(operations_dir: Path, deployment_id: str) -> Path:
-        return operations_dir / f"{deployment_id}.json"
+        safe = hashlib.sha256(deployment_id.encode("utf-8")).hexdigest()
+        return operations_dir / f"{safe}.json"
 
     def exists(self) -> bool:
         return self.path.is_file()

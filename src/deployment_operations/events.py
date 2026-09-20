@@ -15,6 +15,7 @@ refuses a write that would contain a secret the boundary injected.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from collections.abc import Mapping, Sequence
@@ -118,7 +119,8 @@ class EventJournal:
 
     @staticmethod
     def path_for(operations_dir: Path, deployment_id: str) -> Path:
-        return operations_dir / f"{deployment_id}.events.jsonl"
+        safe = hashlib.sha256(deployment_id.encode("utf-8")).hexdigest()
+        return operations_dir / f"{safe}.events.jsonl"
 
     def next_sequence(self) -> int:
         if not self.path.is_file():
