@@ -46,6 +46,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import sys
 import sysconfig
 from collections.abc import Callable, Mapping, Sequence
@@ -156,17 +157,18 @@ class ExecutionBoundaryError(RuntimeWorkerError):
 
 @dataclass(frozen=True)
 class _BoundContent:
-    """One module of the boundary: the file it must be loaded from, and its shape.
+    """One module of the boundary: its path, shape, and expected launch digest.
 
-    The boundary deliberately does not carry the expected digest into the
-    process: a process that is told the expected value could echo it, and the
-    digest it reports must be one it computed from the content it loaded. The
-    engine holds the bound digest and compares (ADR-0016 §9).
+    The digest is the expected value from engine binding (ADR-0018 §5,
+    Issue #84). The worker is not the source of truth: it only compares that
+    value with the bytes it is about to execute, failing closed before
+    compilation or execution (§6, §14, §16).
     """
 
     module: str
     path: Path
     is_package: bool
+    digest: str
 
 
 class _BoundLoader(importlib.abc.Loader):
@@ -203,6 +205,13 @@ class _BoundLoader(importlib.abc.Loader):
         # when the process is later asked about itself (§8).
         known = self._boundary.loaded_digest(content.module)
         fresh = f"sha256:{hashlib.sha256(source).hexdigest()}"
+        if fresh != content.digest:
+            message = (
+                f"{content.module}: digest mismatch — expected {content.digest} "
+                f"observed {fresh}; what executes is not what was verified"
+            )
+            self._boundary.record_refusal(message)
+            raise ExecutionBoundaryError(message)
         if known is not None and known != fresh:
             # This process has already loaded this module, and the content at
             # the bound path is no longer the content it loaded. A module that
@@ -397,8 +406,7 @@ class _ExecutionAudit:
             not self._boundary.is_bound_source(source, filename)
         ):
             # Only the bytes the boundary verified may be compiled under a
-            # verified name: any other source is building a code object out of
-            # content the deployment never verified (§8, §13).
+            # verified name: any other source is building a code object out of            # content the deployment never verified (§8, §13).
             self._refuse_with(
                 f"compiled source at {filename}: this content is verified "
                 "execution content, and only the bytes this boundary verified are "
@@ -548,10 +556,16 @@ class _ExecutionBoundary:
         for entry in binding["modules"]:
             module = str(entry["module"])
             path = Path(str(entry["path"]))
+            digest = str(entry.get("digest", ""))
+            if not _is_valid_digest(digest):
+                raise ExecutionBoundaryError(
+                    f"{module}: missing or invalid digest in launch binding"
+                )
             self.bound_modules[module] = _BoundContent(
                 module=module,
                 path=path,
                 is_package=path.name == "__init__.py",
+                digest=digest,
             )
         self.bound_modules_order = [
             str(entry["module"]) for entry in binding["modules"]
@@ -797,8 +811,7 @@ class _ExecutionBoundary:
 
     def _location_verdict(self, path: Path) -> str | None:
         try:
-            resolved = path.resolve()
-        except OSError:  # pragma: no cover - unreadable paths are not trusted
+            resolved = path.resolve()        except OSError:  # pragma: no cover - unreadable paths are not trusted
             return None
         bound_paths = {
             content.path.resolve() for content in self.bound_modules.values()
@@ -1085,6 +1098,14 @@ def _resolve_under(module: str, root: Path) -> Path | None:
     return None
 
 
+def _is_valid_digest(value: object) -> bool:
+    """True only for the canonical sha256 digest emitted by engine binding."""
+    return (
+        isinstance(value, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is not None
+    )
+
+
 def _load_binding(raw: str) -> dict[str, Any]:
     """Parse the launch binding the engine started this process with.
 
@@ -1128,8 +1149,15 @@ def _load_binding(raw: str) -> dict[str, Any]:
             )
         if module in seen:
             raise RuntimeWorkerError(f"{module}: the launch binding repeats a module")
+        digest = entry.get("digest")
+        if not isinstance(digest, str) or not digest:
+            raise RuntimeWorkerError(f"{module}: launch binding missing digest")
+        if not _is_valid_digest(digest):
+            raise RuntimeWorkerError(
+                f"{module}: launch binding has malformed digest {digest!r}"
+            )
         seen.add(module)
-        parsed.append({"module": module, "path": path})
+        parsed.append({"module": module, "path": path, "digest": digest})
     return {
         "root": Path(root),
         "roots": _paths("roots"),
@@ -1197,8 +1225,7 @@ def _normalize_migrations(
         if callable(declared):
             return [("migration-1", declared)]
         raise RuntimeWorkerError(
-            f"{location} does not declare a sequence of forward migrations"
-        )
+            f"{location} does not declare a sequence of forward migrations"        )
 
     migrations: list[tuple[str, Callable[[Any], Any]]] = []
     for index, entry in enumerate(declared):
