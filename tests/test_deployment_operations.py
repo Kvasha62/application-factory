@@ -2430,9 +2430,7 @@ class TestExecutionContentBinding:
         )
         request = request_for(instance, manifest, environment)
 
-        with refusal(
-            IdentityVerificationFailed, "what executes is not what was verified"
-        ):
+        with refusal(StartupFailed, "digest mismatch"):
             deploy(request, runtime=runtime)
 
         record = only_operation(environment)
@@ -2441,23 +2439,20 @@ class TestExecutionContentBinding:
         assert record.deployed is False
         assert record.running is False
         assert record.failure is not None
-        assert record.failure.stage == "ready"
-        # The substituted content really ran, and it passed every check that
-        # reads the runtime's own report: healthy, ready, pinned identity.
+        assert record.failure.stage == "starting"
+        # F-3B refuses substituted content before compilation or execution.
         workspace = (
             environment.deployments_dir
             / record.deployment_id
             / "components"
             / COMPONENT_ID
         )
-        assert (workspace / "substituted-content.marker").exists()
-        component = record.components[0]
-        assert component.healthy is True
-        assert component.observed_component_id == COMPONENT_ID
-        assert component.observed_version == COMPONENT_VERSION
-        assert component.observed_platform_id == PLATFORM_ID
-        # The engine's own re-read of the bound content refuses it too.
-        assert any("changed" in error for error in record.failure.errors)
+        assert not (workspace / "substituted-content.marker").exists()
+        assert any("digest mismatch" in error for error in record.failure.errors)
+        assert any(
+            "what executes is not what was verified" in error
+            for error in record.failure.errors
+        )
 
     def test_content_changed_after_the_launch_is_refused_by_the_engine(
         self, tmp_path, instance, manifest
