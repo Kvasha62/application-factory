@@ -4061,6 +4061,7 @@ class TestVerifiedExecutionBoundary:
         assert record.deployed is False
         assert record.identity_verified is False
 
+
 class TestWorkerDigestEnforcement:
     """Commit 3 F-3B: worker enforces expected vs observed digest from launch binding.
 
@@ -4079,9 +4080,7 @@ class TestWorkerDigestEnforcement:
                 "modules": [{"module": "m", "path": str(tmp_path / "m.py")}],
             }
         )
-        with pytest.raises(
-            runtime_worker.RuntimeWorkerError, match="missing digest"
-        ):
+        with pytest.raises(runtime_worker.RuntimeWorkerError, match="missing digest"):
             runtime_worker._load_binding(raw)
 
     def test_launch_binding_with_malformed_digest_fails_closed(self, tmp_path):
@@ -4119,9 +4118,7 @@ class TestWorkerDigestEnforcement:
         raw = json.dumps(
             {
                 "root": str(tmp_path),
-                "modules": [
-                    {"module": "m", "path": str(path), "digest": digest}
-                ],
+                "modules": [{"module": "m", "path": str(path), "digest": digest}],
             }
         )
         parsed = runtime_worker._load_binding(raw)
@@ -4137,9 +4134,7 @@ class TestWorkerDigestEnforcement:
             "root": str(tmp_path),
             "roots": [],
             "untrusted": [],
-            "modules": [
-                {"module": "bound", "path": str(path), "digest": digest}
-            ],
+            "modules": [{"module": "bound", "path": str(path), "digest": digest}],
         }
         boundary = runtime_worker._ExecutionBoundary(binding)
         content = boundary.bound_modules["bound"]
@@ -4149,9 +4144,7 @@ class TestWorkerDigestEnforcement:
         assert boundary.loaded_digest("bound") == digest
         assert path.name in str(boundary._bound_source)
 
-    def test_worker_refuses_digest_mismatch_before_compile_and_exec(
-        self, tmp_path
-    ):
+    def test_worker_refuses_digest_mismatch_before_compile_and_exec(self, tmp_path):
         path = tmp_path / "bound.py"
         path.write_bytes(b"VALUE=1\n")
         digest_a = content_digest(path)
@@ -4159,9 +4152,7 @@ class TestWorkerDigestEnforcement:
             "root": str(tmp_path),
             "roots": [],
             "untrusted": [],
-            "modules": [
-                {"module": "bound", "path": str(path), "digest": digest_a}
-            ],
+            "modules": [{"module": "bound", "path": str(path), "digest": digest_a}],
         }
         boundary = runtime_worker._ExecutionBoundary(binding)
         content = boundary.bound_modules["bound"]
@@ -4252,9 +4243,7 @@ class TestWorkerEvidenceExpectedDigest:
         monkeypatch.setitem(sys.modules, "bound", module)
 
         evidence = boundary.evidence()
-        record = next(
-            item for item in evidence["modules"] if item["module"] == "bound"
-        )
+        record = next(item for item in evidence["modules"] if item["module"] == "bound")
 
         assert record["loaded"] is True
         assert record["digest"] == expected
@@ -4298,9 +4287,7 @@ class TestWorkerEvidenceExpectedDigest:
             loader.exec_module(module)
 
         evidence = boundary.evidence()
-        record = next(
-            item for item in evidence["modules"] if item["module"] == "bound"
-        )
+        record = next(item for item in evidence["modules"] if item["module"] == "bound")
 
         assert record["expected_digest"] == expected
         assert record["digest"] == observed
@@ -4340,9 +4327,7 @@ class TestWorkerEvidenceExpectedDigest:
             loader.exec_module(module)
 
         evidence = boundary.evidence()
-        record = next(
-            item for item in evidence["modules"] if item["module"] == "bound"
-        )
+        record = next(item for item in evidence["modules"] if item["module"] == "bound")
 
         assert record["expected_digest"] == expected
         assert record["digest"] == observed

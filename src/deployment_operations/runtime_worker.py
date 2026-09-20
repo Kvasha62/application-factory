@@ -1235,7 +1235,8 @@ def _normalize_migrations(
         if callable(declared):
             return [("migration-1", declared)]
         raise RuntimeWorkerError(
-            f"{location} does not declare a sequence of forward migrations"        )
+            f"{location} does not declare a sequence of forward migrations"
+        )
 
     migrations: list[tuple[str, Callable[[Any], Any]]] = []
     for index, entry in enumerate(declared):
