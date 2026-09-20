@@ -841,18 +841,23 @@ class LocalProcessRuntime:
         # the component process and are never written anywhere (ADR-0016 §12).
         environment.update({key: value for key, value in element.secrets.items()})
 
-        # The launch instruction names the bound files and never the digests:
-        # the process reports the digests of what it actually loaded, and the
-        # engine compares that evidence with this binding. A process that is
-        # told the expected digest could echo it; one that is told the file
-        # cannot load anything else (§9).
+        # The launch instruction carries the engine's immutable content
+        # binding, including each digest per Factory contract Issue #84
+        # Deliverables 1-2. Digest originates from Factory via Registry→
+        # Manifest→Instance→engine binding (ADR-0018 §5). Worker enforces
+        # it against bytes it reads before execution (Commit 3). This is
+        # enforcement detail, not new source of truth (§6, §14).
         instruction = json.dumps(
             {
                 "root": str(execution.root),
                 "roots": [str(root) for root in execution.roots],
                 "untrusted": [str(path) for path in execution.untrusted],
                 "modules": [
-                    {"module": module.module, "path": str(module.path)}
+                    {
+                        "module": module.module,
+                        "path": str(module.path),
+                        "digest": module.digest,
+                    }
                     for module in execution.modules
                 ],
             },
