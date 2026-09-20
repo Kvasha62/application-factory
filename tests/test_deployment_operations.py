@@ -4098,8 +4098,7 @@ class TestWorkerDigestEnforcement:
 
     def test_launch_binding_with_canonical_digest_is_accepted(self, tmp_path):
         path = tmp_path / "m.py"
-        path.write_bytes(b"VALUE=1
-")
+        path.write_bytes(b"VALUE=1\n")
         digest = content_digest(path)
         assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
         raw = json.dumps(
@@ -4117,8 +4116,7 @@ class TestWorkerDigestEnforcement:
 
     def test_worker_accepts_correct_digest_and_executes(self, tmp_path):
         path = tmp_path / "bound.py"
-        path.write_bytes(b"VALUE=42
-")
+        path.write_bytes(b"VALUE=42\n")
         digest = content_digest(path)
         binding = {
             "root": str(tmp_path),
@@ -4140,8 +4138,7 @@ class TestWorkerDigestEnforcement:
         self, tmp_path
     ):
         path = tmp_path / "bound.py"
-        path.write_bytes(b"VALUE=1
-")
+        path.write_bytes(b"VALUE=1\n")
         digest_a = content_digest(path)
         binding = {
             "root": str(tmp_path),
@@ -4153,8 +4150,7 @@ class TestWorkerDigestEnforcement:
         }
         boundary = runtime_worker._ExecutionBoundary(binding)
         content = boundary.bound_modules["bound"]
-        path.write_bytes(b"VALUE=2
-")
+        path.write_bytes(b"VALUE=2\n")
         digest_b = content_digest(path)
         assert digest_b != digest_a
 
@@ -4176,8 +4172,7 @@ class TestWorkerDigestEnforcement:
 
     def test_worker_refusal_is_recorded_as_evidence(self, tmp_path):
         path = tmp_path / "bound.py"
-        path.write_bytes(b"ORIGINAL=1
-")
+        path.write_bytes(b"ORIGINAL=1\n")
         digest_expected = content_digest(path)
         binding = {
             "root": str(tmp_path),
@@ -4193,8 +4188,7 @@ class TestWorkerDigestEnforcement:
         }
         boundary = runtime_worker._ExecutionBoundary(binding)
         content = boundary.bound_modules["bound"]
-        path.write_bytes(b"MUTATED=1
-")
+        path.write_bytes(b"MUTATED=1\n")
         digest_observed = content_digest(path)
 
         with pytest.raises(runtime_worker.ExecutionBoundaryError):

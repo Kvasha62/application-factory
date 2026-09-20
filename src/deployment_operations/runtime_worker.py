@@ -811,7 +811,8 @@ class _ExecutionBoundary:
 
     def _location_verdict(self, path: Path) -> str | None:
         try:
-            resolved = path.resolve()        except OSError:  # pragma: no cover - unreadable paths are not trusted
+            resolved = path.resolve()
+        except OSError:  # pragma: no cover - unreadable paths are not trusted
             return None
         bound_paths = {
             content.path.resolve() for content in self.bound_modules.values()
