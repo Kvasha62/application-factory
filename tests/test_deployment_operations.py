@@ -2933,6 +2933,18 @@ class LinkingRuntime:
 class TestVerifiedExecutionBoundary:
     """F-3B: what executes is the verified closure, by every route (§9, §10)."""
 
+    def _require_symlink_support(self, tmp_path):
+        target = tmp_path / "symlink-capability-target"
+        link = tmp_path / "symlink-capability-link"
+        target.write_text("probe", encoding="utf-8")
+        try:
+            link.symlink_to(target)
+        except OSError as error:
+            pytest.skip(f"symlink creation is unavailable: {error}")
+        finally:
+            link.unlink(missing_ok=True)
+            target.unlink(missing_ok=True)
+
     # -- 1–4: the verified closure is what executes -------------------------
 
     def test_the_verified_direct_module_is_the_content_that_executes(
@@ -3301,6 +3313,7 @@ class TestVerifiedExecutionBoundary:
         self, tmp_path, instance, manifest
     ):
         """A symlink to workspace content is not the content that was verified."""
+        self._require_symlink_support(tmp_path)
         source = verified_root(tmp_path, helper=True)
         environment = adversary_environment(tmp_path, (source,), route="bound")
         workspace = workspace_of(environment, instance)
@@ -3319,6 +3332,7 @@ class TestVerifiedExecutionBoundary:
         self, tmp_path, instance, manifest
     ):
         """Directory links resolve to what they are, not to where they appear."""
+        self._require_symlink_support(tmp_path)
         # A link inside the workspace pointing at content outside it.
         outside = tmp_path / "outside"
         outside.mkdir()
