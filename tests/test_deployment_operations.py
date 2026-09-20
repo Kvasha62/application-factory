@@ -4045,3 +4045,165 @@ class TestVerifiedExecutionBoundary:
         assert not (workspace / "migration-outcome.txt").exists()
         assert record.deployed is False
         assert record.identity_verified is False
+
+class TestWorkerDigestEnforcement:
+    """Commit 3 F-3B: worker enforces expected vs observed digest from launch binding.
+
+    Contract:
+      runtime.py:_spawn → modules[].{module,path,digest}
+      → _load_binding() → _ExecutionBoundary → _BoundContent.digest
+      → _BoundLoader.exec_module() → read_bytes → observed digest
+      → equality check → compile/exec only after success.
+    Worker is NOT source of truth, only compares.
+    """
+
+    def test_launch_binding_without_digest_fails_closed(self, tmp_path):
+        raw = json.dumps(
+            {
+                "root": str(tmp_path),
+                "modules": [{"module": "m", "path": str(tmp_path / "m.py")}],
+            }
+        )
+        with pytest.raises(
+            runtime_worker.RuntimeWorkerError, match="missing digest"
+        ):
+            runtime_worker._load_binding(raw)
+
+    def test_launch_binding_with_malformed_digest_fails_closed(self, tmp_path):
+        malformed = [
+            "a" * 64,
+            "sha256:" + "A" * 64,
+            "sha256:" + "a" * 63,
+            "sha256:" + "a" * 65,
+            "sha256:" + "g" * 64,
+            " sha256:" + "a" * 64,
+        ]
+        for digest in malformed:
+            raw = json.dumps(
+                {
+                    "root": str(tmp_path),
+                    "modules": [
+                        {
+                            "module": "m",
+                            "path": str(tmp_path / "m.py"),
+                            "digest": digest,
+                        }
+                    ],
+                }
+            )
+            with pytest.raises(
+                runtime_worker.RuntimeWorkerError, match="malformed digest"
+            ):
+                runtime_worker._load_binding(raw)
+
+    def test_launch_binding_with_canonical_digest_is_accepted(self, tmp_path):
+        path = tmp_path / "m.py"
+        path.write_bytes(b"VALUE=1
+")
+        digest = content_digest(path)
+        assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
+        raw = json.dumps(
+            {
+                "root": str(tmp_path),
+                "modules": [
+                    {"module": "m", "path": str(path), "digest": digest}
+                ],
+            }
+        )
+        parsed = runtime_worker._load_binding(raw)
+        assert parsed["modules"][0]["digest"] == digest
+        boundary = runtime_worker._ExecutionBoundary(parsed)
+        assert boundary.bound_modules["m"].digest == digest
+
+    def test_worker_accepts_correct_digest_and_executes(self, tmp_path):
+        path = tmp_path / "bound.py"
+        path.write_bytes(b"VALUE=42
+")
+        digest = content_digest(path)
+        binding = {
+            "root": str(tmp_path),
+            "roots": [],
+            "untrusted": [],
+            "modules": [
+                {"module": "bound", "path": str(path), "digest": digest}
+            ],
+        }
+        boundary = runtime_worker._ExecutionBoundary(binding)
+        content = boundary.bound_modules["bound"]
+        module = types.ModuleType("bound")
+        runtime_worker._BoundLoader(boundary, content).exec_module(module)
+        assert module.VALUE == 42
+        assert boundary.loaded_digest("bound") == digest
+        assert path.name in str(boundary._bound_source)
+
+    def test_worker_refuses_digest_mismatch_before_compile_and_exec(
+        self, tmp_path
+    ):
+        path = tmp_path / "bound.py"
+        path.write_bytes(b"VALUE=1
+")
+        digest_a = content_digest(path)
+        binding = {
+            "root": str(tmp_path),
+            "roots": [],
+            "untrusted": [],
+            "modules": [
+                {"module": "bound", "path": str(path), "digest": digest_a}
+            ],
+        }
+        boundary = runtime_worker._ExecutionBoundary(binding)
+        content = boundary.bound_modules["bound"]
+        path.write_bytes(b"VALUE=2
+")
+        digest_b = content_digest(path)
+        assert digest_b != digest_a
+
+        module = types.ModuleType("bound")
+        loader = runtime_worker._BoundLoader(boundary, content)
+        with pytest.raises(
+            runtime_worker.ExecutionBoundaryError, match="digest mismatch"
+        ) as exc:
+            loader.exec_module(module)
+
+        msg = str(exc.value)
+        assert digest_a in msg
+        assert digest_b in msg
+        assert "expected" in msg and "observed" in msg
+        assert boundary.loaded_digest("bound") is None, "record_load must not happen"
+        assert not boundary._bound_code, "compile_bound must not happen"
+        assert str(path) not in boundary._bound_source, "compile_bound must not happen"
+        assert not hasattr(module, "VALUE"), "exec must not happen"
+
+    def test_worker_refusal_is_recorded_as_evidence(self, tmp_path):
+        path = tmp_path / "bound.py"
+        path.write_bytes(b"ORIGINAL=1
+")
+        digest_expected = content_digest(path)
+        binding = {
+            "root": str(tmp_path),
+            "roots": [],
+            "untrusted": [],
+            "modules": [
+                {
+                    "module": "bound",
+                    "path": str(path),
+                    "digest": digest_expected,
+                }
+            ],
+        }
+        boundary = runtime_worker._ExecutionBoundary(binding)
+        content = boundary.bound_modules["bound"]
+        path.write_bytes(b"MUTATED=1
+")
+        digest_observed = content_digest(path)
+
+        with pytest.raises(runtime_worker.ExecutionBoundaryError):
+            runtime_worker._BoundLoader(boundary, content).exec_module(
+                types.ModuleType("bound")
+            )
+
+        assert boundary._refusals, "refusal must be recorded"
+        last = boundary._refusals[-1]
+        assert "digest mismatch" in last
+        assert digest_expected in last
+        assert digest_observed in last
