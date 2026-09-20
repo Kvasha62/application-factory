@@ -3544,7 +3544,13 @@ class TestVerifiedExecutionBoundary:
                 "root": str(root),
                 "roots": [str(root)],
                 "untrusted": [str(workspace)],
-                "modules": [{"module": "boundary_case_helper", "path": str(bound)}],
+                "modules": [
+                    {
+                        "module": "boundary_case_helper",
+                        "path": str(bound),
+                        "digest": content_digest(bound),
+                    }
+                ],
             }
         )
         boundary.establish()
@@ -3560,9 +3566,8 @@ class TestVerifiedExecutionBoundary:
                 runtime_worker._BoundLoader(boundary, content).exec_module(
                     types.ModuleType("boundary_case_helper")
                 )
-            assert "is not the content this boundary was established on" in str(
-                refusal.value
-            )
+            assert "digest mismatch" in str(refusal.value)
+            assert "what executes is not what was verified" in str(refusal.value)
 
             # The established content loads; the same name never loads anything
             # else afterwards.
@@ -3573,7 +3578,8 @@ class TestVerifiedExecutionBoundary:
             bound.write_bytes(substituted_helper())
             with pytest.raises(runtime_worker.ExecutionBoundaryError) as second:
                 runtime_worker._BoundLoader(boundary, content).exec_module(module)
-            assert "has changed since" in str(second.value)
+            assert "digest mismatch" in str(second.value)
+            assert "what executes is not what was verified" in str(second.value)
         finally:
             sys.meta_path[:] = [
                 finder
