@@ -1003,6 +1003,7 @@ class _ExecutionBoundary:
                         "path": str(content.path),
                         "digest": self._load_digests.get(module)
                         or _content_digest(content.path),
+                        "expected_digest": self.bound_modules[module].digest,
                         "loaded": False,
                     }
                 )
@@ -1027,6 +1028,7 @@ class _ExecutionBoundary:
                         "digest": (
                             _optional_digest(actual) if actual is not None else ""
                         ),
+                        "expected_digest": self.bound_modules[module].digest,
                         "loaded": False,
                     }
                 )
@@ -1044,7 +1046,13 @@ class _ExecutionBoundary:
                 if report not in foreign:
                     foreign.append(report)
                 modules.append(
-                    {"module": module, "path": "", "digest": "", "loaded": False}
+                    {
+                        "module": module,
+                        "path": "",
+                        "digest": "",
+                        "expected_digest": self.bound_modules[module].digest,
+                        "loaded": False,
+                    }
                 )
                 continue
             modules.append(
@@ -1052,6 +1060,7 @@ class _ExecutionBoundary:
                     "module": module,
                     "path": str(actual),
                     "digest": self._load_digests[module],
+                    "expected_digest": self.bound_modules[module].digest,
                     "loaded": True,
                 }
             )

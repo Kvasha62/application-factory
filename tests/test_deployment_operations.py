@@ -4201,3 +4201,139 @@ class TestWorkerDigestEnforcement:
         assert "digest mismatch" in last
         assert digest_expected in last
         assert digest_observed in last
+
+
+class TestWorkerEvidenceExpectedDigest:
+    """Verify that worker evidence exposes expected and observed digests separately."""
+
+    def test_evidence_contains_expected_digest_on_successful_load(
+        self, tmp_path, monkeypatch
+    ):
+        path = tmp_path / "bound.py"
+        path.write_bytes(b"VALUE=42\n")
+        expected = content_digest(path)
+
+        binding = {
+            "root": str(tmp_path),
+            "roots": [],
+            "untrusted": [],
+            "modules": [
+                {
+                    "module": "bound",
+                    "path": str(path),
+                    "digest": expected,
+                }
+            ],
+        }
+
+        boundary = runtime_worker._ExecutionBoundary(binding)
+        content = boundary.bound_modules["bound"]
+
+        module = types.ModuleType("bound")
+        module.__file__ = str(path)
+        loader = runtime_worker._BoundLoader(boundary, content)
+
+        loader.exec_module(module)
+        monkeypatch.setitem(sys.modules, "bound", module)
+
+        evidence = boundary.evidence()
+        record = next(
+            item for item in evidence["modules"] if item["module"] == "bound"
+        )
+
+        assert record["loaded"] is True
+        assert record["digest"] == expected
+        assert record["expected_digest"] == expected
+
+    def test_evidence_expected_from_binding_and_observed_from_worker_bytes(
+        self, tmp_path
+    ):
+        path = tmp_path / "bound.py"
+        path.write_bytes(b"VALUE=1\n")
+        observed = content_digest(path)
+
+        expected_path = tmp_path / "expected.py"
+        expected_path.write_bytes(b"VALUE=2\n")
+        expected = content_digest(expected_path)
+
+        binding = {
+            "root": str(tmp_path),
+            "roots": [],
+            "untrusted": [],
+            "modules": [
+                {
+                    "module": "bound",
+                    "path": str(path),
+                    "digest": expected,
+                }
+            ],
+        }
+
+        boundary = runtime_worker._ExecutionBoundary(binding)
+        content = boundary.bound_modules["bound"]
+
+        assert content.digest == expected
+        assert content.digest != observed
+
+        module = types.ModuleType("bound")
+        module.__file__ = str(path)
+        loader = runtime_worker._BoundLoader(boundary, content)
+
+        with pytest.raises(runtime_worker.ExecutionBoundaryError):
+            loader.exec_module(module)
+
+        evidence = boundary.evidence()
+        record = next(
+            item for item in evidence["modules"] if item["module"] == "bound"
+        )
+
+        assert record["expected_digest"] == expected
+        assert record["digest"] == observed
+        assert record["expected_digest"] != record["digest"]
+
+    def test_evidence_mismatch_refusal_contains_expected_and_observed_and_no_loaded(
+        self, tmp_path
+    ):
+        path = tmp_path / "bound.py"
+        path.write_bytes(b"ORIGINAL=1\n")
+        expected = content_digest(path)
+
+        binding = {
+            "root": str(tmp_path),
+            "roots": [],
+            "untrusted": [],
+            "modules": [
+                {
+                    "module": "bound",
+                    "path": str(path),
+                    "digest": expected,
+                }
+            ],
+        }
+
+        boundary = runtime_worker._ExecutionBoundary(binding)
+        content = boundary.bound_modules["bound"]
+
+        path.write_bytes(b"MUTATED=1\n")
+        observed = content_digest(path)
+
+        module = types.ModuleType("bound")
+        module.__file__ = str(path)
+        loader = runtime_worker._BoundLoader(boundary, content)
+
+        with pytest.raises(runtime_worker.ExecutionBoundaryError):
+            loader.exec_module(module)
+
+        evidence = boundary.evidence()
+        record = next(
+            item for item in evidence["modules"] if item["module"] == "bound"
+        )
+
+        assert record["expected_digest"] == expected
+        assert record["digest"] == observed
+        assert record["expected_digest"] != record["digest"]
+        assert record["loaded"] is False
+        assert any(
+            expected in refusal and observed in refusal
+            for refusal in evidence["foreign"]
+        )
