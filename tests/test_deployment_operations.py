@@ -136,6 +136,16 @@ def refusal(
     ), f"expected {fragment!r} among the refusal diagnostics: {diagnostics}"
 
 
+@pytest.fixture
+def restore_veb_meta_path():
+    yield
+    sys.meta_path[:] = [
+        finder
+        for finder in sys.meta_path
+        if not isinstance(finder, runtime_worker._VebFinder)
+    ]
+
+
 @pytest.fixture(scope="module")
 def root() -> Path:
     return discover_root()
@@ -4062,6 +4072,7 @@ class TestVerifiedExecutionBoundary:
         assert record.identity_verified is False
 
 
+@pytest.mark.usefixtures("restore_veb_meta_path")
 class TestWorkerDigestEnforcement:
     """Commit 3 F-3B: worker enforces expected vs observed digest from launch binding.
 
@@ -4209,6 +4220,7 @@ class TestWorkerDigestEnforcement:
         assert digest_observed in last
 
 
+@pytest.mark.usefixtures("restore_veb_meta_path")
 class TestWorkerEvidenceExpectedDigest:
     """Verify that worker evidence exposes expected and observed digests separately."""
 
