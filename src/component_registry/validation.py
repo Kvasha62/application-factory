@@ -714,6 +714,7 @@ def _artifact_errors(entry: Mapping, path: str) -> list[str]:
             f"{path}.artifact.digest: {digest!r} is a floating selector; an artifact is selected by immutable digest (ARCHITECTURE.md §1.3)"
         )
     pinned = artifact.get("pinned")
+    canonical_form = artifact.get("canonical_form")
 
     if artifact_type == "none":
         if digest is not None:
@@ -724,7 +725,11 @@ def _artifact_errors(entry: Mapping, path: str) -> list[str]:
             errors.append(
                 f"{path}.artifact.pinned: artifact_type 'none' must not be pinned"
             )
-    elif artifact_type in ARTIFACT_TYPES:
+        if canonical_form is not None:
+            errors.append(
+                f"{path}.artifact.canonical_form: artifact_type 'none' must not declare a canonical form"
+            )
+    elif artifact_type == "source_package":
         if not isinstance(digest, str) or _DIGEST_RE.fullmatch(digest) is None:
             errors.append(
                 f"{path}.artifact.digest: a published artifact requires an immutable digest (ARCHITECTURE.md §11)"
@@ -732,6 +737,23 @@ def _artifact_errors(entry: Mapping, path: str) -> list[str]:
         if pinned is not True:
             errors.append(
                 f"{path}.artifact.pinned: a published artifact must be pinned by digest"
+            )
+        if canonical_form != "source_package/v1":
+            errors.append(
+                f"{path}.artifact.canonical_form: source_package requires 'source_package/v1'"
+            )
+    elif artifact_type == "container_image":
+        if not isinstance(digest, str) or _DIGEST_RE.fullmatch(digest) is None:
+            errors.append(
+                f"{path}.artifact.digest: a published artifact requires an immutable digest (ARCHITECTURE.md §11)"
+            )
+        if pinned is not True:
+            errors.append(
+                f"{path}.artifact.pinned: a published artifact must be pinned by digest"
+            )
+        if canonical_form != "container_image/v1":
+            errors.append(
+                f"{path}.artifact.canonical_form: container_image requires 'container_image/v1'"
             )
     return errors
 

@@ -147,7 +147,8 @@
       "required": [
         "artifact_type",
         "digest",
-        "pinned"
+        "pinned",
+        "canonical_form"
       ],
       "additionalProperties": false,
       "properties": {
@@ -160,6 +161,18 @@
         "pinned": {
           "type": "boolean",
           "description": "True only when the artifact is selected by an immutable digest (ARCHITECTURE.md §1.3)."
+        },
+        "canonical_form": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            null,
+            "source_package/v1",
+            "container_image/v1"
+          ],
+          "description": "Factory-defined canonical artifact representation; null only for artifact_type 'none'."
         }
       }
     },

@@ -59,7 +59,7 @@ authoritative metadata из `factory/registry/` и `factory/catalog/` и
     {
       "component_id": "learning",
       "component_version": "0.3.0",
-      "artifact": { "artifact_type": "none", "digest": null, "pinned": false }
+      "artifact": { "artifact_type": "none", "digest": null, "pinned": false, "canonical_form": null }
     }
   ],
   "golden_bundle": null,

@@ -388,6 +388,7 @@ def _component_errors(document: Mapping, path: str, registry: Any) -> list[str]:
         artifact_type = artifact.get("artifact_type")
         digest = artifact.get("digest")
         pinned = artifact.get("pinned")
+        canonical_form = artifact.get("canonical_form")
 
         if artifact_type not in ARTIFACT_TYPES:
             errors.append(
@@ -424,6 +425,25 @@ def _component_errors(document: Mapping, path: str, registry: Any) -> list[str]:
                     f"{entry_path}.artifact.pinned: a published artifact must be pinned by digest"
                 )
 
+        if artifact_type == "none":
+            if canonical_form is not None:
+                errors.append(
+                    f"{entry_path}.artifact.canonical_form: "
+                    "artifact_type 'none' must not declare a canonical form"
+                )
+        elif artifact_type == "source_package":
+            if canonical_form != "source_package/v1":
+                errors.append(
+                    f"{entry_path}.artifact.canonical_form: "
+                    "source_package requires 'source_package/v1'"
+                )
+        elif artifact_type == "container_image":
+            if canonical_form != "container_image/v1":
+                errors.append(
+                    f"{entry_path}.artifact.canonical_form: "
+                    "container_image requires 'container_image/v1'"
+                )
+
         if reg_entry is not None:
             registry_artifact = reg_entry.get("artifact")
             if not _is_mapping(registry_artifact):
@@ -444,6 +464,12 @@ def _component_errors(document: Mapping, path: str, registry: Any) -> list[str]:
                 if pinned != registry_artifact.get("pinned"):
                     errors.append(
                         f"{entry_path}.artifact.pinned: bundle declares {pinned!r}, canonical registry declares {registry_artifact.get('pinned')!r}"
+                    )
+                if canonical_form != registry_artifact.get("canonical_form"):
+                    errors.append(
+                        f"{entry_path}.artifact.canonical_form: bundle declares "
+                        f"{canonical_form!r}, canonical registry declares "
+                        f"{registry_artifact.get('canonical_form')!r}"
                     )
 
     # Deterministic order: pinned set must be sorted by component_id.

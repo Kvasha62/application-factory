@@ -271,6 +271,15 @@ def _artifact_authority_errors(
             f"{registry_pinned!r}"
         )
 
+    registry_canonical_form = registry_artifact.get("canonical_form")
+    manifest_canonical_form = artifact.get("canonical_form")
+    if manifest_canonical_form != registry_canonical_form:
+        errors.append(
+            f"{entry_path}.artifact.canonical_form: manifest declares "
+            f"{manifest_canonical_form!r}, canonical Component Registry declares "
+            f"{registry_canonical_form!r}"
+        )
+
     return errors
 
 

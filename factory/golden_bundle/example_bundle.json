@@ -1,6 +1,6 @@
 {
   "$schema": "factory/golden_bundle/schema/golden_bundle.schema.json",
-  "bundle_digest": "sha256:509979712e91c74d5df860feadec019f9c1f85a332c59870d4d2cefd403b33f7",
+  "bundle_digest": "sha256:6a39b5101556a1e743a038448149036981ce249acb5380443bba6ad07f3f8cb2",
   "bundle_id": "example-golden-bundle",
   "bundle_version": "1.0.0",
   "certification": null,
@@ -103,7 +103,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "component_id": "authorization",
       "component_version": "0.1.0"
@@ -112,7 +113,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "component_id": "booking",
       "component_version": "0.1.0"
@@ -121,7 +123,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "component_id": "commerce",
       "component_version": "0.2.0"
@@ -130,7 +133,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "component_id": "idempotency",
       "component_version": "0.1.0"
@@ -139,7 +143,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "component_id": "identity",
       "component_version": "0.3.0"
@@ -148,7 +153,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "component_id": "learning",
       "component_version": "0.3.0"
@@ -157,7 +163,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "component_id": "records",
       "component_version": "0.1.0"
@@ -166,7 +173,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "component_id": "saga",
       "component_version": "0.1.0"
@@ -175,7 +183,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "component_id": "tenant_authority",
       "component_version": "0.1.0"

@@ -71,7 +71,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "lifecycle": {
         "registry_state": "registered",
@@ -140,7 +141,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "lifecycle": {
         "registry_state": "registered",
@@ -205,7 +207,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "lifecycle": {
         "registry_state": "registered",
@@ -266,7 +269,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "lifecycle": {
         "registry_state": "registered",
@@ -359,7 +363,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "lifecycle": {
         "registry_state": "registered",
@@ -430,7 +435,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "lifecycle": {
         "registry_state": "registered",
@@ -479,7 +485,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "lifecycle": {
         "registry_state": "registered",
@@ -580,7 +587,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "lifecycle": {
         "registry_state": "registered",
@@ -661,7 +669,8 @@
       "artifact": {
         "artifact_type": "none",
         "digest": null,
-        "pinned": false
+        "pinned": false,
+        "canonical_form": null
       },
       "lifecycle": {
         "registry_state": "registered",

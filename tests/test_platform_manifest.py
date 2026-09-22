@@ -763,6 +763,7 @@ def published_artifact_registry(registry) -> Registry:
         artifact_type="container_image",
         digest=PUBLISHED_DIGEST,
         pinned=True,
+        canonical_form="container_image/v1",
     )
 
 
@@ -897,6 +898,7 @@ def test_manifest_matching_published_artifact_is_accepted(
         artifact_type="container_image",
         digest=PUBLISHED_DIGEST,
         pinned=True,
+        canonical_form="container_image/v1",
     )
 
     assert errors_for(doc, root) == []
@@ -915,6 +917,7 @@ def test_manifest_digest_prefix_notation_is_not_an_artifact_change(
         artifact_type="container_image",
         digest=PUBLISHED_DIGEST.removeprefix("sha256:"),
         pinned=True,
+        canonical_form="container_image/v1",
     )
 
     assert errors_for(doc, root) == []
@@ -1051,7 +1054,7 @@ def test_unknown_component_is_rejected(full_manifest_doc, root: Path) -> None:
         {
             "component_id": "payments",
             "component_version": "1.0.0",
-            "artifact": {"artifact_type": "none", "digest": None, "pinned": False},
+            "artifact": {"artifact_type": "none", "digest": None, "pinned": False, "canonical_form": None},
         }
     )
     doc["components"] = sorted(doc["components"], key=lambda e: e["component_id"])
@@ -1523,7 +1526,7 @@ def test_decoy_metadata_source_is_rejected(full_manifest_doc, root: Path) -> Non
         {
             "component_id": "decoy_component",
             "component_version": "1.0.0",
-            "artifact": {"artifact_type": "none", "digest": None, "pinned": False},
+            "artifact": {"artifact_type": "none", "digest": None, "pinned": False, "canonical_form": None},
         }
     )
     doc["components"] = sorted(doc["components"], key=lambda e: e["component_id"])

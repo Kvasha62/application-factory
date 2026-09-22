@@ -61,7 +61,7 @@ per-composition артефакт: его каноническое хранени
     {
       "component_id": "tenant_authority",
       "component_version": "0.1.0",
-      "artifact": { "artifact_type": "none", "digest": null, "pinned": false }
+      "artifact": { "artifact_type": "none", "digest": null, "pinned": false, "canonical_form": null }
     }
   ],
   "compatibility": { "pairs": [] },

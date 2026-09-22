@@ -114,6 +114,7 @@ class ComponentBinding:
     artifact_type: str
     artifact_digest: str | None
     artifact_pinned: bool
+    artifact_canonical_form: str | None
     configuration_keys: tuple[str, ...] = ()
 
     @property
@@ -130,6 +131,7 @@ class ComponentBinding:
                 "artifact_type": self.artifact_type,
                 "digest": self.artifact_digest,
                 "pinned": self.artifact_pinned,
+                "canonical_form": self.artifact_canonical_form,
             },
             "configuration_keys": list(self.configuration_keys),
         }
@@ -296,12 +298,14 @@ def _component_errors(
     artifact_type: str | None = None
     artifact_digest: str | None = None
     artifact_pinned = False
+    artifact_canonical_form: str | None = None
     if not isinstance(artifact, Mapping):
         errors.append(f"{path}.artifact: an explicit artifact identity is required")
     else:
         artifact_type = artifact.get("artifact_type")
         artifact_digest = artifact.get("digest")
         artifact_pinned = bool(artifact.get("pinned"))
+        artifact_canonical_form = artifact.get("canonical_form")
         if artifact_type not in ARTIFACT_TYPES:
             errors.append(
                 f"{path}.artifact.artifact_type: {artifact_type!r} is not a "
@@ -320,6 +324,12 @@ def _component_errors(
                     "not be pinned"
                 )
             artifact_pinned = False
+            if artifact_canonical_form is not None:
+                errors.append(
+                    f"{path}.artifact.canonical_form: an artifact of type "
+                    "'none' must declare null"
+                )
+                artifact_canonical_form = None
         elif artifact_type in ARTIFACT_TYPES:
             if not isinstance(
                 artifact_digest, str
@@ -336,6 +346,19 @@ def _component_errors(
                 )
             else:
                 artifact_pinned = True
+
+            expected_canonical_form = {
+                "source_package": "source_package/v1",
+                "container_image": "container_image/v1",
+            }.get(artifact_type)
+            if artifact_canonical_form != expected_canonical_form:
+                errors.append(
+                    f"{path}.artifact.canonical_form: a published artifact of "
+                    f"type {artifact_type!r} must declare "
+                    f"{expected_canonical_form!r}; got "
+                    f"{artifact_canonical_form!r}"
+                )
+                artifact_canonical_form = expected_canonical_form
 
     errors.extend(_contains_floating_selector(artifact, f"{path}.artifact"))
     if isinstance(component_version, str):
@@ -361,6 +384,7 @@ def _component_errors(
             else None
         ),
         artifact_pinned=artifact_pinned,
+        artifact_canonical_form=artifact_canonical_form,
         configuration_keys=configuration_keys,
     )
     return errors, binding

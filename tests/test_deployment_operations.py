@@ -406,6 +406,7 @@ class TestExactVersionAndArtifactBinding:
             artifact_type="container_image",
             artifact_digest="sha256:" + "a" * 64,
             artifact_pinned=True,
+            artifact_canonical_form="container_image/v1",
         )
         assert verify_artifact_digest(pinned, "sha256:" + "a" * 64) == []
         mismatch = verify_artifact_digest(pinned, "sha256:" + "b" * 64)
@@ -417,6 +418,7 @@ class TestExactVersionAndArtifactBinding:
             artifact_type="none",
             artifact_digest=None,
             artifact_pinned=False,
+            artifact_canonical_form=None,
         )
         assert (
             verify_artifact_digest(none_declared, None) == []
@@ -767,6 +769,7 @@ class TestProvisioning:
                         "artifact_type": "none",
                         "digest": None,
                         "pinned": False,
+                        "canonical_form": None,
                     },
                 }
             ],
@@ -1311,6 +1314,7 @@ class TestDeploymentExecution:
             artifact_type="source_package",
             artifact_digest=observed,
             artifact_pinned=True,
+            artifact_canonical_form="source_package/v1",
         )
         element = RuntimeElement(
             deployment_id="dep-exact",
@@ -2250,6 +2254,7 @@ def source_element(tmp_path: Path, *, module: str, source: Path) -> RuntimeEleme
             artifact_type="none",
             artifact_digest=None,
             artifact_pinned=False,
+            artifact_canonical_form=None,
         ),
         configuration={},
         spec_path=tmp_path / "runtime.json",
@@ -2389,6 +2394,7 @@ def artifact_element(tmp_path: Path, content: Path, digest: str) -> RuntimeEleme
             artifact_type="source_package",
             artifact_digest=digest,
             artifact_pinned=True,
+            artifact_canonical_form="source_package/v1",
         ),
         configuration={},
         spec_path=tmp_path / "runtime.json",
@@ -2589,6 +2595,7 @@ class TestExecutionContentBinding:
                 artifact_type="none",
                 artifact_digest=None,
                 artifact_pinned=False,
+                artifact_canonical_form=None,
             ),
             configuration={},
             spec_path=tmp_path / "runtime.json",
