@@ -329,6 +329,35 @@ Per ADR-0018 §3.1,§4,§5,§8,§13,§14,§16,§18,§21,§25-27,§31-32, ARCHITE
 - `artifact.digest = "sha256:"+hex(sha256(canonical.json bytes))`
 - `canonical.json` NOT part of entries — устраняет circularity.
 
+### 9.1.2.1 Factory declaration input — source_package/v1
+
+Для `source_package/v1` canonical builder MUST получать два обязательных входа:
+
+1. `root` — физический sealed artifact;
+2. `factory_declaration` — отдельная Factory declaration, содержащая для каждого canonical path:
+   - `owned: bool`;
+   - `executable: bool`.
+
+`factory_declaration` является Factory source of truth для значений `owned` и `executable`. Она MUST существовать до построения canonical representation и MUST находиться вне sealed artifact и вне content-addressed output `factory/artifacts/<artifact.digest>/`.
+
+Builder MUST NOT выводить `owned` из физического присутствия, filesystem location, workspace, suffix, Registry, Manifest, Instance или D&O.
+
+Builder MUST NOT синтезировать отсутствующее значение `owned` или `executable`.
+
+Для каждого physical entry должна существовать соответствующая declaration. Declaration для отсутствующего physical entry является invalid.
+
+Builder MUST validate `executable` declaration against the physical executable rules defined in §9.1.2:
+
+- если physical executable признаки присутствуют, а declaration содержит `executable=false` → invalid, fail-closed;
+- `executable=true` при отсутствии physical executable признаков допускается как conservative Factory declaration;
+- при `executable=true` `owned` MUST be `true`.
+
+`owned` MUST be taken from the Factory declaration without inference or automatic correction.
+
+`canonical.json` содержит полученные и проверенные значения `owned` и `executable`. Сам `factory_declaration` не является entry sealed artifact и не входит непосредственно в `artifact.digest`; его значения входят в digest только через canonical representation.
+
+Формат и физическое расположение Factory declaration являются implementation detail и не являются частью `source_package/v1` canonical form.
+
 ### 9.1.3 container_image — canonical form `container_image/v1`
 
 **Sealed unit**: immutable image artifact = ordered layers + config. Физический carrier OCI layout — implementation detail; нормативная форма — canonical.json с layers.
