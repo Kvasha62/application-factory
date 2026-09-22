@@ -3843,7 +3843,7 @@ class TestVerifiedExecutionBoundary:
         self, tmp_path, instance, manifest
     ):
         """A native library outside the verified roots is never trusted content."""
-        import _json
+        import _asyncio
         import importlib.machinery
 
         suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
@@ -3851,7 +3851,7 @@ class TestVerifiedExecutionBoundary:
         environment = adversary_environment(tmp_path, (source,), route="unbound")
         workspace = workspace_of(environment, instance)
         (workspace / f"extra_helper{suffix}").write_bytes(
-            Path(_json.__file__).read_bytes()
+            Path(_asyncio.__file__).read_bytes()
         )
         record, error = attempt(instance, manifest, environment)
         assert isinstance(error, IdentityVerificationFailed)
@@ -3865,7 +3865,9 @@ class TestVerifiedExecutionBoundary:
         source = verified_root(second, helper=True)
         environment = adversary_environment(second, (source,), route="bound")
         workspace = workspace_of(environment, instance)
-        (workspace / f"helper{suffix}").write_bytes(Path(_json.__file__).read_bytes())
+        (workspace / f"helper{suffix}").write_bytes(
+            Path(_asyncio.__file__).read_bytes()
+        )
         record, error = attempt(instance, manifest, environment)
         assert error is None
         assert record.deployed is True

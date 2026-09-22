@@ -59,6 +59,7 @@ from deployment_operations.provisioning import (
     ArtifactSource,
     ProvisionedEnvironment,
 )
+from deployment_operations.runtime_worker import EXECUTABLE_CONTENT_SUFFIXES
 from deployment_operations.verification import (
     ComponentBinding,
     InstanceVerification,
@@ -313,7 +314,9 @@ def _module_candidates(module: str, root: Path) -> list[Path]:
     if not candidates and base.parent.is_dir():
         native = {
             candidate
-            for pattern in (f"{parts[-1]}.so", f"{parts[-1]}.*.so")
+            for suffix in EXECUTABLE_CONTENT_SUFFIXES
+            if suffix not in (".py", ".pyc", ".pyo")
+            for pattern in (f"{parts[-1]}{suffix}", f"{parts[-1]}.*{suffix}")
             for candidate in base.parent.glob(pattern)
             if candidate.is_file()
         }

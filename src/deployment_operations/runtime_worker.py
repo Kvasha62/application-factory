@@ -1098,10 +1098,14 @@ def _resolve_under(module: str, root: Path) -> Path | None:
             return candidate
     if base.parent.is_dir():
         native = sorted(
-            candidate
-            for pattern in (f"{parts[-1]}.so", f"{parts[-1]}.*.so")
-            for candidate in base.parent.glob(pattern)
-            if candidate.is_file()
+            {
+                candidate
+                for suffix in EXECUTABLE_CONTENT_SUFFIXES
+                if suffix not in (".py", ".pyc", ".pyo")
+                for pattern in (f"{parts[-1]}{suffix}", f"{parts[-1]}.*{suffix}")
+                for candidate in base.parent.glob(pattern)
+                if candidate.is_file()
+            }
         )
         if native:
             return native[0]
