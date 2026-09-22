@@ -342,19 +342,127 @@
           "oneOf": [
             {
               "type": "string",
-              "pattern": "^(sha256:)?[0-9a-f]{64}$"
+              "pattern": "^sha256:[0-9a-f]{64}$"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Immutable content digest of the artifact (ARCHITECTURE.md §11). Null when no artifact is published."
+          "description": "Immutable content digest of the artifact (ARCHITECTURE.md §11). Null when no artifact is published. For F-3B, digest = SHA256(canonical.json bytes) per factory/registry/README.md §9.1.4."
         },
         "pinned": {
           "type": "boolean",
           "description": "True only when the artifact is selected by an immutable digest."
+        },
+        "canonical_form": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "source_package/v1",
+                "container_image/v1"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Normative canonical form version for F-3B per README §9.1. null for artifact_type=none. source_package/v1 = deterministic file set, container_image/v1 = ordered layers+config."
+        },
+        "canonical_manifest": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^factory/artifacts/sha256:[0-9a-f]{64}/canonical\\.json$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Immutable reference to canonical.json, content-addressed by artifact digest per README §9.1.4. Variant B. null for none. Example: factory/artifacts/sha256:<hex>/canonical.json"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "artifact_type": {
+                "const": "none"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "digest": {
+                "type": "null"
+              },
+              "pinned": {
+                "const": false
+              },
+              "canonical_form": {
+                "type": "null"
+              },
+              "canonical_manifest": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "artifact_type": {
+                "const": "source_package"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "pinned": {
+                "const": true
+              },
+              "canonical_form": {
+                "const": "source_package/v1"
+              },
+              "canonical_manifest": {
+                "type": "string",
+                "pattern": "^factory/artifacts/sha256:[0-9a-f]{64}/canonical\\.json$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "artifact_type": {
+                "const": "container_image"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "pinned": {
+                "const": true
+              },
+              "canonical_form": {
+                "const": "container_image/v1"
+              },
+              "canonical_manifest": {
+                "type": "string",
+                "pattern": "^factory/artifacts/sha256:[0-9a-f]{64}/canonical\\.json$"
+              }
+            }
+          }
+        }
+      ]
     },
     "lifecycle": {
       "type": "object",
