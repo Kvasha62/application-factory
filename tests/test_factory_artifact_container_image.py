@@ -371,7 +371,7 @@ def test_dangling_symlink_fails_closed(tmp_path):
         "executable": False,
     }
 
-    with pytest.raises(ContainerImageError, match="does not exist"):
+    with pytest.raises(ContainerImageError, match="dangling symlink"):
         build_container_image_canonical(root, declaration)
 
 
