@@ -89,7 +89,12 @@ def valid_bundle(root: Path) -> dict:
             {
                 "component_id": "tenant_authority",
                 "component_version": "0.1.0",
-                "artifact": {"artifact_type": "none", "digest": None, "pinned": False, "canonical_form": None},
+                "artifact": {
+                    "artifact_type": "none",
+                    "digest": None,
+                    "pinned": False,
+                    "canonical_form": None,
+                },
             }
         ],
         compatibility_pairs=[],
@@ -650,7 +655,12 @@ class TestCompatibility:
             {
                 "component_id": "learning",
                 "component_version": "0.3.0",
-                "artifact": {"artifact_type": "none", "digest": None, "pinned": False, "canonical_form": None},
+                "artifact": {
+                    "artifact_type": "none",
+                    "digest": None,
+                    "pinned": False,
+                    "canonical_form": None,
+                },
             }
         ]
         doc = build_bundle_document(
@@ -1007,7 +1017,12 @@ class TestBoundary:
             {
                 "component_id": "learning",
                 "component_version": "0.3.0",
-                "artifact": {"artifact_type": "none", "digest": None, "pinned": False, "canonical_form": None},
+                "artifact": {
+                    "artifact_type": "none",
+                    "digest": None,
+                    "pinned": False,
+                    "canonical_form": None,
+                },
             }
         ]
         doc = build_bundle_document(

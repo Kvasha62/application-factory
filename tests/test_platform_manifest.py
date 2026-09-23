@@ -1054,7 +1054,12 @@ def test_unknown_component_is_rejected(full_manifest_doc, root: Path) -> None:
         {
             "component_id": "payments",
             "component_version": "1.0.0",
-            "artifact": {"artifact_type": "none", "digest": None, "pinned": False, "canonical_form": None},
+            "artifact": {
+                "artifact_type": "none",
+                "digest": None,
+                "pinned": False,
+                "canonical_form": None,
+            },
         }
     )
     doc["components"] = sorted(doc["components"], key=lambda e: e["component_id"])
@@ -1526,7 +1531,12 @@ def test_decoy_metadata_source_is_rejected(full_manifest_doc, root: Path) -> Non
         {
             "component_id": "decoy_component",
             "component_version": "1.0.0",
-            "artifact": {"artifact_type": "none", "digest": None, "pinned": False, "canonical_form": None},
+            "artifact": {
+                "artifact_type": "none",
+                "digest": None,
+                "pinned": False,
+                "canonical_form": None,
+            },
         }
     )
     doc["components"] = sorted(doc["components"], key=lambda e: e["component_id"])

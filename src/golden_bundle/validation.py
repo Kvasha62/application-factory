@@ -437,12 +437,14 @@ def _component_errors(document: Mapping, path: str, registry: Any) -> list[str]:
                     f"{entry_path}.artifact.canonical_form: "
                     "source_package requires 'source_package/v1'"
                 )
-        elif artifact_type == "container_image":
-            if canonical_form != "container_image/v1":
-                errors.append(
-                    f"{entry_path}.artifact.canonical_form: "
-                    "container_image requires 'container_image/v1'"
-                )
+        elif (
+            artifact_type == "container_image"
+            and canonical_form != "container_image/v1"
+        ):
+            errors.append(
+                f"{entry_path}.artifact.canonical_form: "
+                "container_image requires 'container_image/v1'"
+            )
 
         if reg_entry is not None:
             registry_artifact = reg_entry.get("artifact")
