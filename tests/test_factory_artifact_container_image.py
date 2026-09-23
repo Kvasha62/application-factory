@@ -355,6 +355,116 @@ def test_opaque_hides_lower_directory_entries(tmp_path):
     assert "data/new.txt" in final_paths
 
 
+def test_later_directory_replaces_earlier_file(tmp_path):
+    root = tmp_path / "root"
+    layer0 = root / "layers" / "0"
+    layer1 = root / "layers" / "1"
+    layer0.mkdir(parents=True)
+    layer1.mkdir(parents=True)
+
+    (layer0 / "item").write_bytes(b"old")
+    (layer1 / "item").mkdir()
+    (layer1 / "item" / "child.txt").write_bytes(b"new")
+
+    declaration = {
+        "layers": [
+            {
+                "ownership": "base",
+                "entries": {
+                    "item": {
+                        "owned": False,
+                        "executable": False,
+                    }
+                },
+            },
+            {
+                "ownership": "component",
+                "entries": {
+                    "item": {
+                        "owned": True,
+                        "executable": False,
+                    },
+                    "item/child.txt": {
+                        "owned": True,
+                        "executable": False,
+                    },
+                },
+            },
+        ],
+        "config": CONFIG,
+    }
+
+    build_container_image_canonical(root, declaration)
+
+
+def test_later_file_replaces_earlier_directory_and_descendants(tmp_path):
+    root = tmp_path / "root"
+    layer0 = root / "layers" / "0"
+    layer1 = root / "layers" / "1"
+    layer0.mkdir(parents=True)
+    layer1.mkdir(parents=True)
+
+    (layer0 / "item").mkdir()
+    (layer0 / "item" / "old.txt").write_bytes(b"old")
+    (layer1 / "item").write_bytes(b"new")
+
+    declaration = {
+        "layers": [
+            {
+                "ownership": "base",
+                "entries": {
+                    "item": {
+                        "owned": False,
+                        "executable": False,
+                    },
+                    "item/old.txt": {
+                        "owned": False,
+                        "executable": False,
+                    },
+                },
+            },
+            {
+                "ownership": "component",
+                "entries": {
+                    "item": {
+                        "owned": True,
+                        "executable": False,
+                    }
+                },
+            },
+        ],
+        "config": CONFIG,
+    }
+
+    build_container_image_canonical(root, declaration)
+
+
+def test_symlink_cycle_fails_closed(tmp_path):
+    root = make_root(tmp_path)
+    layer = root / "layers" / "0"
+
+    try:
+        (layer / "a").symlink_to("b")
+        (layer / "b").symlink_to("a")
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires additional privileges")
+        raise
+
+    declaration = valid_declaration()
+    declaration["layers"][0]["entries"]["a"] = {
+        "owned": True,
+        "executable": False,
+    }
+    declaration["layers"][0]["entries"]["b"] = {
+        "owned": True,
+        "executable": False,
+    }
+
+    with pytest.raises(ContainerImageError, match="cycle"):
+        build_container_image_canonical(root, declaration)
+
+
 def test_dangling_symlink_fails_closed(tmp_path):
     root = make_root(tmp_path)
     layer = root / "layers" / "0"
