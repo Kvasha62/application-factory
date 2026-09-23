@@ -360,6 +360,56 @@ Builder MUST validate `executable` declaration against the physical executable r
 
 ### 9.1.3 container_image — canonical form `container_image/v1`
 
+#### 9.1.3.1 Factory declaration input — container_image/v1
+
+Для `container_image/v1` canonical builder MUST получать два обязательных входа:
+
+1. `root` — физический sealed image artifact;
+2. `factory_declaration` — отдельная Factory declaration, содержащая:
+   - для каждого layer: `ownership: "base"|"component"`;
+   - для каждого canonical path в layer: `owned: bool`;
+   - для каждого canonical path в layer: `executable: bool`.
+
+`factory_declaration` является Factory source of truth для `layers[].ownership`, `entries[].owned` и `entries[].executable`. Она MUST существовать до построения canonical representation и MUST находиться вне sealed artifact и вне content-addressed output `factory/artifacts/<artifact.digest>/`.
+
+Builder MUST NOT выводить `ownership`, `owned` или `executable` из физического присутствия, filesystem location, workspace, suffix, Registry, Manifest, Instance, D&O или runtime discovery.
+
+Builder MUST NOT синтезировать отсутствующее значение `ownership`, `owned` или `executable`.
+
+Для каждого physical entry каждого layer должна существовать соответствующая declaration. Declaration для отсутствующего physical entry, missing layer declaration, duplicate/colliding declaration, traversal path, absolute path или non-canonical path является invalid и MUST fail-closed.
+
+Builder MUST validate declaration против физических признаков executable:
+
+- если physical executable признаки присутствуют, а declaration содержит `executable=false` → invalid, fail-closed;
+- `executable=true` при отсутствии physical executable признаков допускается как conservative Factory declaration;
+- при `executable=true` `owned` MUST быть `true`.
+
+Для layer с `ownership="base"` executable entry MAY иметь `owned=false` — такое содержимое является environment/runtime content и не входит в component-owned executable boundary.
+
+Для layer с `ownership="component"` любая entry с `executable=true` MUST иметь `owned=true`; нарушение MUST fail-closed.
+
+Whiteout и opaque entries являются metadata operations, а не executable content:
+
+- `executable` MUST be `false`;
+- `owned` MUST be `false`;
+- `content_digest` MUST быть `null`.
+
+Whiteout/opaque markers MUST NOT входить в final filesystem view; их layer semantics и обязательные canonical fields определяются §9.1.3.
+
+Final filesystem после последовательного применения layers MUST удовлетворять правилам canonical paths source_package/v1: canonical POSIX paths, explicit parents, valid symlink targets, no escape, no dangling symlinks, no cycles и deterministic final view.
+
+Identity config MUST иметь явную схему:
+
+- `entrypoint`: array of strings;
+- `cmd`: array of strings;
+- `working_dir`: canonical POSIX-relative path.
+
+Invalid config MUST fail-closed. Canonical serialization MUST be deterministic и подчиняться правилам `container_image/v1`.
+
+`canonical.json` содержит полученные и проверенные значения `ownership`, `owned` и `executable`. Сам `factory_declaration` не является entry sealed artifact и не входит непосредственно в `artifact.digest`; его значения входят в digest только через canonical representation.
+
+Формат и физическое расположение Factory declaration являются implementation detail и не являются частью `container_image/v1` canonical form.
+
 **Sealed unit**: immutable image artifact = ordered layers + config. Физический carrier OCI layout — implementation detail; нормативная форма — canonical.json с layers.
 
 **Layers**:
