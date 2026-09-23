@@ -1303,7 +1303,7 @@ class TestBoundary:
         """``factory/platform_instance`` carries the schema, its rules and the
         deterministic example — no registry, catalog or bundle copy."""
         shipped = {
-            str(path.relative_to(root / "factory" / "platform_instance"))
+            path.relative_to(root / "factory" / "platform_instance").as_posix()
             for path in (root / "factory" / "platform_instance").rglob("*")
             if path.is_file()
         }
