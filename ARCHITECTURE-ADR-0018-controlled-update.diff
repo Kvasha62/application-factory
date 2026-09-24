@@ -1,0 +1,57 @@
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 4d76c5f..ec3db79 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -326,6 +326,8 @@ API: consumer/provider contract testing. Events: schema compatibility, schema di
+ 
+ Идентификатор иммутабелен, непрозрачен, уникален в своей области, не переиспользуется и не кодирует бизнес-смысл. Для поставляемых артефактов обязательны `id + version + digest`. Конкретный формат UUIDv7/ULID и т.п. остаётся временным решением.
+ 
++Digest опубликованного deployable artifact идентифицирует sealed artifact unit — неизменяемое каноническое artifact representation, определяемое Фабрикой для соответствующего artifact type, включая содержащийся в нём closed executable unit (component-owned executable content), — а не только отдельный entrypoint file; изменение component-owned executable content внутри этого unit меняет artifact identity (ADR-0018 §3.1, §4).
++
+ ---
+ 
+ ## 12. Database Migrations
+@@ -372,7 +374,7 @@ Factory ведёт матрицу совместимости. Полная ко
+ 
+ ## 16. Platform Manifest
+ 
+-Manifest — главный артефакт конкретной платформы. Он фиксирует Component versions, Golden Bundle, Configuration, Extensions, Branding и image digests.
++Manifest — главный артефакт конкретной платформы. Он фиксирует Component versions, Golden Bundle, Configuration, Extensions, Branding и artifact/image digests. Artifact/image digest в Manifest является identity соответствующего sealed artifact unit, полученной от Фабрики (§11); Manifest не создаёт artifact identity и не расширяет artifact boundary (ADR-0018 §10).
+ 
+ Lifecycle: `draft → validated → approved → published → deployed → superseded → retired`.
+ 
+@@ -501,7 +503,7 @@ E2E → Migration → Traffic Switch → Observation → Retire Old Version
+ 
+ ## 31. Definition of Done для Platform
+ 
+-Platform Instance считается воспроизводимой, если существует Platform Manifest; конкретные версии компонентов; Golden Bundle либо явный статус uncertified; image digests; configuration; extensions; branding; миграционный план; результаты обязательных проверок.
++Platform Instance считается воспроизводимой, если существует Platform Manifest; конкретные версии компонентов; Golden Bundle либо явный статус uncertified; artifact/image digests, идентифицирующие воспроизводимую artifact boundary deployable components (§11; ADR-0018 §4, §24); configuration; extensions; branding; миграционный план; результаты обязательных проверок.
+ 
+ ---
+ 
+@@ -618,7 +620,7 @@ Deployment & Operations
+ Running Platform
+ ```
+ 
+-**Граница фабрики.** Фабрика заканчивается на детерминированном Platform Instance. Фабрика отвечает за Component Contract, Registry, Catalog, Golden Bundles, Composer, Platform Manifest, детерминированную сборку Platform Instance, version binding, artifact identity, validation и publication/delivery of desired state. Фабрика не является deployment engine: она не выполняет provisioning и deployment, не хранит runtime/deployment state, не управляет health/readiness, upgrade, rollback и не оркестрирует migrations против реальных окружений.
++**Граница фабрики.** Фабрика заканчивается на детерминированном Platform Instance. Фабрика отвечает за Component Contract, Registry, Catalog, Golden Bundles, Composer, Platform Manifest, детерминированную сборку Platform Instance, version binding, artifact identity, artifact boundary, validation и publication/delivery of desired state. Фабрика не является deployment engine: она не выполняет provisioning и deployment, не хранит runtime/deployment state, не управляет health/readiness, upgrade, rollback и не оркестрирует migrations против реальных окружений.
+ 
+ **Desired State / Actual State.**
+ 
+@@ -634,6 +636,7 @@ Deployment & Operations не имеет права:
+ - изменять Platform Manifest;
+ - подменять версии;
+ - менять artifact identity;
++- определять, расширять или переопределять artifact boundary;
+ - использовать floating selectors;
+ - получать право менять ownership бизнес-данных;
+ - становиться бизнес-системой/SCS.
+@@ -644,6 +647,8 @@ Deployment & Operations не имеет права:
+ 
+ **Versioning.** Запрет floating selectors действует и на этой границе (§1.3): `latest`, `current`, `default`, `stable`, `edge`, `main`, `master`, `head`, `tip`, `*` и эквиваленты не могут быть deployment input. Deployment работает только с конкретно зафиксированными версиями и artifact identities (§11).
+ 
++**Artifact boundary (ADR-0018).** Digest опубликованного deployable artifact идентифицирует sealed artifact unit (§11); состав component-owned executable content этого unit — artifact boundary — определяет и публикует Фабрика, а Manifest и Platform Instance наследуют artifact identity, не создавая и не расширяя boundary (§16; ADR-0018 §5, §10, §11). Deployment & Operations проверяет identity опубликованного artifact перед его исполнением и обеспечивает соблюдение artifact boundary fail-closed в пределах правил, определённых Фабрикой для данного artifact type; она не определяет, не расширяет и не переопределяет boundary, а runtime import/load mechanism служит только средством enforcement, но не источником истины о составе artifact (ADR-0018 §6, §8, §13, §14). Область применения и глубина доказательства этого enforcement, включая verified closed execution (F-3B) как отдельную capability, определяются ADR-0018 §13, §16 и acceptance criteria утверждённых work items; определение `deployed` (ADR-0016 §10; ADR-0017 §33–§35) не изменяется (ADR-0018 §9.1, §20). Реализация этого enforcement требует отдельного утверждённого work item и не считается существующей на основании настоящего раздела (§40; ADR-0018 §21, §32).
++
+ **Technology neutrality.** Эта граница определяет ответственность, а не реализацию: конкретный deployment engine, orchestration, провайдер и CI/CD здесь не выбираются (§36). Стадия введена как Level C изменение через ADR-0016 (§34.1); её реализация требует отдельного утверждённого work item и не считается существующей только на основании этого раздела (§40).
+ 
+ ---

@@ -1,0 +1,58 @@
+diff --git a/docs/adr/ADR-0018-closed-executable-artifact-identity.md b/docs/adr/ADR-0018-closed-executable-artifact-identity.md
+index c443716..791378b 100644
+--- a/docs/adr/ADR-0018-closed-executable-artifact-identity.md
++++ b/docs/adr/ADR-0018-closed-executable-artifact-identity.md
+@@ -1,7 +1,8 @@
+ # ADR-0018 — Closed Executable Artifact Identity
+ 
+-**Статус:** PROPOSED
++**Статус:** RATIFIED
+ **Дата:** 2026-09-18
++**Ратифицирован:** 2026-09-20 владельцем проекта
+ **Владелец решения:** Oleg
+ **Архитектор:** ChatGPT
+ **Связанные ADR:** ADR-0015, ADR-0016, ADR-0017
+@@ -876,9 +877,9 @@ ADR-0018 готов к ратификации только если незави
+ 
+ ## 32. Status
+ 
+-**PROPOSED — not ratified.**
++**RATIFIED — ратифицирован владельцем проекта 2026-09-20.**
+ 
+-До ратификации:
++Как было зафиксировано в статусе PROPOSED, до ратификации:
+ 
+ * настоящий ADR не является законом проекта;
+ * `docs/ARCHITECTURE.md` не изменяется;
+@@ -886,8 +887,18 @@ ADR-0018 готов к ратификации только если незави
+ * код не должен изменяться для «соответствия» этому draft;
+ * implementation не может заявлять compliance с ADR-0018.
+ 
+-После независимого ревью решение может быть ратифицировано владельцем в соответствии с действующим governance process.
++Ратификация выполнена владельцем проекта после независимого архитектурного ревью (§31; ревью завершено без блокирующих замечаний) в соответствии с действующим governance process и подтверждает решение в том виде, в каком оно записано, как Level C architectural decision (`docs/ARCHITECTURE.md` §34.1).
++
++Зафиксированное состояние после ратификации:
++
++* `docs/ARCHITECTURE.md` этой ратификацией не изменяется и остаётся v1.2.0 RATIFIED; controlled update §11, §16, §31, §37.1 выполняется отдельным governance action (§22, §30);
++* ADR-0015, ADR-0016 и ADR-0017 не изменяются; `deployed` по ADR-0016 §10 и ADR-0017 §33–§35 не переопределяется (§9.1, §20);
++* F-3B остаётся архитектурным GAP: ратификация не реализует F-3B, не авторизует implementation и не изменяет код (§21, §25);
++* implementation не может заявлять compliance с ADR-0018 без approved work item и независимой verification/acceptance (§21, §26, §27; ADR-0017 §28, §30);
++* настоящий ADR входит в confirmed list `docs/adr/README.md` (ADR-0016 §31).
+ 
+ Ратификация не означает, что F-3B реализован.
+ 
+ Реализация F-3B требует отдельного approved work item и независимой verification/acceptance.
++
++**ADR-0018 status: RATIFIED.**
+diff --git a/docs/adr/README.md b/docs/adr/README.md
+index 1c472cf..9dfa514 100644
+--- a/docs/adr/README.md
++++ b/docs/adr/README.md
+@@ -22,6 +22,7 @@
+ - `ADR-0015 — Activate Level 2 Component Factory` — `RATIFIED` (2026-09-14). Активирует Level 2 — Component Factory после прохождения Factory Gate #1, при сохранении существующих бизнес-границ, владения данными, контрактных и compatibility-правил. Реализация фабричных механизмов выполняется инкрементально отдельными implementation slices: Slice A — Component Registry, Slice B — Component Catalog, Slice C — Platform Manifest, Slice D — Golden Bundles, Slice E — Composer и Slice F — Platform Instance Assembly реализованы (Slice F — Issue #74, PR #75 merged 2026-09-16); deployment/provisioning/rollout-исполнение поверх собранного Platform Instance требует отдельного утверждённого work item.
+ - `ADR-0016 — Deployment and Operations Boundary` — `RATIFIED` (2026-09-16). Level C (ARCHITECTURE.md §34.1): установлена стадия `Factory → Platform Manifest → Platform Instance → Deployment & Operations → Running Platform`; Platform Instance — desired state / deployment input, не runtime state; Deployment & Operations находится вне Factory, владеет provisioning, deployment, deployment state, migration orchestration, runtime management, health/readiness, upgrade, rollback и operational observability; не становится Business System/SCS и владельцем бизнес-данных, не мутирует опубликованный Manifest, не использует floating selectors и не выбирает deployment-технологию. Контролируемое обновление `docs/ARCHITECTURE.md` (§2.2, §37, §37.1) выполнено после ратификации (ADR-0016 §29); реализация требует отдельного утверждённого work item (ADR-0016 §30).
+ - `ADR-0017 — Deployment & Operations Implementation Scope` — `RATIFIED` (2026-09-16). Level C governance/documentation decision (ARCHITECTURE.md §34.1), не изменяющая архитектуру: зафиксирован полный Capability Scope реализации Deployment & Operations — ровно девять ответственностей ADR-0016 §4 (provisioning, deployment, migration orchestration, runtime management, health/readiness, deployment state, upgrade, rollback, operational observability; retirement вне scope); первый минимальный вертикальный срез — одна end-to-end deployment operation для одного принятого Platform Instance вдоль пути `requested → validated → provisioning → deploying → starting → health_check → ready` с фиксируемыми §43 критериями наблюдаемого поведения; словарь `ready` / `deployed` / `realized` разделён (`ready` — verified operational condition, необходимое, но не достаточное условие для `deployed`/`realized`); статусный жизненный цикл `PROPOSED → RATIFIED → IMPLEMENTATION AUTHORIZED → IMPLEMENTED` без новых формальных статусов; документ технологически нейтрален и не создаёт срезов, work item или реализации — реализация требует отдельного утверждённого work item (ADR-0017 §19, §25, §28).
++- `ADR-0018 — Closed Executable Artifact Identity` — `RATIFIED` (2026-09-20). Level C (ARCHITECTURE.md §34.1): `artifact.digest` опубликованного deployable artifact идентифицирует closed executable unit — sealed canonical artifact unit, определяемый Factory (ADR-0018 §3.1, §4); Factory/Registry остаются источником истины artifact identity и artifact boundary (§5, §6), Platform Manifest и Platform Instance наследуют identity и не расширяют boundary (§10, §11), Deployment & Operations верифицирует boundary и обеспечивает её соблюдение fail-closed, но не определяет состав artifact (§13–§18); runtime/environment dependencies отделены от component-owned content (§8); `artifact_type = none` не является доказательством closed executable artifact (§9.1); `deployed` по ADR-0016 §10 и ADR-0017 §33–§35 не переопределяется, F-3B verification не входит в `deployed` (§20). Контролируемое обновление `docs/ARCHITECTURE.md` (§11, §16, §31, §37.1) — отдельное governance action после ратификации (ADR-0018 §22, §30); F-3B остаётся архитектурным GAP до отдельного approved work item и независимой verification/acceptance (ADR-0018 §21, §25, §32).
+ 
+ `ADR-0009` не существует в подтверждённой истории и намеренно не реконструируется. Сведения о более ранних решениях используются только там, где они подтверждены сохранившимися артефактами.
+ 

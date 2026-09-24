@@ -1,0 +1,64 @@
+diff --git a/docs/adr/ADR-0018-closed-executable-artifact-identity.md b/docs/adr/ADR-0018-closed-executable-artifact-identity.md
+index 6a3d78a..c443716 100644
+--- a/docs/adr/ADR-0018-closed-executable-artifact-identity.md
++++ b/docs/adr/ADR-0018-closed-executable-artifact-identity.md
+@@ -75,6 +75,8 @@ identity of the closed executable unit
+ 
+ а не только identity одного файла, который первым запускается.
+ 
++Термины canonical artifact unit и sealed artifact unit обозначают один и тот же объект — неизменяемое каноническое artifact representation, над которым Factory вычисляет `artifact.digest`. Closed executable unit — это component-owned executable content, содержащееся в этом unit; отдельной identity он не имеет и идентифицируется тем же `artifact.digest`. Component-owned executable content вне sealed artifact unit не принадлежит closed executable unit.
++
+ ---
+ 
+ ## 4. Семантика `artifact.digest`
+@@ -342,17 +344,28 @@ D&O обязан:
+ 7. записывать честное состояние deployment;
+ 8. коррелировать operational evidence с Platform Instance identity/digest.
+ 
++Область применения:
++
++* пункты 1, 2, 7, 8 применяются к любой deployment operation;
++* пункты 3–6 применяются к каждому компоненту, для которого Platform Instance фиксирует published deployable artifact (`artifact_type ≠ none`), независимо от того, требуется ли для capability F-3B verified closed execution. Наличие published artifact — факт Platform Instance, полученный от Factory, а не решение D&O;
++* для `artifact_type = none` пункты 3–6 неприменимы, потому что published artifact identity отсутствует (§9.1). Это не разрешение исполнять component-owned executable content: такой компонент исполняется только по правилам ADR-0016/ADR-0017, не может быть частью F-3B verified closed execution, а если capability требует F-3B — операция завершается отказом по §16.
++
++Глубина доказательства по пунктам 4–6:
++
++* соответствие исполняемого artifact опубликованной artifact identity (digest) доказывается всегда; его недоказуемость — отказ всегда (ADR-0016 §7, §8, §10, §20);
++* принадлежность каждого исполняемого component-owned executable content closed executable unit доказывается только на основании type-specific artifact contract (§8) и canonical artifact representation (§4, §5); её недоказуемость — отказ для capability, требующей F-3B (§16), а для остальных — запрет заявлять F-3B verified closed execution (§26.7, §27) при честной записи состояния (пункт 7); доказанное исполнение component-owned executable content вне boundary (§15, §17) — отказ всегда.
++
++Требуется ли для capability F-3B verified closed execution, определяется acceptance criteria соответствующего approved work item (ADR-0017 §28, §30; §25 настоящего ADR, шаги 7–10), а не D&O в runtime и не наличием или отсутствием artifact.
++
+ D&O не определяет состав artifact.
+ 
+ ---
+ 
+ ## 14. Execution closure
+ 
+-Текущий механизм `execution_closure()` может использоваться как implementation mechanism только в пределах authoritative artifact contract.
++Конкретный runtime import/load mechanism — в том числе language-level import closure — может использоваться только как implementation mechanism enforcement в пределах authoritative artifact contract.
+ 
+-Он не является самостоятельным источником истины о составе artifact.
+-
+-Python import closure не должен рассматриваться как архитектурное определение полного component artifact.
++Он не является источником истины о составе artifact и не является архитектурным определением полного component artifact.
+ 
+ Если конкретный artifact format требует дополнительной проверки native dependency closure, соответствующая проверка должна быть основана на authoritative artifact boundary.
+ 
+@@ -490,6 +503,8 @@ ADR-0018 уточняет архитектурную семантику artifact
+ 
+ ADR-0018 не ослабляет требования ADR-0016.
+ 
++F-3B verification не является частью определения `deployed` по ADR-0016 §10 и ADR-0017 §33–§35. Пункт «verified deployed condition» выше относится к определению ADR-0016, а не добавляет F-3B в `deployed`.
++
+ ---
+ 
+ ## 21. Relationship with ADR-0017
+@@ -852,7 +867,7 @@ ADR-0018 готов к ратификации только если незави
+ * runtime/environment dependencies отличимы от component-owned dependencies;
+ * `artifact_type = none` не выдаётся за verified closed artifact;
+ * `deployed` ADR-0016/0017 не переопределяется;
+-* F-3B implementation может быть выведена из этого контракта без изобретения новой архитектурной семантики;
++* type-specific artifact contracts (§8) и canonical artifact representation (§4, §5) являются последующими Factory/Registry contracts (§25, шаги 1–4): ADR-0018 фиксирует их ownership (Factory) и обязательность для F-3B, но не их конкретную форму; они не передают ownership artifact identity и artifact boundary в D&O;
+ * после ратификации существует понятный controlled update `ARCHITECTURE.md`;
+ * migration CURRENT → TARGET определена;
+ * rejected alternatives зафиксированы.
