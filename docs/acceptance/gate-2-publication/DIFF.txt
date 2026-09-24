@@ -1,0 +1,43 @@
+EVIDENCE TASK DIFF
+==================
+
+This file documents the boundary between pre-existing state and
+evidence publication changes.
+
+PRE-EXISTING STATE (before evidence task)
+-----------------------------------------
+
+30 modified tracked files (implementation work from prior sessions)
+7 untracked files (implementation work from prior sessions)
+All changes are part of the F-3B source_package/v1 implementation.
+
+Pre-existing implementation changes include:
+  src/deployment_operations/runtime.py          (+205/-13 from HEAD)
+  src/deployment_operations/runtime_worker.py   (+55/-13 from HEAD)
+  src/deployment_operations/provisioning.py     (+60/-1 from HEAD)
+  src/deployment_operations/deployment.py       (+7/-1 from HEAD)
+  tests/test_f3b_source_package_integration.py  (new, 1481 lines)
+  ... and 25 other files from the implementation
+
+NEW EVIDENCE FILES (created by this evidence task only)
+-------------------------------------------------------
+
+  docs/acceptance/gate-2-publication/REPORT.md
+  docs/acceptance/gate-2-publication/REPOSITORY.txt
+  docs/acceptance/gate-2-publication/TESTS.txt
+  docs/acceptance/gate-2-publication/QUALITY.txt
+  docs/acceptance/gate-2-publication/DIFF.txt
+
+These are the ONLY files created by the evidence task.
+No pre-existing files were modified, deleted, or renamed.
+
+INTENDED STAGED PATHS (for evidence commit)
+--------------------------------------------
+
+  docs/acceptance/gate-2-publication/REPORT.md
+  docs/acceptance/gate-2-publication/REPOSITORY.txt
+  docs/acceptance/gate-2-publication/TESTS.txt
+  docs/acceptance/gate-2-publication/QUALITY.txt
+  docs/acceptance/gate-2-publication/DIFF.txt
+
+NO OTHER FILES will be staged or committed.

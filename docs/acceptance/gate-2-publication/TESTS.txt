@@ -1,0 +1,100 @@
+TEST RESULTS
+============
+
+Evidence source: CURRENT
+Date: 2026-09-24T19:33:39Z
+
+========================================================================
+Suite 1: tests/test_f3b_source_package_integration.py
+========================================================================
+
+Command:
+  PYTHONPATH=src python -m pytest tests/test_f3b_source_package_integration.py -v --tb=short
+
+Result: 33 passed, 0 failed, 0 skipped, 0 errors
+
+Tests:
+  TestCanonicalBoundaryLoading:
+    test_successful_canonical_load                       PASSED
+    test_canonical_digest_mismatch_rejected              PASSED
+    test_missing_canonical_json_rejected                 PASSED
+    test_malformed_canonical_json_rejected                PASSED
+    test_wrong_form_rejected                              PASSED
+    test_executable_without_owned_rejected                PASSED
+    test_boundary_entry_lookup                            PASSED
+    test_executable_entries_property                      PASSED
+
+  TestPhysicalTreeVerification:
+    test_matching_physical_tree                           PASSED
+    test_extra_physical_file_rejected                     PASSED
+    test_missing_canonical_file_rejected                  PASSED
+    test_content_digest_mismatch_rejected                 PASSED
+    test_directory_entry_verified                         PASSED
+    test_missing_directory_rejected                       PASSED
+    test_symlink_target_mismatch_rejected                 PASSED
+    test_executable_hiding_rejected                       PASSED
+
+  TestExecutionBoundary:
+    test_import_inside_boundary_allowed                   PASSED
+    test_import_outside_boundary_rejected                 PASSED
+    test_non_executable_content_not_bound                 PASSED
+    test_unowned_executable_rejected                      PASSED
+    test_substitution_detected_at_verification            PASSED
+    test_artifact_digest_is_canonical_json_digest         PASSED
+    test_content_digest_is_file_bytes_digest              PASSED
+    test_artifact_digest_differs_from_file_digest         PASSED
+
+  TestNoneArtifactUnchanged:
+    test_none_components_get_no_boundary                  PASSED
+    test_boundary_for_missing_component_returns_none      PASSED
+
+  TestSourcePackageEndToEnd:
+    test_e2e_source_package_provision_bind                PASSED
+    test_e2e_extra_executable_outside_boundary_rejected   PASSED
+    test_e2e_extra_file_in_tree_rejected_at_provision     PASSED
+    test_e2e_boundary_digest_mismatch_rejected_at_provision PASSED
+
+  TestSourcePackageRuntimeExecution:
+    test_e2e_source_package_runtime_start_and_request     PASSED
+    test_e2e_source_package_runtime_health_probe          PASSED
+    test_e2e_outside_boundary_import_refused_at_runtime   PASSED
+
+========================================================================
+Suite 2: tests/test_deployment_operations.py
+========================================================================
+
+Command:
+  PYTHONPATH=src python -m pytest tests/test_deployment_operations.py -q --tb=short
+
+Result: 153 passed, 0 failed, 0 skipped, 0 errors
+
+========================================================================
+Suite 3: tests/test_factory_artifact_source_package.py
+========================================================================
+
+Command:
+  PYTHONPATH=src python -m pytest tests/test_factory_artifact_source_package.py -v --tb=short
+
+Result: 44 passed, 0 failed, 0 skipped, 0 errors
+
+========================================================================
+Suite 4: tests/test_factory_artifact_container_image.py
+========================================================================
+
+Command:
+  PYTHONPATH=src python -m pytest tests/test_factory_artifact_container_image.py -v --tb=short
+
+Result: 27 passed, 0 failed, 0 skipped, 0 errors
+
+========================================================================
+Suite 5: tests/test_component_registry.py
+========================================================================
+
+Command:
+  PYTHONPATH=src python -m pytest tests/test_component_registry.py -v --tb=short
+
+Result: 124 passed, 0 failed, 0 skipped, 0 errors
+
+========================================================================
+TOTAL: 381 passed, 0 failed, 0 skipped, 0 errors
+========================================================================

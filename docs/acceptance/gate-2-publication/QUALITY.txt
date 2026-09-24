@@ -1,0 +1,43 @@
+QUALITY CHECK RESULTS
+=====================
+
+Date: 2026-09-24T19:33:39Z
+Evidence source: CURRENT
+
+========================================================================
+black
+========================================================================
+
+Command:
+  python -m black --check --fast tests/test_f3b_source_package_integration.py
+
+Result: PASSED
+Output: "All done! 1 file would be left unchanged."
+
+========================================================================
+ruff
+========================================================================
+
+Command:
+  python -m ruff check tests/test_f3b_source_package_integration.py
+
+Result: PASSED
+Output: "All checks passed!"
+
+========================================================================
+compileall
+========================================================================
+
+Command:
+  python -m compileall -q src tests
+
+Result: PASSED (exit 0)
+
+========================================================================
+git diff --check
+========================================================================
+
+Command:
+  git diff --check
+
+Result: PASSED (exit 0, no whitespace errors)

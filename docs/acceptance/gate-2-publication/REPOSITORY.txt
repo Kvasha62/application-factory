@@ -1,0 +1,64 @@
+REPOSITORY
+==========
+
+Repository:     Kvasha62/application-factory
+Clone path:     /home/user/application-factory
+Branch:         arena/01a0b7dd-application-factory
+HEAD:           bbcdb9512ada90b86eaadd68f0279a4296daadfa
+origin/main:    399836608ca99b6ea8b84808d694d9d27db25066
+
+WORKTREE BASELINE (at evidence creation)
+----------------------------------------
+
+30 modified tracked files (pre-existing implementation work)
+7 untracked files (pre-existing implementation work)
+diff --check: clean
+
+Modified tracked files (pre-existing, NOT changed by evidence task):
+  docs/ARCHITECTURE.md
+  docs/adr/ADR-0018-closed-executable-artifact-identity.md
+  docs/adr/README.md
+  factory/catalog/component_catalog.json
+  factory/golden_bundle/README.md
+  factory/golden_bundle/example_bundle.json
+  factory/golden_bundle/schema/golden_bundle.schema.json
+  factory/platform_instance/example_instance.json
+  factory/platform_instance/schema/platform_instance.schema.json
+  factory/platform_manifest/README.md
+  factory/platform_manifest/schema/platform_manifest.schema.json
+  factory/registry/README.md
+  factory/registry/component_registry.json
+  factory/registry/schema/component_registry.schema.json
+  pyproject.toml
+  src/component_registry/validation.py
+  src/deployment_operations/deployment.py
+  src/deployment_operations/events.py
+  src/deployment_operations/provisioning.py
+  src/deployment_operations/runtime.py
+  src/deployment_operations/runtime_worker.py
+  src/deployment_operations/state.py
+  src/deployment_operations/verification.py
+  src/golden_bundle/validation.py
+  src/platform_manifest/validation.py
+  tests/_deployment_helpers.py
+  tests/test_deployment_operations.py
+  tests/test_golden_bundle.py
+  tests/test_platform_instance.py
+  tests/test_platform_manifest.py
+
+Untracked files (pre-existing, NOT created by evidence task):
+  src/deployment_operations/factory_boundary.py
+  src/factory_artifact/__init__.py
+  src/factory_artifact/container_image.py
+  src/factory_artifact/source_package.py
+  tests/test_f3b_source_package_integration.py
+  tests/test_factory_artifact_container_image.py
+  tests/test_factory_artifact_source_package.py
+
+Relevant paths for Gate #2:
+  src/deployment_operations/runtime.py          — F-1/F-2 fixes
+  src/deployment_operations/runtime_worker.py   — worker boundary enforcement
+  src/deployment_operations/factory_boundary.py — canonical boundary loading
+  src/deployment_operations/provisioning.py     — boundary provisioning
+  tests/test_f3b_source_package_integration.py  — 33 source_package tests
+  tests/test_deployment_operations.py           — 153 deployment tests
