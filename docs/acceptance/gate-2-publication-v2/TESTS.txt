@@ -1,0 +1,174 @@
+TEST RESULTS
+============
+
+Evidence revision: v2
+Evidence source:   CURRENT
+Date:              2026-09-25
+
+========================================================================
+HISTORICAL EXECUTION EVIDENCE
+========================================================================
+
+The following results were obtained during the v1 evidence creation
+session (2026-09-24). The exact pytest output was captured in the
+v1 evidence (TESTS.txt in commit f96e22c). These are documented as
+historically reported results.
+
+------------------------------------------------------------------------
+Suite 1: tests/test_f3b_source_package_integration.py
+------------------------------------------------------------------------
+
+Command:
+  PYTHONPATH=src python -m pytest tests/test_f3b_source_package_integration.py -v --tb=short
+
+Historical result: 33 passed, 0 failed, 0 skipped, 0 errors
+
+Tests (historically reported):
+  TestCanonicalBoundaryLoading:
+    test_successful_canonical_load                       PASSED
+    test_canonical_digest_mismatch_rejected              PASSED
+    test_missing_canonical_json_rejected                 PASSED
+    test_malformed_canonical_json_rejected                PASSED
+    test_wrong_form_rejected                              PASSED
+    test_executable_without_owned_rejected                PASSED
+    test_boundary_entry_lookup                            PASSED
+    test_executable_entries_property                      PASSED
+
+  TestPhysicalTreeVerification:
+    test_matching_physical_tree                           PASSED
+    test_extra_physical_file_rejected                     PASSED
+    test_missing_canonical_file_rejected                  PASSED
+    test_content_digest_mismatch_rejected                 PASSED
+    test_directory_entry_verified                         PASSED
+    test_missing_directory_rejected                       PASSED
+    test_symlink_target_mismatch_rejected                 PASSED
+    test_executable_hiding_rejected                       PASSED
+
+  TestExecutionBoundary:
+    test_import_inside_boundary_allowed                   PASSED
+    test_import_outside_boundary_rejected                 PASSED
+    test_non_executable_content_not_bound                 PASSED
+    test_unowned_executable_rejected                      PASSED
+    test_substitution_detected_at_verification            PASSED
+    test_artifact_digest_is_canonical_json_digest         PASSED
+    test_content_digest_is_file_bytes_digest              PASSED
+    test_artifact_digest_differs_from_file_digest         PASSED
+
+  TestNoneArtifactUnchanged:
+    test_none_components_get_no_boundary                  PASSED
+    test_boundary_for_missing_component_returns_none      PASSED
+
+  TestSourcePackageEndToEnd:
+    test_e2e_source_package_provision_bind                PASSED
+    test_e2e_extra_executable_outside_boundary_rejected   PASSED
+    test_e2e_extra_file_in_tree_rejected_at_provision     PASSED
+    test_e2e_boundary_digest_mismatch_rejected_at_provision PASSED
+
+  TestSourcePackageRuntimeExecution:
+    test_e2e_source_package_runtime_start_and_request     PASSED
+    test_e2e_source_package_runtime_health_probe          PASSED
+    test_e2e_outside_boundary_import_refused_at_runtime   PASSED
+
+Verification status: HISTORICALLY REPORTED
+
+------------------------------------------------------------------------
+Suite 2: tests/test_deployment_operations.py
+------------------------------------------------------------------------
+
+Command:
+  PYTHONPATH=src python -m pytest tests/test_deployment_operations.py -q --tb=short
+
+Historical result: 153 passed, 0 failed, 0 skipped, 0 errors
+
+Verification status: HISTORICALLY REPORTED
+
+------------------------------------------------------------------------
+Suite 3: tests/test_factory_artifact_source_package.py
+------------------------------------------------------------------------
+
+Command:
+  PYTHONPATH=src python -m pytest tests/test_factory_artifact_source_package.py -v --tb=short
+
+Historical result: 44 passed, 0 failed, 0 skipped, 0 errors
+
+Verification status: HISTORICALLY REPORTED
+
+------------------------------------------------------------------------
+Suite 4: tests/test_factory_artifact_container_image.py
+------------------------------------------------------------------------
+
+Command:
+  PYTHONPATH=src python -m pytest tests/test_factory_artifact_container_image.py -v --tb=short
+
+Historical result: 27 passed, 0 failed, 0 skipped, 0 errors
+
+Verification status: HISTORICALLY REPORTED
+
+------------------------------------------------------------------------
+Suite 5: tests/test_component_registry.py
+------------------------------------------------------------------------
+
+Command:
+  PYTHONPATH=src python -m pytest tests/test_component_registry.py -v --tb=short
+
+Historical result: 124 passed, 0 failed, 0 skipped, 0 errors
+
+Verification status: HISTORICALLY REPORTED
+
+------------------------------------------------------------------------
+Historical total: 381 passed
+------------------------------------------------------------------------
+
+========================================================================
+INDEPENDENT RE-EXECUTION
+========================================================================
+
+Independent re-execution was attempted in this validation environment.
+
+Available:
+  python3:    3.11.2
+  pytest:     NOT INSTALLED
+  black:      NOT INSTALLED
+  ruff:       NOT INSTALLED
+  compileall: AVAILABLE
+
+Since pytest is not installed, independent re-execution of all five
+test suites is NOT AVAILABLE IN THIS ENVIRONMENT.
+
+Current re-execution: NOT RUN
+Reason: pytest unavailable in current validation environment
+
+========================================================================
+SUPPLEMENTARY: SOURCE CODE VERIFICATION
+========================================================================
+
+While test execution could not be independently re-run, the following
+source code claims were verified by reading the actual source files:
+
+_VebFinder refusal strings (runtime_worker.py):
+  Line 770: f"{root}, which is never a source of trusted component "
+  Line 771: "content; the boundary refuses to load it"
+  Status: VERIFIED in source
+
+Boundary chain components:
+  VerifiedArtifactBoundary:  class exists (factory_boundary.py)
+  load_canonical_boundary:   function exists (factory_boundary.py)
+  _assert_in_boundary:       function exists (runtime.py)
+  execution_closure:         function exists (runtime.py)
+  BoundModule:               class exists (runtime.py, line 79)
+  LocalProcessRuntime:       class exists (runtime.py)
+  _VebFinder:                class exists (runtime_worker.py)
+  _BoundLoader:              class exists (runtime_worker.py)
+  _verify_before_execution:  function exists (runtime.py)
+  untrusted=[element.workspace]: confirmed at line 756 (runtime.py)
+  Status: ALL VERIFIED in source
+
+Test file structure (test_f3b_source_package_integration.py):
+  TestCanonicalBoundaryLoading:     8 tests
+  TestPhysicalTreeVerification:     8 tests
+  TestExecutionBoundary:            8 tests
+  TestNoneArtifactUnchanged:        2 tests
+  TestSourcePackageEndToEnd:        4 tests
+  TestSourcePackageRuntimeExecution: 3 tests
+  Total test methods:               33
+  Status: VERIFIED by reading test file

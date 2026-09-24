@@ -1,0 +1,118 @@
+QUALITY CHECK RESULTS
+=====================
+
+Evidence revision: v2
+Date: 2026-09-25
+Evidence source: CURRENT
+
+========================================================================
+HISTORICAL EXECUTION EVIDENCE
+========================================================================
+
+The following results were obtained during the v1 evidence creation
+session (2026-09-24). They are documented as historically reported.
+
+------------------------------------------------------------------------
+black
+------------------------------------------------------------------------
+
+Command:
+  python -m black --check --fast tests/test_f3b_source_package_integration.py
+
+Historical result: PASSED
+Historical output: "All done! 1 file would be left unchanged."
+
+Verification status: HISTORICALLY REPORTED PASS
+
+------------------------------------------------------------------------
+ruff
+------------------------------------------------------------------------
+
+Command:
+  python -m ruff check tests/test_f3b_source_package_integration.py
+
+Historical result: PASSED
+Historical output: "All checks passed!"
+
+Verification status: HISTORICALLY REPORTED PASS
+
+------------------------------------------------------------------------
+compileall
+------------------------------------------------------------------------
+
+Command:
+  python -m compileall -q src tests
+
+Historical result: PASSED (exit 0)
+
+Verification status: HISTORICALLY REPORTED PASS
+
+------------------------------------------------------------------------
+git diff --check
+------------------------------------------------------------------------
+
+Command:
+  git diff --check
+
+Historical result: PASSED (exit 0, no whitespace errors)
+
+Verification status: HISTORICALLY REPORTED PASS
+
+========================================================================
+INDEPENDENT RE-EXECUTION
+========================================================================
+
+Available tools:
+  python3:    3.11.2
+  pytest:     NOT INSTALLED
+  black:      NOT INSTALLED
+  ruff:       NOT INSTALLED
+  compileall: AVAILABLE
+
+------------------------------------------------------------------------
+black
+------------------------------------------------------------------------
+
+Current re-execution: NOT RUN
+Reason: black not installed in current environment
+
+------------------------------------------------------------------------
+ruff
+------------------------------------------------------------------------
+
+Current re-execution: NOT RUN
+Reason: ruff not installed in current environment
+
+------------------------------------------------------------------------
+compileall
+------------------------------------------------------------------------
+
+Command:
+  python3 -m compileall -q src tests
+
+Current result: PASSED (exit 0)
+
+Verification status: CURRENTLY VERIFIED PASS
+
+------------------------------------------------------------------------
+git diff --check
+------------------------------------------------------------------------
+
+Command:
+  git diff --check
+
+Current result: PASSED (exit 0, no whitespace errors)
+
+Verification status: CURRENTLY VERIFIED PASS
+
+========================================================================
+SUMMARY
+========================================================================
+
+Check          Historical    Current
+-----------    ----------    -------
+black          REPORTED PASS NOT AVAILABLE
+ruff           REPORTED PASS NOT AVAILABLE
+compileall     REPORTED PASS CURRENTLY VERIFIED PASS
+git diff --    REPORTED PASS CURRENTLY VERIFIED PASS
+check

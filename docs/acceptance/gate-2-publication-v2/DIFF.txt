@@ -1,0 +1,44 @@
+EVIDENCE REVISION v2 — SCOPE
+==============================
+
+This file documents the scope of evidence revision v2.
+
+PRIOR EVIDENCE (immutable, not modified)
+-----------------------------------------
+
+v1 commit:  f96e22c93b4a9dbc8f3f51efb9d87cb95214fefe
+v1 tag:     gate-2-evidence
+v1 files:   5 evidence files under docs/acceptance/gate-2-publication/
+
+The v1 evidence commit and its tag are not modified by this revision.
+
+PRE-EXISTING WORKING TREE STATE
+--------------------------------
+
+30 modified tracked files (implementation work from prior sessions)
+7 untracked implementation files (from prior sessions)
+3 untracked .diff files (ADR-0018 artifacts from prior session)
+7 untracked gate-2-publication files (from v1 evidence + audit)
+
+None of these were modified, deleted, or renamed by this revision.
+
+NEW EVIDENCE REVISION v2
+-------------------------
+
+The evidence revision v2 commit contains exactly the following files:
+
+  docs/acceptance/gate-2-publication-v2/DIFF.txt
+  docs/acceptance/gate-2-publication-v2/QUALITY.txt
+  docs/acceptance/gate-2-publication-v2/REPORT.md
+  docs/acceptance/gate-2-publication-v2/REPOSITORY.txt
+  docs/acceptance/gate-2-publication-v2/TESTS.txt
+
+This can be verified after commit with:
+  git show --name-status <v2-commit>
+
+SCOPE VERIFICATION
+------------------
+
+No production code, tests, ADRs, schemas, contracts, registry,
+manifests, instances, or deployment state was modified by this
+evidence revision.
