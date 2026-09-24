@@ -209,6 +209,23 @@ def test_symlink_target_must_exist(tmp_path):
         )
 
 
+def test_unreadable_symlink_is_rejected(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    make_symlink("target", root / "link")
+
+    def fail_readlink(_path):
+        raise OSError("simulated readlink failure")
+
+    monkeypatch.setattr(os, "readlink", fail_readlink)
+
+    with pytest.raises(SourcePackageError, match="cannot read symlink"):
+        build_source_package_canonical(
+            root,
+            declaration("link", owned=False),
+        )
+
+
 def test_symlink_cycle_is_rejected(tmp_path):
     root = tmp_path / "root"
     root.mkdir()
@@ -282,14 +299,16 @@ def test_physical_executable_signs_are_detected(tmp_path, filename, content):
 
     (root / filename).write_bytes(content)
 
-    canonical, _, _ = build_source_package_canonical(
-        root,
-        declaration(filename, owned=True, executable=True),
-    )
+    with pytest.raises(SourcePackageError, match="executable=false"):
+        build_source_package_canonical(
+            root,
+            declaration(filename, owned=True, executable=False),
+        )
 
-    assert canonical["entries"][0]["executable"] is True
 
-
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX executable bits are unavailable on Windows"
+)
 def test_posix_executable_bit_is_detected(tmp_path):
     root = tmp_path / "root"
     root.mkdir()
@@ -298,12 +317,11 @@ def test_posix_executable_bit_is_detected(tmp_path):
     path.write_bytes(b"plain")
     path.chmod(path.stat().st_mode | 0o111)
 
-    canonical, _, _ = build_source_package_canonical(
-        root,
-        declaration("program", owned=True, executable=True),
-    )
-
-    assert canonical["entries"][0]["executable"] is True
+    with pytest.raises(SourcePackageError, match="executable=false"):
+        build_source_package_canonical(
+            root,
+            declaration("program", owned=True, executable=False),
+        )
 
 
 @pytest.mark.parametrize(

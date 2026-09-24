@@ -114,7 +114,10 @@ def _enumerate(root: Path) -> dict[str, dict[str, Any]]:
                 raise SourcePackageError(f"duplicate path: {path}")
 
             if child.is_symlink():
-                target = os.readlink(child.path)
+                try:
+                    target = os.readlink(child.path)
+                except OSError as exc:
+                    raise SourcePackageError(f"cannot read symlink: {path}") from exc
                 result[path] = {
                     "type": "symlink",
                     "content_digest": None,
