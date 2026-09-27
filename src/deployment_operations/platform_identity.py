@@ -14,10 +14,10 @@ from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 
 from deployment_operations.environment import IDENTITY_CONFIGURATION_KEYS
+from platform_instance.schema import load_schema, validate_structure_against_schema
 from platform_manifest.lifecycle import LIFECYCLE_STATES
 from platform_manifest.manifest import discover_root
 from platform_manifest.validation import ARTIFACT_TYPES, SHA256_NULLABLE_PATTERN
-from platform_instance.schema import load_schema, validate_structure_against_schema
 
 T = TypeVar("T")
 Document = Mapping[str, Any]
