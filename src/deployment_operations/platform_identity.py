@@ -15,9 +15,6 @@ from typing import Any, Protocol
 
 
 Document = Mapping[str, Any]
-T = TypeVar("T")
-
-
 class EvidenceProvenance(StrEnum):
     """Normative provenance classes from ADR-0019/0020."""
 
