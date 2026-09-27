@@ -87,7 +87,7 @@ class OwnerSuppliedPlatformIdentityProvider(PlatformIdentityProvider):
             membership_established=snapshot.membership_established,
             configuration=snapshot.configuration,
             golden_bundle=snapshot.golden_bundle,
-            golden_bundle_inventory_established=snapshot.golden_bundle_inventory_established,
+            golden_bundle_inventory_established=(                snapshot.golden_bundle_inventory_established            ),
             extensions=snapshot.extensions,
             branding=snapshot.branding,
         )
