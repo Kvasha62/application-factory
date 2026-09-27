@@ -146,7 +146,11 @@ def test_duplicate_actual_components_fail_closed() -> None:
         ("branding", {"name": "A"}, {"name": "B"}),
         ("extensions", [{"id": "A"}], [{"id": "B"}]),
         ("golden_bundle", {"bundle_id": "A"}, {"bundle_id": "B"}),
-        (\n            "configuration",\n            {"authorization": {"platform_id": "A"}},\n            {"authorization": {"platform_id": "B"}},\n        ),
+        (
+            "configuration",
+            {"authorization": {"platform_id": "A"}},
+            {"authorization": {"platform_id": "B"}},
+        ),
     ],
 )
 def test_identity_bearing_difference_changes_digest(
