@@ -559,7 +559,7 @@ def test_non_json_identity_value_is_unavailable_at_correspondence_boundary() -> 
     )
     expected = _expected_from_surface(_surface())
 
-    with pytest.raises(TypeError):
+    with pytest.raises(ActualIdentityUnavailable, match="schema"):
         compute_actual_digest(_evidence(surface))
 
     result = establish_identity_correspondence(expected, _evidence(surface))
