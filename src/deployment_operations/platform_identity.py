@@ -199,12 +199,7 @@ def validate_actual_surface(surface: PlatformIdentitySurface) -> None:
                 f"artifact identity is invalid for {component.component_id!r}"
             )
 
-    for name in (
-        "configuration",
-        "golden_bundle",
-        "extensions",
-        "branding",
-    ):
+    for name in ("configuration", "golden_bundle", "extensions", "branding"):
         _validate_identity_field(name, getattr(surface, name))
 
 
