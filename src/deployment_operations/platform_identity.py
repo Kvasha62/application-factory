@@ -9,7 +9,7 @@ digest algorithm.
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, Self
 
 
 Document = Mapping[str, Any]
@@ -45,7 +45,7 @@ class IdentityField[T]:
     value: T | None = None
 
     @classmethod
-    def present(cls, value: T) -> IdentityField[T]:
+    def present(cls, value: T) -> Self:
         if value is None:
             raise ValueError("PRESENT identity field requires a value")
         return cls(PresenceState.PRESENT, value)
