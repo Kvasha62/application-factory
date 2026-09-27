@@ -7,8 +7,8 @@ digest algorithm.
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from enum import StrEnum
+from dataclasses import dataclass
 from typing import Any, Protocol, Self
 
 
@@ -51,11 +51,11 @@ class IdentityField[T]:
         return cls(PresenceState.PRESENT, value)
 
     @classmethod
-    def absent(cls) -> IdentityField[T]:
+    def absent(cls) -> Self:
         return cls(PresenceState.ABSENT)
 
     @classmethod
-    def unknown(cls) -> IdentityField[T]:
+    def unknown(cls) -> Self:
         return cls(PresenceState.UNKNOWN)
 
 
@@ -76,7 +76,7 @@ class EvidenceCorrelation:
 
     token: object
 
-    def matches(self, other: EvidenceCorrelation) -> bool:
+    def matches(self, other: Self) -> bool:
         return self.token == other.token
 
 
