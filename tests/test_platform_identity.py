@@ -550,8 +550,9 @@ def test_non_json_identity_value_is_unavailable_at_correspondence_boundary() -> 
     with pytest.raises(TypeError):
         compute_actual_digest(_evidence(surface))
 
-    with pytest.raises(TypeError):
-        establish_identity_correspondence(expected, _evidence(surface))
+    result = establish_identity_correspondence(expected, _evidence(surface))
+
+    assert result == IdentityCorrespondenceResult.UNAVAILABLE
 
 
 def test_incomplete_configuration_does_not_reach_canonicalizer(monkeypatch) -> None:
