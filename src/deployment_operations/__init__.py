@@ -87,7 +87,7 @@ from deployment_operations.health import (
     evaluate_health,
     verify_identity,
 )
-from deployment_operations.platform_identity import (
+from deployment_operations.platform_identity_source import (    ActualPlatformSnapshot,    OwnerSuppliedPlatformIdentityProvider,    RunningPlatformIdentitySource,)from deployment_operations.platform_identity import (
     ActualComponentIdentity,
     ActualEvidence,
     ActualIdentityUnavailable,
@@ -154,6 +154,7 @@ __all__ = [
     "LIFECYCLE_REALIZED",
     "STAGES",
     "ActualComponentIdentity",
+    "ActualPlatformSnapshot",
     "ActualEvidence",
     "ActualIdentityUnavailable",
     "ArtifactSource",
@@ -190,6 +191,7 @@ __all__ = [
     "MigrationOrchestrationFailed",
     "MigrationRecord",
     "OperationalAction",
+    "OwnerSuppliedPlatformIdentityProvider",
     "PlatformIdentityBinding",
     "PlatformIdentityProvider",
     "PlatformIdentitySurface",
@@ -200,6 +202,7 @@ __all__ = [
     "RuntimeElement",
     "RuntimeHandle",
     "RuntimeProcessError",
+    "RunningPlatformIdentitySource",
     "SecretLeakRefused",
     "StartupFailed",
     "build_elements",
