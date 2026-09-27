@@ -202,7 +202,6 @@ __all__ = [
     "RuntimeProcessError",
     "SecretLeakRefused",
     "StartupFailed",
-    "]",
     "build_elements",
     "canonical_digest",
     "compute_actual_digest",
