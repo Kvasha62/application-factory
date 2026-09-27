@@ -7,8 +7,8 @@ digest algorithm.
 """
 
 from collections.abc import Mapping
-from enum import StrEnum
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Protocol, Self
 
 
