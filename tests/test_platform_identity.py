@@ -82,7 +82,7 @@ def _surface(
         manifest={
             "manifest_id": "example-platform",
             "manifest_version": "1.0.0",
-            "manifest_digest": "sha256:manifest",
+            "manifest_digest": "sha256:" + "00" * 32,
         },
         manifest_state=manifest_state,
         components=components if components is not None else (_component(),),
@@ -228,7 +228,19 @@ def test_distinct_actual_identities_have_distinct_digests() -> None:
     [
         ("branding", {"name": "Alpha"}, {"name": "Beta"}),
         ("extensions", [{"extension_id": "a"}], [{"extension_id": "b"}]),
-        ("golden_bundle", {"bundle_id": "certified-a"}, {"bundle_id": "certified-b"}),
+        (
+            "golden_bundle",
+            {
+                "bundle_id": "certified_a",
+                "bundle_version": "1.0.0",
+                "bundle_digest": "sha256:" + "aa" * 32,
+            },
+            {
+                "bundle_id": "certified_b",
+                "bundle_version": "1.0.0",
+                "bundle_digest": "sha256:" + "bb" * 32,
+            },
+        ),
         (
             "configuration",
             {"authorization": {"platform_id": "example-platform", "environment": "a"}},
@@ -657,6 +669,80 @@ def test_lifecycle_vocabulary_is_unchanged() -> None:
     assert LIFECYCLE_IN_PROGRESS == "in_progress"
     assert LIFECYCLE_REALIZED == "realized"
     assert LIFECYCLE_FAILED == "failed"
+
+
+def test_empty_components_are_unavailable() -> None:
+    with pytest.raises(ActualIdentityUnavailable, match="empty"):
+        project_actual_identity(_evidence(_surface(components=())))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("platform_id", "INVALID"),
+        ("component_id", "bad-id"),
+        ("component_version", "latest"),
+    ],
+)
+def test_invalid_identity_formats_are_unavailable(field: str, value: str) -> None:
+    if field == "platform_id":
+        surface = _surface(platform_id=value)
+    elif field == "component_id":
+        surface = _surface(components=(_component(value),))
+    else:
+        surface = _surface(components=(_component(version=value),))
+
+    with pytest.raises(ActualIdentityUnavailable, match="schema"):
+        project_actual_identity(_evidence(surface))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("manifest_id", "INVALID ID"),
+        ("manifest_version", "latest"),
+        ("manifest_digest", "not-a-digest"),
+    ],
+)
+def test_invalid_manifest_identity_formats_are_unavailable(
+    field: str, value: str
+) -> None:
+    surface = _surface()
+    manifest = dict(surface.manifest)
+    manifest[field] = value
+    surface = PlatformIdentitySurface(
+        platform_id=surface.platform_id,
+        manifest=manifest,
+        manifest_state=surface.manifest_state,
+        components=surface.components,
+        membership_established=surface.membership_established,
+        configuration=surface.configuration,
+        golden_bundle=surface.golden_bundle,
+        golden_bundle_inventory_established=surface.golden_bundle_inventory_established,
+        extensions=surface.extensions,
+        branding=surface.branding,
+    )
+
+    with pytest.raises(ActualIdentityUnavailable, match="schema"):
+        project_actual_identity(_evidence(surface))
+
+
+def test_component_order_is_canonical_for_actual_digest() -> None:
+    authorization = _component("authorization")
+    booking = _component("booking")
+    first = _surface(components=(authorization, booking))
+    second = _surface(components=(booking, authorization))
+
+    assert compute_actual_digest(_evidence(first)) == compute_actual_digest(
+        _evidence(second)
+    )
+
+
+def test_projected_identity_is_checked_by_authoritative_instance_schema() -> None:
+    surface = _surface(components=(_component("INVALID-ID"),))
+
+    with pytest.raises(ActualIdentityUnavailable, match="schema"):
+        project_actual_identity(_evidence(surface))
 
 
 def test_no_second_digest_type_is_defined() -> None:
