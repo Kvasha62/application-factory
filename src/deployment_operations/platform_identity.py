@@ -6,8 +6,6 @@ reading expected deployment state as actual state, or introducing a second
 digest algorithm.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
