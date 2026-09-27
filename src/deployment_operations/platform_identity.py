@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Generic, Protocol, TypeVar
+from typing import Any, Protocol
 
 
 Document = Mapping[str, Any]
@@ -43,24 +43,24 @@ class IdentityCorrespondenceResult(StrEnum):
 
 
 @dataclass(frozen=True)
-class IdentityField(Generic[T]):
+class IdentityField[T]:
     """An identity-bearing value with explicit presence semantics."""
 
     state: PresenceState
     value: T | None = None
 
     @classmethod
-    def present(cls, value: T) -> "IdentityField[T]":
+    def present(cls, value: T) -> IdentityField[T]:
         if value is None:
             raise ValueError("PRESENT identity field requires a value")
         return cls(PresenceState.PRESENT, value)
 
     @classmethod
-    def absent(cls) -> "IdentityField[T]":
+    def absent(cls) -> IdentityField[T]:
         return cls(PresenceState.ABSENT)
 
     @classmethod
-    def unknown(cls) -> "IdentityField[T]":
+    def unknown(cls) -> IdentityField[T]:
         return cls(PresenceState.UNKNOWN)
 
 
@@ -81,7 +81,7 @@ class EvidenceCorrelation:
 
     token: object
 
-    def matches(self, other: "EvidenceCorrelation") -> bool:
+    def matches(self, other: EvidenceCorrelation) -> bool:
         return self.token == other.token
 
 
@@ -96,7 +96,7 @@ class EvidenceFreshness:
 
 
 @dataclass(frozen=True)
-class ActualEvidence(Generic[T]):
+class ActualEvidence[T]:
     """Actual value plus the proof envelope required by D&O."""
 
     value: T
