@@ -10,9 +10,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol, Self
-
-
 Document = Mapping[str, Any]
+
+
 class EvidenceProvenance(StrEnum):
     """Normative provenance classes from ADR-0019/0020."""
 
