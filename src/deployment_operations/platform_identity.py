@@ -219,6 +219,7 @@ def project_actual_identity(evidence: ActualEvidence) -> dict[str, Any]:
             )
         if field.state is PresenceState.PRESENT:
             document[name] = _copy_value(field.value)
+    _validate_projected_instance_shape(document)
     return document
 
 
