@@ -259,6 +259,25 @@ def establish_identity_correspondence(
     return IdentityCorrespondenceResult.MISMATCH
 
 
+def _validate_projected_instance_shape(document: Document) -> None:
+    """Validate projected actual identity against the normative Instance schema."""
+
+    candidate = dict(document)
+    candidate["instance_digest"] = "sha256:" + "0" * 64
+    try:
+        schema = load_schema(discover_root())
+        errors = validate_structure_against_schema(candidate, schema)
+    except (OSError, TypeError, ValueError) as error:
+        raise ActualIdentityUnavailable(
+            f"authoritative Platform Instance schema is unavailable: {error}"
+        ) from error
+    if errors:
+        raise ActualIdentityUnavailable(
+            "projected actual identity violates the authoritative Platform "
+            f"Instance schema: {errors[0]}"
+        )
+
+
 def _require_provenance(provenance: object) -> None:
     if provenance not in (
         EvidenceProvenance.MEASURED,
