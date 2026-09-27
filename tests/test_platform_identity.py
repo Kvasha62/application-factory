@@ -543,7 +543,7 @@ def test_expected_artifact_identity_is_not_substituted() -> None:
 
 def test_non_json_identity_value_is_unavailable_at_correspondence_boundary() -> None:
     surface = _surface(
-        configuration=IdentityField.present(object()),
+        branding=IdentityField.present(object()),
     )
     expected = _expected_from_surface(_surface())
 
