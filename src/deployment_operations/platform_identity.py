@@ -15,7 +15,9 @@ from typing import Any, Protocol, TypeVar
 
 from deployment_operations.environment import IDENTITY_CONFIGURATION_KEYS
 from platform_manifest.lifecycle import LIFECYCLE_STATES
+from platform_manifest.manifest import discover_root
 from platform_manifest.validation import ARTIFACT_TYPES, SHA256_NULLABLE_PATTERN
+from platform_instance.schema import load_schema, validate_structure_against_schema
 
 T = TypeVar("T")
 Document = Mapping[str, Any]
@@ -208,7 +210,11 @@ def project_actual_identity(evidence: ActualEvidence) -> dict[str, Any]:
             "golden_bundle", surface.golden_bundle
         ),
         "components": [
-            _project_component(component.value) for component in surface.components
+            _project_component(component.value)
+            for component in sorted(
+                surface.components,
+                key=lambda component: component.value.component_id,
+            )
         ],
     }
     for name in ("configuration", "extensions", "branding"):
@@ -281,6 +287,8 @@ def _validate_components(
         raise ActualIdentityUnavailable(
             "actual components must preserve multiplicity until validation"
         )
+    if not components:
+        raise ActualIdentityUnavailable("actual component membership is empty")
     seen: set[str] = set()
     shared_correlation: EvidenceCorrelation | None = None
     for component_evidence in components:
