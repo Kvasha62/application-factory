@@ -386,9 +386,9 @@ def test_unknown_golden_bundle_is_not_null() -> None:
         )
 
 
-def test_proven_empty_membership_is_not_unknown_emptiness() -> None:
-    empty = _surface(components=(), membership_established=True)
-    assert project_actual_identity(_evidence(empty))["components"] == []
+def test_empty_membership_is_unavailable_even_when_established() -> None:
+    with pytest.raises(ActualIdentityUnavailable, match="empty"):
+        validate_actual_evidence(_evidence(_surface(components=())))
 
     with pytest.raises(ActualIdentityUnavailable, match="membership"):
         validate_actual_evidence(
