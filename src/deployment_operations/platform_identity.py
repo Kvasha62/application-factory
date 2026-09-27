@@ -242,7 +242,7 @@ def establish_identity_correspondence(
 
     try:
         actual_digest = compute_actual_digest(evidence)
-    except ActualIdentityUnavailable:
+    except (ActualIdentityUnavailable, TypeError):
         return IdentityCorrespondenceResult.UNAVAILABLE
     expected_digest = expected_instance.get("instance_digest")
     if not isinstance(expected_digest, str) or not expected_digest:
