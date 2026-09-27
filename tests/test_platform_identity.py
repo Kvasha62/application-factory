@@ -541,6 +541,19 @@ def test_expected_artifact_identity_is_not_substituted() -> None:
     )
 
 
+def test_non_json_identity_value_is_unavailable_at_correspondence_boundary() -> None:
+    surface = _surface(
+        configuration=IdentityField.present(object()),
+    )
+    expected = _expected_from_surface(_surface())
+
+    with pytest.raises(TypeError):
+        compute_actual_digest(_evidence(surface))
+
+    with pytest.raises(TypeError):
+        establish_identity_correspondence(expected, _evidence(surface))
+
+
 def test_incomplete_configuration_does_not_reach_canonicalizer(monkeypatch) -> None:
     def fail(document: object) -> str:
         raise AssertionError(document)
