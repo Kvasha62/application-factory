@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from deployment_operations.platform_identity_source import ActualPlatformSnapshot
 
 
-
 @dataclass(frozen=True)
 class ActualMembership:
     """Complete actual component membership for one Running Platform."""
