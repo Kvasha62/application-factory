@@ -56,7 +56,7 @@ jobs:
         run: ruff check .
 
       - name: Black
-        run: black --diff --check .
+        run: black --check .
 
       - name: Test suite
         run: python -m pytest tests/
