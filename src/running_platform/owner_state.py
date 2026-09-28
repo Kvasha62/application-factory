@@ -1,11 +1,8 @@
 """Concrete owner-side composition of actual Running Platform identity facts.
 
-This module contains no expected deployment state and no Platform Instance
-canonicalization. It composes observations from the six existing owner-side
-source contracts into the existing :class:`ActualPlatformSnapshot` seam.
-
-The state held here is owner state, not a second canonical identity model.
-Expected identity is intentionally absent.
+This module composes the six existing owner-side source contracts into the
+existing :class:`ActualPlatformSnapshot` seam. It contains no expected
+deployment state and introduces no second canonical identity or digest.
 """
 
 from __future__ import annotations
@@ -14,13 +11,11 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from deployment_operations.platform_identity import (
-    ActualComponentIdentity,
     ActualEvidence,
     ActualIdentityUnavailable,
     EvidenceCorrelation,
     EvidenceFreshness,
     EvidenceProvenance,
-    IdentityField,
     PlatformIdentityBinding,
 )
 from deployment_operations.platform_identity_source import ActualPlatformSnapshot
@@ -29,16 +24,12 @@ from running_platform.identity_sources import (
     ActualManifest,
     ActualMembership,
 )
+from deployment_operations.platform_identity import IdentityField
 
 
 @dataclass(frozen=True)
 class RunningPlatformOwnerState:
-    """Actual owner-observed facts for one Running Platform evaluation.
-
-    The fields deliberately reuse the existing source-contract value types.
-    No expected instance, expected digest, deployment record, or D&O object is
-    represented here.
-    """
+    """Owner-observed facts for one Running Platform evaluation."""
 
     platform_id: str
     membership: ActualMembership
@@ -53,7 +44,7 @@ class RunningPlatformOwnerState:
 
 
 class OwnerStateReader(Protocol):
-    """Owner-side reader for the current actual state."""
+    """Owner-side reader for current actual state."""
 
     def read(self, binding: PlatformIdentityBinding) -> RunningPlatformOwnerState:
         """Read actual owner state for the opaque evaluation binding."""
@@ -61,7 +52,7 @@ class OwnerStateReader(Protocol):
 
 
 class OwnerStateSource:
-    """Expose one concrete owner state through all six source contracts."""
+    """Expose one owner state through the six existing source contracts."""
 
     def __init__(self, reader: OwnerStateReader) -> None:
         self._reader = reader
@@ -74,8 +65,8 @@ class OwnerStateSource:
             )
         return state
 
+    @staticmethod
     def _evidence(
-        self,
         state: RunningPlatformOwnerState,
         value: object,
     ) -> ActualEvidence:
@@ -115,65 +106,64 @@ class OwnerStateSource:
 
 
 class OwnerStateSnapshotSource:
-    """Build the existing snapshot seam from the six owner-side observations."""
+    """Build the existing snapshot seam from one consistent owner observation."""
 
-    def __init__(self, sources: OwnerStateSource) -> None:
-        self._sources = sources
+    def __init__(self, reader: OwnerStateReader) -> None:
+        self._reader = reader
 
     def observe(self, binding: PlatformIdentityBinding) -> ActualPlatformSnapshot:
-        membership = self._sources.observe_membership(binding)
-        manifest = self._sources.observe_manifest(binding)
-        configuration = self._sources.observe_configuration(binding)
-        golden_bundle = self._sources.observe_golden_bundle(binding)
-        extensions = self._sources.observe_extensions(binding)
-        branding = self._sources.observe_branding(binding)
+        state = self._reader.read(binding)
+        if not isinstance(state, RunningPlatformOwnerState):
+            raise ActualIdentityUnavailable(
+                "owner state reader returned invalid actual state"
+            )
 
-        evidence = (
-            membership,
-            manifest,
-            configuration,
-            golden_bundle,
-            extensions,
-            branding,
+        source = OwnerStateSource(lambda_reader(state))
+        observations = (
+            source.observe_membership(binding),
+            source.observe_manifest(binding),
+            source.observe_configuration(binding),
+            source.observe_golden_bundle(binding),
+            source.observe_extensions(binding),
+            source.observe_branding(binding),
         )
-        self._validate_shared_envelope(evidence)
+        self._validate_shared_envelope(observations)
 
-        membership_value = membership.value
-        manifest_value = manifest.value
-        golden_value = golden_bundle.value
-        if not isinstance(membership_value, ActualMembership):
+        membership = observations[0].value
+        manifest = observations[1].value
+        configuration = observations[2].value
+        golden_bundle = observations[3].value
+
+        if not isinstance(membership, ActualMembership):
             raise ActualIdentityUnavailable("membership source returned invalid state")
-        if not isinstance(manifest_value, ActualManifest):
+        if not isinstance(manifest, ActualManifest):
             raise ActualIdentityUnavailable("manifest source returned invalid state")
-        if not isinstance(golden_value, ActualGoldenBundle):
+        if not isinstance(golden_bundle, ActualGoldenBundle):
             raise ActualIdentityUnavailable(
                 "Golden Bundle source returned invalid state"
             )
-        if not isinstance(manifest_value.manifest, dict):
+        if any(
+            not hasattr(component, "component_id")
+            for component in membership.components
+        ):
             raise ActualIdentityUnavailable(
-                "manifest source did not establish a concrete actual manifest"
+                "membership source returned malformed component identity"
             )
 
-        platform_id = self._platform_id(membership_value.components, configuration)
-
         return ActualPlatformSnapshot(
-            platform_id=platform_id,
-            manifest=manifest_value.manifest,
-            manifest_state=manifest_value.manifest_state,
-            components=tuple(
-                component.value
-                for component in membership_value.components
-                if isinstance(component, ActualComponentIdentity)
-            ),
-            membership_established=membership_value.established,
-            configuration=configuration.value,
-            golden_bundle=golden_value.identity,
-            golden_bundle_inventory_established=golden_value.inventory_established,
-            extensions=extensions.value,
-            branding=branding.value,
-            provenance=membership.provenance,
-            correlation_token=membership.correlation.token,
-            freshness_current=membership.freshness.current,
+            platform_id=state.platform_id,
+            manifest=manifest.manifest,
+            manifest_state=manifest.manifest_state,
+            components=tuple(membership.components),
+            membership_established=membership.established,
+            configuration=configuration,
+            golden_bundle=golden_bundle.identity,
+            golden_bundle_inventory_established=golden_bundle.inventory_established,
+            extensions=observations[4].value,
+            branding=observations[5].value,
+            provenance=observations[0].provenance,
+            correlation_token=observations[0].correlation.token,
+            freshness_current=observations[0].freshness.current,
         )
 
     @staticmethod
@@ -182,16 +172,21 @@ class OwnerStateSnapshotSource:
             raise ActualIdentityUnavailable("owner identity source returned no evidence")
 
         first = evidence[0]
+        if first.provenance not in (
+            EvidenceProvenance.MEASURED,
+            EvidenceProvenance.TRANSITIVE,
+            EvidenceProvenance.ATTESTED,
+        ):
+            raise ActualIdentityUnavailable(
+                "owner sources returned non-normative provenance"
+            )
+
         for item in evidence:
             if not isinstance(item, ActualEvidence):
                 raise ActualIdentityUnavailable("owner source returned invalid evidence")
-            if item.provenance not in (
-                EvidenceProvenance.MEASURED,
-                EvidenceProvenance.TRANSITIVE,
-                EvidenceProvenance.ATTESTED,
-            ):
+            if item.provenance != first.provenance:
                 raise ActualIdentityUnavailable(
-                    "owner sources returned non-normative provenance"
+                    "owner sources returned mixed provenance"
                 )
             if not item.correlation.matches(first.correlation):
                 raise ActualIdentityUnavailable(
@@ -200,40 +195,15 @@ class OwnerStateSnapshotSource:
             if item.freshness.current is not True:
                 raise ActualIdentityUnavailable("owner sources returned stale evidence")
 
-    @staticmethod
-    def _platform_id(
-        components: tuple[ActualComponentIdentity, ...],
-        configuration: ActualEvidence,
-    ) -> str:
-        if not components:
-            raise ActualIdentityUnavailable("owner membership contains no components")
-        if not isinstance(configuration.value, IdentityField):
-            raise ActualIdentityUnavailable(
-                "configuration source returned invalid identity field"
-            )
-        if configuration.value.state is IdentityField.absent().state:
-            raise ActualIdentityUnavailable(
-                "owner configuration does not establish platform identity"
-            )
-        if not isinstance(configuration.value.value, dict):
-            raise ActualIdentityUnavailable(
-                "owner configuration does not establish platform identity"
-            )
 
-        values: set[str] = set()
-        for section in configuration.value.value.values():
-            if not isinstance(section, dict):
-                continue
-            for key in ("platform_id", "current_platform_id"):
-                value = section.get(key)
-                if isinstance(value, str):
-                    values.add(value)
+def lambda_reader(state: RunningPlatformOwnerState) -> OwnerStateReader:
+    """Return a reader pinned to one already observed owner state."""
 
-        if len(values) != 1:
-            raise ActualIdentityUnavailable(
-                "owner configuration does not establish one actual platform_id"
-            )
-        return values.pop()
+    class _Reader:
+        def read(self, binding: PlatformIdentityBinding) -> RunningPlatformOwnerState:
+            return state
+
+    return _Reader()
 
 
 __all__ = [
