@@ -10,7 +10,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
-from deployment_operations.environment import IDENTITY_CONFIGURATION_KEYS
 from deployment_operations.platform_identity import (
     ActualComponentIdentity,
     ActualEvidence,
@@ -21,7 +20,6 @@ from deployment_operations.platform_identity import (
     PlatformIdentityBinding,
     PlatformIdentityProvider,
     PlatformIdentitySurface,
-    PresenceState,
     validate_actual_evidence,
 )
 
@@ -49,7 +47,6 @@ class ActualPlatformSnapshot:
     provenance: str
     correlation_token: object
     freshness_current: bool
-
 
 
 class RunningPlatformIdentitySource(Protocol):
@@ -116,7 +113,6 @@ class OwnerSuppliedPlatformIdentityProvider(PlatformIdentityProvider):
 
 __all__ = [
     "ActualPlatformSnapshot",
-    "ComposedRunningPlatformIdentitySource",
     "OwnerSuppliedPlatformIdentityProvider",
     "RunningPlatformIdentitySource",
 ]
