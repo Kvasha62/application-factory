@@ -129,6 +129,20 @@ class OwnerStateSnapshotSource:
         )
         self._validate_shared_envelope(observations)
 
+        for name, observation in zip(
+            ("configuration", "extensions", "branding"),
+            observations[2:3] + observations[4:6],
+        ):
+            field = observation.value
+            if not isinstance(field, IdentityField):
+                raise ActualIdentityUnavailable(
+                    f"{name} source returned invalid identity field"
+                )
+            if field.state.name == "UNKNOWN":
+                raise ActualIdentityUnavailable(
+                    f"{name} identity evidence is unknown"
+                )
+
         membership = observations[0].value
         manifest = observations[1].value
         configuration = observations[2].value
