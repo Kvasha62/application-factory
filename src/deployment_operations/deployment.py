@@ -91,7 +91,6 @@ from deployment_operations.runtime import (
     build_elements,
     verify_bound_content,
 )
-from running_platform import RunningPlatformOwner
 from deployment_operations.state import (
     STAGE_COMPLETED,
     STAGE_IN_PROGRESS,
@@ -108,6 +107,7 @@ from deployment_operations.verification import (
     verify_input_unchanged,
     verify_instance,
 )
+from running_platform import RunningPlatformOwner
 
 Clock = Callable[[], str]
 _MISSING_DIGEST = "the deployment request does not pin a concrete instance digest"
@@ -834,9 +834,11 @@ def deploy(
         # Fail-closed: nothing half-verified keeps running. The record keeps the
         # history (the stages that completed, the verification that failed) and
         # stops claiming a platform that is no longer running (§20).
-        for handle in handles.values():
-            adapter.stop(handle)
-        platform_owner.stop()
+        try:
+            for handle in handles.values():
+                adapter.stop(handle)
+        finally:
+            platform_owner.stop()
         if recorder.record.running:
             recorder.update(recorder.record.mark_stopped(at=recorder.clock()))
         raise
