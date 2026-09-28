@@ -167,7 +167,6 @@ class ComposedRunningPlatformIdentitySource:
         self,
         binding: PlatformIdentityBinding,
     ) -> ActualPlatformSnapshot:
-
         from deployment_operations.platform_identity_source import (
             ActualPlatformSnapshot,
         )
@@ -180,7 +179,14 @@ class ComposedRunningPlatformIdentitySource:
             self.extensions.observe_extensions(binding),
             self.branding.observe_branding(binding),
         )
-        membership, manifest, configuration, golden_bundle, extensions, branding = evidence
+        (
+            membership,
+            manifest,
+            configuration,
+            golden_bundle,
+            extensions,
+            branding,
+        ) = evidence
         correlation = membership.correlation
         provenance = membership.provenance
         freshness = membership.freshness
