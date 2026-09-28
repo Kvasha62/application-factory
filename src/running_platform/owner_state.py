@@ -169,7 +169,9 @@ class OwnerStateSnapshotSource:
     @staticmethod
     def _validate_shared_envelope(evidence: tuple[ActualEvidence, ...]) -> None:
         if not evidence:
-            raise ActualIdentityUnavailable("owner identity source returned no evidence")
+            raise ActualIdentityUnavailable(
+                "owner identity source returned no evidence"
+            )
 
         first = evidence[0]
         if first.provenance not in (
@@ -183,7 +185,9 @@ class OwnerStateSnapshotSource:
 
         for item in evidence:
             if not isinstance(item, ActualEvidence):
-                raise ActualIdentityUnavailable("owner source returned invalid evidence")
+                raise ActualIdentityUnavailable(
+                    "owner source returned invalid evidence"
+                )
             if item.provenance != first.provenance:
                 raise ActualIdentityUnavailable(
                     "owner sources returned mixed provenance"
