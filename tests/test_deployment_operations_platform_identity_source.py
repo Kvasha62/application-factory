@@ -138,39 +138,38 @@ def test_unknown_identity_field_is_unavailable():
 
 @dataclass
 class EvidenceSource:
-    value: object
-    provenance: str = EvidenceProvenance.MEASURED
+    values: dict[str, object]
 
-    def _evidence(self) -> object:
+    def _evidence(self, key: str) -> object:
         from deployment_operations.platform_identity import (
             ActualEvidence,
             EvidenceCorrelation,
             EvidenceFreshness,
         )
         return ActualEvidence(
-            value=self.value,
-            provenance=self.provenance,
+            value=self.values[key],
+            provenance=EvidenceProvenance.MEASURED,
             correlation=EvidenceCorrelation("evaluation-1"),
             freshness=EvidenceFreshness(True),
         )
 
     def observe_membership(self, binding: PlatformIdentityBinding) -> object:
-        return self._evidence()
+        return self._evidence("membership")
 
     def observe_manifest(self, binding: PlatformIdentityBinding) -> object:
-        return self._evidence()
+        return self._evidence("manifest")
 
     def observe_configuration(self, binding: PlatformIdentityBinding) -> object:
-        return self._evidence()
+        return self._evidence("configuration")
 
     def observe_golden_bundle(self, binding: PlatformIdentityBinding) -> object:
-        return self._evidence()
+        return self._evidence("golden")
 
     def observe_extensions(self, binding: PlatformIdentityBinding) -> object:
-        return self._evidence()
+        return self._evidence("extensions")
 
     def observe_branding(self, binding: PlatformIdentityBinding) -> object:
-        return self._evidence()
+        return self._evidence("branding")
 
 
 def test_composed_owner_sources_build_one_actual_snapshot() -> None:
@@ -180,9 +179,6 @@ def test_composed_owner_sources_build_one_actual_snapshot() -> None:
         ActualMembership,
     )
 
-    configuration = IdentityField.present(
-        {"alpha": {"platform_id": "example-platform"}}
-    )
     source = EvidenceSource(
         {
             "membership": ActualMembership(True, (component("alpha"),)),
@@ -194,7 +190,9 @@ def test_composed_owner_sources_build_one_actual_snapshot() -> None:
                 },
                 "published",
             ),
-            "configuration": configuration,
+            "configuration": IdentityField.present(
+                {"alpha": {"platform_id": "example-platform"}}
+            ),
             "golden": ActualGoldenBundle(IdentityField.absent(), True),
             "extensions": IdentityField.absent(),
             "branding": IdentityField.absent(),
@@ -241,24 +239,33 @@ def test_composed_owner_sources_refuse_mixed_correlation() -> None:
                 freshness=EvidenceFreshness(True),
             )
 
-    base = EvidenceSource(
-        ActualMembership(True, (component("alpha"),))
-    )
-    source = MixedManifestSource(
-        base.value
-    )
-    source.value = base.value
+    values = {
+        "membership": ActualMembership(True, (component("alpha"),)),
+        "manifest": ActualManifest(
+            {
+                "manifest_id": "example-manifest",
+                "manifest_version": "1.0.0",
+                "manifest_digest": "sha256:" + "1" * 64,
+            },
+            "published",
+        ),
+        "configuration": IdentityField.present(
+            {"alpha": {"platform_id": "example-platform"}}
+        ),
+        "golden": ActualGoldenBundle(IdentityField.absent(), True),
+        "extensions": IdentityField.absent(),
+        "branding": IdentityField.absent(),
+    }
+    base = EvidenceSource(values)
+    source = MixedManifestSource(values)
+
     composed = ComposedRunningPlatformIdentitySource(
         membership=base,
         manifest=source,
-        configuration=EvidenceSource(
-            IdentityField.present({"alpha": {"platform_id": "example-platform"}})
-        ),
-        golden_bundle=EvidenceSource(
-            ActualGoldenBundle(IdentityField.absent(), True)
-        ),
-        extensions=EvidenceSource(IdentityField.absent()),
-        branding=EvidenceSource(IdentityField.absent()),
+        configuration=base,
+        golden_bundle=base,
+        extensions=base,
+        branding=base,
     )
 
     with pytest.raises(ActualIdentityUnavailable, match="mixed correlation"):
