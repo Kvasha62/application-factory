@@ -374,14 +374,42 @@ def test_unknown_golden_bundle_is_not_null() -> None:
         )
 
 
-def test_proven_empty_membership_is_not_unknown_emptiness() -> None:
+def test_empty_component_membership_is_unavailable() -> None:
     empty = _surface(components=(), membership_established=True)
-    assert project_actual_identity(_evidence(empty))["components"] == []
 
-    with pytest.raises(ActualIdentityUnavailable, match="membership"):
-        validate_actual_evidence(
-            _evidence(_surface(components=(), membership_established=False))
-        )
+    with pytest.raises(ActualIdentityUnavailable, match="components"):
+        validate_actual_evidence(_evidence(empty))
+
+    with pytest.raises(ActualIdentityUnavailable, match="components"):
+        project_actual_identity(_evidence(empty))
+
+
+def test_malformed_manifest_identity_is_unavailable() -> None:
+    malformed = _surface()
+    malformed.manifest["manifest_digest"] = "sha256:manifest"
+
+    with pytest.raises(ActualIdentityUnavailable, match="manifest_digest"):
+        validate_actual_evidence(_evidence(malformed))
+
+
+def test_malformed_expected_digest_is_unavailable() -> None:
+    expected = _expected_from_surface(_surface())
+    expected["instance_digest"] = "sha256:not-a-digest"
+
+    assert (
+        establish_identity_correspondence(expected, _evidence(_surface()))
+        is IdentityCorrespondenceResult.UNAVAILABLE
+    )
+
+
+def test_non_json_identity_value_is_unavailable() -> None:
+    expected = _expected_from_surface(_surface())
+    actual = _surface(branding=IdentityField.present({"invalid": {"set"}}))
+
+    assert (
+        establish_identity_correspondence(expected, _evidence(actual))
+        is IdentityCorrespondenceResult.UNAVAILABLE
+    )
 
 
 def test_duplicate_component_preserves_failure_before_collapse() -> None:
