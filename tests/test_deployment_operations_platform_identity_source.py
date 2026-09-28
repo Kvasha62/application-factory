@@ -16,6 +16,7 @@ from deployment_operations.platform_identity_source import (
     ActualPlatformSnapshot,
     OwnerSuppliedPlatformIdentityProvider,
 )
+from running_platform.identity_sources import ComposedRunningPlatformIdentitySource
 
 
 def component(component_id: str) -> ActualComponentIdentity:
@@ -177,7 +178,6 @@ def test_composed_owner_sources_build_one_actual_snapshot() -> None:
         ActualGoldenBundle,
         ActualManifest,
         ActualMembership,
-        ComposedRunningPlatformIdentitySource,
     )
 
     source = EvidenceSource(
