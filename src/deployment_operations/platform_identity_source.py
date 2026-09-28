@@ -30,6 +30,7 @@ from deployment_operations.platform_identity import (
     EvidenceFreshness,
     IdentityField,
     PlatformIdentityBinding,
+    PresenceState,
     PlatformIdentityProvider,
     PlatformIdentitySurface,
     validate_actual_evidence,
