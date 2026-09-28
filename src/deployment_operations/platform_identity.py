@@ -14,7 +14,9 @@ from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 
 from deployment_operations.environment import IDENTITY_CONFIGURATION_KEYS
+from platform_instance.schema import load_schema, validate_structure_against_schema
 from platform_manifest.lifecycle import LIFECYCLE_STATES
+from platform_manifest.manifest import discover_root
 from platform_manifest.validation import (
     ARTIFACT_TYPES,
     MANIFEST_ID_PATTERN,
@@ -214,7 +216,11 @@ def project_actual_identity(evidence: ActualEvidence) -> dict[str, Any]:
             "golden_bundle", surface.golden_bundle
         ),
         "components": [
-            _project_component(component.value) for component in surface.components
+            _project_component(component.value)
+            for component in sorted(
+                surface.components,
+                key=lambda component: component.value.component_id,
+            )
         ],
     }
     for name in ("configuration", "extensions", "branding"):
@@ -225,6 +231,7 @@ def project_actual_identity(evidence: ActualEvidence) -> dict[str, Any]:
             )
         if field.state is PresenceState.PRESENT:
             document[name] = _copy_value(field.value)
+    _validate_projected_instance_shape(document)
     return document
 
 
@@ -248,17 +255,33 @@ def establish_identity_correspondence(
 
     try:
         actual_digest = compute_actual_digest(evidence)
-    except (ActualIdentityUnavailable, TypeError, ValueError, KeyError):
+    except (ActualIdentityUnavailable, TypeError):
         return IdentityCorrespondenceResult.UNAVAILABLE
     expected_digest = expected_instance.get("instance_digest")
-    if (
-        not isinstance(expected_digest, str)
-        or re.fullmatch(SHA256_PATTERN, expected_digest) is None
-    ):
+    if not isinstance(expected_digest, str) or not expected_digest:
         return IdentityCorrespondenceResult.UNAVAILABLE
     if actual_digest == expected_digest:
         return IdentityCorrespondenceResult.MATCH
     return IdentityCorrespondenceResult.MISMATCH
+
+
+def _validate_projected_instance_shape(document: Document) -> None:
+    """Validate projected actual identity against the normative Instance schema."""
+
+    candidate = dict(document)
+    candidate["instance_digest"] = "sha256:" + "0" * 64
+    try:
+        schema = load_schema(discover_root())
+        errors = validate_structure_against_schema(candidate, schema)
+    except (OSError, TypeError, ValueError) as error:
+        raise ActualIdentityUnavailable(
+            f"authoritative Platform Instance schema is unavailable: {error}"
+        ) from error
+    if errors:
+        raise ActualIdentityUnavailable(
+            "projected actual identity violates the authoritative Platform "
+            f"Instance schema: {errors[0]}"
+        )
 
 
 def _require_provenance(provenance: object) -> None:
@@ -301,7 +324,7 @@ def _validate_components(
             "actual components must preserve multiplicity until validation"
         )
     if not components:
-        raise ActualIdentityUnavailable("actual components must not be empty")
+        raise ActualIdentityUnavailable("actual component membership is empty")
     seen: set[str] = set()
     shared_correlation: EvidenceCorrelation | None = None
     for component_evidence in components:

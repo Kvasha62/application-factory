@@ -82,7 +82,7 @@ def _surface(
         manifest={
             "manifest_id": "example-platform",
             "manifest_version": "1.0.0",
-            "manifest_digest": "sha256:" + "0" * 64,
+            "manifest_digest": "sha256:" + "00" * 32,
         },
         manifest_state=manifest_state,
         components=components if components is not None else (_component(),),
@@ -228,7 +228,19 @@ def test_distinct_actual_identities_have_distinct_digests() -> None:
     [
         ("branding", {"name": "Alpha"}, {"name": "Beta"}),
         ("extensions", [{"extension_id": "a"}], [{"extension_id": "b"}]),
-        ("golden_bundle", {"bundle_id": "certified-a"}, {"bundle_id": "certified-b"}),
+        (
+            "golden_bundle",
+            {
+                "bundle_id": "certified_a",
+                "bundle_version": "1.0.0",
+                "bundle_digest": "sha256:" + "aa" * 32,
+            },
+            {
+                "bundle_id": "certified_b",
+                "bundle_version": "1.0.0",
+                "bundle_digest": "sha256:" + "bb" * 32,
+            },
+        ),
         (
             "configuration",
             {"authorization": {"platform_id": "example-platform", "environment": "a"}},
@@ -374,42 +386,14 @@ def test_unknown_golden_bundle_is_not_null() -> None:
         )
 
 
-def test_empty_component_membership_is_unavailable() -> None:
-    empty = _surface(components=(), membership_established=True)
+def test_empty_membership_is_unavailable_even_when_established() -> None:
+    with pytest.raises(ActualIdentityUnavailable, match="empty"):
+        validate_actual_evidence(_evidence(_surface(components=())))
 
-    with pytest.raises(ActualIdentityUnavailable, match="components"):
-        validate_actual_evidence(_evidence(empty))
-
-    with pytest.raises(ActualIdentityUnavailable, match="components"):
-        project_actual_identity(_evidence(empty))
-
-
-def test_malformed_manifest_identity_is_unavailable() -> None:
-    malformed = _surface()
-    malformed.manifest["manifest_digest"] = "sha256:manifest"
-
-    with pytest.raises(ActualIdentityUnavailable, match="manifest_digest"):
-        validate_actual_evidence(_evidence(malformed))
-
-
-def test_malformed_expected_digest_is_unavailable() -> None:
-    expected = _expected_from_surface(_surface())
-    expected["instance_digest"] = "sha256:not-a-digest"
-
-    assert (
-        establish_identity_correspondence(expected, _evidence(_surface()))
-        is IdentityCorrespondenceResult.UNAVAILABLE
-    )
-
-
-def test_non_json_identity_value_is_unavailable() -> None:
-    expected = _expected_from_surface(_surface())
-    actual = _surface(branding=IdentityField.present({"invalid": {"set"}}))
-
-    assert (
-        establish_identity_correspondence(expected, _evidence(actual))
-        is IdentityCorrespondenceResult.UNAVAILABLE
-    )
+    with pytest.raises(ActualIdentityUnavailable, match="membership"):
+        validate_actual_evidence(
+            _evidence(_surface(components=(), membership_established=False))
+        )
 
 
 def test_duplicate_component_preserves_failure_before_collapse() -> None:
@@ -569,6 +553,20 @@ def test_expected_artifact_identity_is_not_substituted() -> None:
     )
 
 
+def test_non_json_identity_value_is_unavailable_at_correspondence_boundary() -> None:
+    surface = _surface(
+        branding=IdentityField.present(object()),
+    )
+    expected = _expected_from_surface(_surface())
+
+    with pytest.raises(ActualIdentityUnavailable, match="schema"):
+        compute_actual_digest(_evidence(surface))
+
+    result = establish_identity_correspondence(expected, _evidence(surface))
+
+    assert result == IdentityCorrespondenceResult.UNAVAILABLE
+
+
 def test_incomplete_configuration_does_not_reach_canonicalizer(monkeypatch) -> None:
     def fail(document: object) -> str:
         raise AssertionError(document)
@@ -671,6 +669,80 @@ def test_lifecycle_vocabulary_is_unchanged() -> None:
     assert LIFECYCLE_IN_PROGRESS == "in_progress"
     assert LIFECYCLE_REALIZED == "realized"
     assert LIFECYCLE_FAILED == "failed"
+
+
+def test_empty_components_are_unavailable() -> None:
+    with pytest.raises(ActualIdentityUnavailable, match="empty"):
+        project_actual_identity(_evidence(_surface(components=())))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("platform_id", "INVALID"),
+        ("component_id", "bad-id"),
+        ("component_version", "latest"),
+    ],
+)
+def test_invalid_identity_formats_are_unavailable(field: str, value: str) -> None:
+    if field == "platform_id":
+        surface = _surface(platform_id=value)
+    elif field == "component_id":
+        surface = _surface(components=(_component(value),))
+    else:
+        surface = _surface(components=(_component(version=value),))
+
+    with pytest.raises(ActualIdentityUnavailable, match="schema"):
+        project_actual_identity(_evidence(surface))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("manifest_id", "INVALID ID"),
+        ("manifest_version", "latest"),
+        ("manifest_digest", "not-a-digest"),
+    ],
+)
+def test_invalid_manifest_identity_formats_are_unavailable(
+    field: str, value: str
+) -> None:
+    surface = _surface()
+    manifest = dict(surface.manifest)
+    manifest[field] = value
+    surface = PlatformIdentitySurface(
+        platform_id=surface.platform_id,
+        manifest=manifest,
+        manifest_state=surface.manifest_state,
+        components=surface.components,
+        membership_established=surface.membership_established,
+        configuration=surface.configuration,
+        golden_bundle=surface.golden_bundle,
+        golden_bundle_inventory_established=surface.golden_bundle_inventory_established,
+        extensions=surface.extensions,
+        branding=surface.branding,
+    )
+
+    with pytest.raises(ActualIdentityUnavailable, match="schema"):
+        project_actual_identity(_evidence(surface))
+
+
+def test_component_order_is_canonical_for_actual_digest() -> None:
+    authorization = _component("authorization")
+    booking = _component("booking")
+    first = _surface(components=(authorization, booking))
+    second = _surface(components=(booking, authorization))
+
+    assert compute_actual_digest(_evidence(first)) == compute_actual_digest(
+        _evidence(second)
+    )
+
+
+def test_projected_identity_is_checked_by_authoritative_instance_schema() -> None:
+    surface = _surface(components=(_component("INVALID-ID"),))
+
+    with pytest.raises(ActualIdentityUnavailable, match="schema"):
+        project_actual_identity(_evidence(surface))
 
 
 def test_no_second_digest_type_is_defined() -> None:
