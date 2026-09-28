@@ -152,6 +152,12 @@ from deployment_operations.verification import (
 )
 
 __all__ = [
+    "DEPLOYABLE_INSTANCE_STATES",
+    "IDENTITY_CONFIGURATION_KEYS",
+    "LIFECYCLE_FAILED",
+    "LIFECYCLE_IN_PROGRESS",
+    "LIFECYCLE_REALIZED",
+    "STAGES",
     "ActualComponentIdentity",
     "ActualEvidence",
     "ActualIdentityUnavailable",
@@ -232,4 +238,5 @@ __all__ = [
     "verify_identity",
     "verify_input_unchanged",
     "verify_instance",
+]
 ]
