@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from deployment_operations.platform_identity import (
     ActualIdentityUnavailable,
+    EvidenceCorrelation,
     PlatformIdentitySurface,
     validate_actual_surface,
 )
@@ -37,6 +38,7 @@ class RunningPlatformOwner:
 
     _started: bool = False
     _surface: PlatformIdentitySurface | None = None
+    _observation_correlation: EvidenceCorrelation | None = None
 
     @property
     def started(self) -> bool:
@@ -50,7 +52,17 @@ class RunningPlatformOwner:
     def stop(self) -> None:
         """Terminate the owner boundary and withdraw its observation."""
         self._surface = None
+        self._observation_correlation = None
         self._started = False
+
+    @property
+    def observation_correlation(self) -> EvidenceCorrelation:
+        """Return the correlation context of the current owner observation."""
+        if not self._started or self._observation_correlation is None:
+            raise ActualIdentityUnavailable(
+                "Running Platform observation correlation is unavailable"
+            )
+        return self._observation_correlation
 
     def observe_identity(self) -> PlatformIdentitySurface:
         """Return the owner-established actual identity surface.
@@ -82,6 +94,7 @@ class RunningPlatformOwner:
             )
         validate_actual_surface(surface)
         self._surface = surface
+        self._observation_correlation = surface.components[0].correlation
 
 
 __all__ = ["RunningPlatformOwner", "RunningPlatformOwnerError"]
