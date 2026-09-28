@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from deployment_operations.environment import IDENTITY_CONFIGURATION_KEYS
 from deployment_operations.platform_identity import (
@@ -19,6 +19,10 @@ from deployment_operations.platform_identity import (
     PlatformIdentityBinding,
     PresenceState,
 )
+
+if TYPE_CHECKING:
+    from deployment_operations.platform_identity_source import ActualPlatformSnapshot
+
 
 
 @dataclass(frozen=True)
@@ -162,8 +166,7 @@ class ComposedRunningPlatformIdentitySource:
     def observe(
         self,
         binding: PlatformIdentityBinding,
-    ) -> "ActualPlatformSnapshot":
-        from deployment_operations.platform_identity_source import ActualPlatformSnapshot
+    ) -> ActualPlatformSnapshot:
 
         evidence = (
             self.membership.observe_membership(binding),
