@@ -106,6 +106,7 @@ from deployment_operations.platform_identity import (
     validate_actual_evidence,
     validate_actual_surface,
 )
+from running_platform import RunningPlatformOwner, RunningPlatformOwnerError
 from deployment_operations.provisioning import (
     ArtifactSource,
     ProvisionedEnvironment,
@@ -200,6 +201,8 @@ __all__ = [
     "RuntimeElement",
     "RuntimeHandle",
     "RuntimeProcessError",
+    "RunningPlatformOwner",
+    "RunningPlatformOwnerError",
     "SecretLeakRefused",
     "StartupFailed",
     "build_elements",
