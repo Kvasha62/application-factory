@@ -92,6 +92,7 @@ class RunningPlatformOwner:
             )
         validate_actual_surface(surface)
         self._surface = surface
+        self._observation_correlation = surface.components[0].correlation
 
 
 __all__ = ["RunningPlatformOwner", "RunningPlatformOwnerError"]
