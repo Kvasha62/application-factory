@@ -134,18 +134,14 @@ class GoldenBundleImplementation:
 
 @dataclass
 class ExtensionImplementation:
-    def observe_extensions(
-        self, binding: PlatformIdentityBinding
-    ) -> ActualEvidence:
+    def observe_extensions(self, binding: PlatformIdentityBinding) -> ActualEvidence:
         assert binding == BINDING
         return evidence(IdentityField.absent())
 
 
 @dataclass
 class BrandingImplementation:
-    def observe_branding(
-        self, binding: PlatformIdentityBinding
-    ) -> ActualEvidence:
+    def observe_branding(self, binding: PlatformIdentityBinding) -> ActualEvidence:
         assert binding == BINDING
         return evidence(IdentityField.absent())
 
@@ -200,3 +196,4 @@ def test_owner_source_module_does_not_import_expected_deployment_state() -> None
     }
 
     assert names.isdisjoint(forbidden)
+}
