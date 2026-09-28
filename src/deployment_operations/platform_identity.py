@@ -258,7 +258,10 @@ def establish_identity_correspondence(
     except (ActualIdentityUnavailable, TypeError):
         return IdentityCorrespondenceResult.UNAVAILABLE
     expected_digest = expected_instance.get("instance_digest")
-    if not isinstance(expected_digest, str) or not expected_digest:
+    if (
+        not isinstance(expected_digest, str)
+        or re.fullmatch(SHA256_PATTERN, expected_digest) is None
+    ):
         return IdentityCorrespondenceResult.UNAVAILABLE
     if actual_digest == expected_digest:
         return IdentityCorrespondenceResult.MATCH
