@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-import deployment_operations.deployment as deployment
+from deployment_operations import deployment
 from deployment_operations.errors import IdentityVerificationFailed
 from deployment_operations.platform_identity import (
     ActualEvidence,
