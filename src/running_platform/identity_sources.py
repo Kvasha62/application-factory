@@ -219,7 +219,9 @@ class ComposedRunningPlatformIdentitySource:
             membership_established=membership.value.established,
             configuration=configuration.value,
             golden_bundle=golden_bundle.value.identity,
-            golden_bundle_inventory_established=golden_bundle.value.inventory_established,
+            golden_bundle_inventory_established=(
+                golden_bundle.value.inventory_established
+            ),
             extensions=extensions.value,
             branding=branding.value,
             provenance=provenance,
