@@ -77,6 +77,7 @@ from deployment_operations.health import (
     verify_identity,
 )
 from deployment_operations.provisioning import provision
+from running_platform import RunningPlatformOwner
 from deployment_operations.runtime import (
     OP_PROBE,
     OP_START,
@@ -237,11 +238,23 @@ class Deployment:
     state_path: Path
     events_path: Path
     _runtime: RuntimeAdapter | None = field(repr=False, default=None)
+    _platform_owner: RunningPlatformOwner = field(
+        repr=False, default_factory=RunningPlatformOwner
+    )
     _handles: tuple[RuntimeHandle, ...] = field(repr=False, default=())
     _journal: EventJournal | None = field(repr=False, default=None)
     _store: DeploymentStateStore | None = field(repr=False, default=None)
     _secrets: tuple[str, ...] = field(repr=False, default=())
     _clock: Clock = field(repr=False, default=utc_now)
+
+    @property
+    def platform_owner(self) -> RunningPlatformOwner:
+        """The owner boundary of this deployment's Running Platform."""
+        return self._platform_owner
+
+    def observe_platform_identity(self):
+        """Query the Running Platform owner without supplying expected state."""
+        return self._platform_owner.observe_identity()
 
     @property
     def deployed(self) -> bool:
@@ -683,6 +696,7 @@ def deploy(
     recorder.stage("deploying", STAGE_IN_PROGRESS)
     paths = tuple(source_paths) if source_paths is not None else default_source_paths()
     adapter: RuntimeAdapter = runtime or LocalProcessRuntime(source_paths=paths)
+    platform_owner = RunningPlatformOwner()
     elements = build_elements(
         environment, provisioned, verification, source_paths=paths
     )
@@ -726,6 +740,7 @@ def deploy(
         # The platform's runtime elements are started here and only here: the
         # earlier stages materialize and migrate, they do not run the platform.
         recorder.stage("starting", STAGE_IN_PROGRESS)
+        platform_owner.start()
         _start_elements(recorder, adapter, bound_elements, handles)
         recorder.running(True)
         recorder.stage(
@@ -821,6 +836,7 @@ def deploy(
         # stops claiming a platform that is no longer running (§20).
         for handle in handles.values():
             adapter.stop(handle)
+        platform_owner.stop()
         if recorder.record.running:
             recorder.update(recorder.record.mark_stopped(at=recorder.clock()))
         raise
@@ -832,6 +848,7 @@ def deploy(
         events_path=journal.path,
         _runtime=adapter,
         _handles=tuple(handles.values()),
+        _platform_owner=platform_owner,
         _journal=journal,
         _store=store,
         _secrets=tuple(environment.secrets.values()),
