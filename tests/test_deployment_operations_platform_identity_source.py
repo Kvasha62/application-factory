@@ -177,6 +177,7 @@ def test_composed_owner_sources_build_one_actual_snapshot() -> None:
         ActualGoldenBundle,
         ActualManifest,
         ActualMembership,
+        ComposedRunningPlatformIdentitySource,
     )
 
     source = EvidenceSource(
