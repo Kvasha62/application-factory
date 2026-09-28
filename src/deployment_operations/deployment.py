@@ -77,7 +77,6 @@ from deployment_operations.health import (
     verify_identity,
 )
 from deployment_operations.provisioning import provision
-from running_platform import RunningPlatformOwner
 from deployment_operations.runtime import (
     OP_PROBE,
     OP_START,
@@ -92,6 +91,7 @@ from deployment_operations.runtime import (
     build_elements,
     verify_bound_content,
 )
+from running_platform import RunningPlatformOwner
 from deployment_operations.state import (
     STAGE_COMPLETED,
     STAGE_IN_PROGRESS,
