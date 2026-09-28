@@ -86,8 +86,10 @@ def test_golden_bundle_contract_preserves_inventory_establishment() -> None:
 
 @dataclass
 class MembershipImplementation:
+    received_binding: PlatformIdentityBinding | None = None
+
     def observe_membership(self, binding: PlatformIdentityBinding) -> ActualEvidence:
-        assert binding == BINDING
+        self.received_binding = binding
         return evidence(
             ActualMembership(established=True, components=(component("alpha"),))
         )
@@ -95,8 +97,10 @@ class MembershipImplementation:
 
 @dataclass
 class ManifestImplementation:
+    received_binding: PlatformIdentityBinding | None = None
+
     def observe_manifest(self, binding: PlatformIdentityBinding) -> ActualEvidence:
-        assert binding == BINDING
+        self.received_binding = binding
         return evidence(
             ActualManifest(
                 manifest={
@@ -111,15 +115,19 @@ class ManifestImplementation:
 
 @dataclass
 class ConfigurationImplementation:
+    received_binding: PlatformIdentityBinding | None = None
+
     def observe_configuration(self, binding: PlatformIdentityBinding) -> ActualEvidence:
-        assert binding == BINDING
+        self.received_binding = binding
         return evidence(IdentityField.absent())
 
 
 @dataclass
 class GoldenBundleImplementation:
+    received_binding: PlatformIdentityBinding | None = None
+
     def observe_golden_bundle(self, binding: PlatformIdentityBinding) -> ActualEvidence:
-        assert binding == BINDING
+        self.received_binding = binding
         return evidence(
             ActualGoldenBundle(
                 identity=IdentityField.absent(),
@@ -130,15 +138,19 @@ class GoldenBundleImplementation:
 
 @dataclass
 class ExtensionImplementation:
+    received_binding: PlatformIdentityBinding | None = None
+
     def observe_extensions(self, binding: PlatformIdentityBinding) -> ActualEvidence:
-        assert binding == BINDING
+        self.received_binding = binding
         return evidence(IdentityField.absent())
 
 
 @dataclass
 class BrandingImplementation:
+    received_binding: PlatformIdentityBinding | None = None
+
     def observe_branding(self, binding: PlatformIdentityBinding) -> ActualEvidence:
-        assert binding == BINDING
+        self.received_binding = binding
         return evidence(IdentityField.absent())
 
 
@@ -166,7 +178,8 @@ def test_each_source_contract_accepts_only_the_opaque_binding(
     assert observed.provenance == EvidenceProvenance.MEASURED
 
 
-def test_sources_do_not_receive_expected_instance_digest() -> None:
+def test_sources_receive_only_the_opaque_binding_object() -> None:
+    opaque_binding = PlatformIdentityBinding("sha256:" + "0" * 64)
     for implementation, method_name in (
         (MembershipImplementation(), "observe_membership"),
         (ManifestImplementation(), "observe_manifest"),
@@ -176,8 +189,10 @@ def test_sources_do_not_receive_expected_instance_digest() -> None:
         (BrandingImplementation(), "observe_branding"),
     ):
         method = getattr(implementation, method_name)
-        with pytest.raises(AssertionError):
-            method(PlatformIdentityBinding("sha256:" + "0" * 64))
+        method(opaque_binding)
+
+        assert implementation.received_binding is opaque_binding
+        assert implementation.received_binding.token == opaque_binding.token
 
 
 def test_owner_source_module_does_not_import_expected_deployment_state() -> None:
