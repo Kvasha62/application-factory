@@ -164,9 +164,7 @@ def _platform_id_from_configuration(field: IdentityField) -> str:
             value = section.get(key)
             if value is not None:
                 if not isinstance(value, str) or not value:
-                    raise ActualIdentityUnavailable(
-                        "actual platform_id is invalid"
-                    )
+                    raise ActualIdentityUnavailable("actual platform_id is invalid")
                 values.add(value)
 
     if len(values) != 1:
