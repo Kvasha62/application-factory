@@ -63,9 +63,7 @@ def test_identity_adapter_does_not_forward_expected_digest_in_binding(
         def __init__(self) -> None:
             self.received: PlatformIdentityBinding | None = None
 
-        def observe_identity(
-            self, binding: PlatformIdentityBinding
-        ) -> ActualEvidence:
+        def observe_identity(self, binding: PlatformIdentityBinding) -> ActualEvidence:
             self.received = binding
             if binding.token == EXPECTED["instance_digest"]:
                 raise AssertionError("expected identity leaked into the binding")
@@ -90,34 +88,38 @@ def test_identity_adapter_does_not_forward_expected_digest_in_binding(
 
 def test_identity_adapter_converts_unavailable_evidence_to_deployment_failure() -> None:
     class UnavailableProvider:
-        def observe_identity(
-            self, binding: PlatformIdentityBinding
-        ) -> ActualEvidence:
+        def observe_identity(self, binding: PlatformIdentityBinding) -> ActualEvidence:
             raise ActualIdentityUnavailable("source is unavailable")
 
-    with pytest.raises(
-        IdentityVerificationFailed, match="evidence is unavailable"
-    ):
+    with pytest.raises(IdentityVerificationFailed) as exc_info:
         deployment._verify_running_platform_identity(
             UnavailableProvider(),
             EXPECTED,
             binding_token=object(),
         )
 
+    assert (
+        "running platform identity evidence is unavailable: source is unavailable"
+        in exc_info.value.errors
+    )
+
 
 def test_identity_adapter_converts_provider_crash_to_deployment_failure() -> None:
     class BrokenProvider:
-        def observe_identity(
-            self, binding: PlatformIdentityBinding
-        ) -> ActualEvidence:
+        def observe_identity(self, binding: PlatformIdentityBinding) -> ActualEvidence:
             raise RuntimeError("unexpected owner-side failure")
 
-    with pytest.raises(IdentityVerificationFailed, match="failed closed"):
+    with pytest.raises(IdentityVerificationFailed) as exc_info:
         deployment._verify_running_platform_identity(
             BrokenProvider(),
             EXPECTED,
             binding_token=object(),
         )
+
+    assert (
+        "running platform identity provider failed closed: unexpected owner-side failure"
+        in exc_info.value.errors
+    )
 
 
 @pytest.mark.parametrize(
@@ -132,9 +134,7 @@ def test_identity_adapter_never_treats_non_match_as_success(result: str) -> None
     provider = RecordingProvider(object())
     original = deployment.establish_identity_correspondence
     try:
-        deployment.establish_identity_correspondence = (
-            lambda expected, evidence: result
-        )
+        deployment.establish_identity_correspondence = lambda expected, evidence: result
         with pytest.raises(IdentityVerificationFailed):
             deployment._verify_running_platform_identity(
                 provider,
