@@ -14,7 +14,6 @@ from deployment_operations.platform_identity import (
 )
 from deployment_operations.platform_identity_source import (
     ActualPlatformSnapshot,
-    ComposedRunningPlatformIdentitySource,
     OwnerSuppliedPlatformIdentityProvider,
 )
 
@@ -176,7 +175,6 @@ class EvidenceSource:
 def test_composed_owner_sources_build_one_actual_snapshot() -> None:
     from running_platform.identity_sources import (
         ActualGoldenBundle,
-        ComposedRunningPlatformIdentitySource,
         ActualManifest,
         ActualMembership,
     )
