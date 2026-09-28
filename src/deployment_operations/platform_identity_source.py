@@ -12,8 +12,8 @@ from typing import Protocol
 
 from deployment_operations.platform_identity import (
     ActualComponentIdentity,
-    ActualIdentityUnavailable,
     ActualEvidence,
+    ActualIdentityUnavailable,
     EvidenceCorrelation,
     EvidenceFreshness,
     IdentityField,
