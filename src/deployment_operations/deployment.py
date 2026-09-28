@@ -189,7 +189,7 @@ def _verify_running_platform_identity(
         raise IdentityVerificationFailed(
             [f"running platform identity evidence is unavailable: {error}"]
         ) from error
-    except Exception as error:  # noqa: BLE001
+    except Exception as error:
         raise IdentityVerificationFailed(
             [f"running platform identity provider failed closed: {error}"]
         ) from error
