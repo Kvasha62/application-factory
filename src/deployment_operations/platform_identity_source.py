@@ -63,40 +63,51 @@ class OwnerSuppliedPlatformIdentityProvider(PlatformIdentityProvider):
         self._source = source
 
     def observe_identity(self, binding: PlatformIdentityBinding) -> ActualEvidence:
-        snapshot = self._source.observe(binding)
-        correlation = EvidenceCorrelation(snapshot.correlation_token)
-        freshness = EvidenceFreshness(snapshot.freshness_current)
-        components = tuple(
-            ActualEvidence(
-                value=component,
-                provenance=snapshot.provenance,
-                correlation=correlation,
-                freshness=freshness,
+        try:
+            snapshot = self._source.observe(binding)
+            if not isinstance(snapshot, ActualPlatformSnapshot):
+                raise ActualIdentityUnavailable(
+                    "owner identity source returned an invalid snapshot"
+                )
+            correlation = EvidenceCorrelation(snapshot.correlation_token)
+            freshness = EvidenceFreshness(snapshot.freshness_current)
+            components = tuple(
+                ActualEvidence(
+                    value=component,
+                    provenance=snapshot.provenance,
+                    correlation=correlation,
+                    freshness=freshness,
+                )
+                for component in snapshot.components
             )
-            for component in snapshot.components
-        )
-        surface = PlatformIdentitySurface(
-            platform_id=snapshot.platform_id,
-            manifest=snapshot.manifest,
-            manifest_state=snapshot.manifest_state,
-            components=components,
-            membership_established=snapshot.membership_established,
-            configuration=snapshot.configuration,
-            golden_bundle=snapshot.golden_bundle,
-            golden_bundle_inventory_established=(
-                snapshot.golden_bundle_inventory_established
-            ),
-            extensions=snapshot.extensions,
-            branding=snapshot.branding,
-        )
-        return validate_actual_evidence(
-            ActualEvidence(
-                value=surface,
-                provenance=snapshot.provenance,
-                correlation=correlation,
-                freshness=freshness,
+            surface = PlatformIdentitySurface(
+                platform_id=snapshot.platform_id,
+                manifest=snapshot.manifest,
+                manifest_state=snapshot.manifest_state,
+                components=components,
+                membership_established=snapshot.membership_established,
+                configuration=snapshot.configuration,
+                golden_bundle=snapshot.golden_bundle,
+                golden_bundle_inventory_established=(
+                    snapshot.golden_bundle_inventory_established
+                ),
+                extensions=snapshot.extensions,
+                branding=snapshot.branding,
             )
-        )
+            return validate_actual_evidence(
+                ActualEvidence(
+                    value=surface,
+                    provenance=snapshot.provenance,
+                    correlation=correlation,
+                    freshness=freshness,
+                )
+            )
+        except ActualIdentityUnavailable:
+            raise
+        except Exception as error:
+            raise ActualIdentityUnavailable(
+                "owner identity source returned invalid actual evidence"
+            ) from error
 
 
 __all__ = [
