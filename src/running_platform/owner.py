@@ -59,7 +59,9 @@ class RunningPlatformOwner:
     def observation_correlation(self) -> EvidenceCorrelation:
         """Return the correlation context of the current owner observation."""
         if not self._started or self._observation_correlation is None:
-            raise ActualIdentityUnavailable("Running Platform observation correlation is unavailable")
+            raise ActualIdentityUnavailable(
+                "Running Platform observation correlation is unavailable"
+            )
         return self._observation_correlation
 
     def observe_identity(self) -> PlatformIdentitySurface:
@@ -70,9 +72,13 @@ class RunningPlatformOwner:
         unavailable result rather than fabricated identity.
         """
         if not self._started:
-            raise ActualIdentityUnavailable("Running Platform owner is not established")
+            raise ActualIdentityUnavailable(
+                "Running Platform owner is not established"
+            )
         if self._surface is None:
-            raise ActualIdentityUnavailable("Running Platform identity observation is unavailable")
+            raise ActualIdentityUnavailable(
+                "Running Platform identity observation is unavailable"
+            )
         return self._surface
 
     def publish_identity_surface(self, surface: PlatformIdentitySurface) -> None:
