@@ -17,6 +17,7 @@ from running_platform.identity_sources import (
     ActualGoldenBundle,
     ActualManifest,
     ActualMembership,
+    RuntimeMembershipSource,
 )
 
 BINDING = PlatformIdentityBinding("running-platform")
@@ -207,3 +208,119 @@ def test_owner_source_module_does_not_import_expected_deployment_state() -> None
     }
 
     assert names.isdisjoint(forbidden)
+
+
+@dataclass
+class RuntimeObserver:
+    observations: dict[object, ActualEvidence]
+
+    def observe_runtime_handle(self, handle: object) -> ActualEvidence:
+        return self.observations[handle]
+
+
+def test_runtime_membership_observes_the_complete_owner_runtime_set() -> None:
+    handles = ("alpha-runtime", "beta-runtime")
+    observer = RuntimeObserver(
+        {
+            handles[0]: evidence(component("alpha")),
+            handles[1]: evidence(component("beta")),
+        }
+    )
+    source = RuntimeMembershipSource(
+        list_handles=lambda binding: handles,
+        observer=observer,
+    )
+
+    observed = source.observe_membership(BINDING)
+
+    membership = observed.value
+    assert isinstance(membership, ActualMembership)
+    assert membership.established is True
+    assert [item.component_id for item in membership.components] == ["alpha", "beta"]
+    assert observed.correlation.token == "observation-1"
+
+
+def test_runtime_membership_does_not_derive_membership_from_the_binding() -> None:
+    observed_handles = ("alpha-runtime", "beta-runtime")
+    observer = RuntimeObserver(
+        {
+            observed_handles[0]: evidence(component("alpha")),
+            observed_handles[1]: evidence(component("beta")),
+        }
+    )
+    source = RuntimeMembershipSource(
+        list_handles=lambda binding: observed_handles,
+        observer=observer,
+    )
+
+    observed = source.observe_membership(
+        PlatformIdentityBinding({"expected_components": ["alpha"]})
+    )
+
+    membership = observed.value
+    assert isinstance(membership, ActualMembership)
+    assert [item.component_id for item in membership.components] == ["alpha", "beta"]
+
+
+def test_runtime_membership_refuses_duplicate_actual_components() -> None:
+    handles = ("alpha-1", "alpha-2")
+    observer = RuntimeObserver(
+        {
+            handles[0]: evidence(component("alpha")),
+            handles[1]: evidence(component("alpha")),
+        }
+    )
+    source = RuntimeMembershipSource(
+        list_handles=lambda binding: handles,
+        observer=observer,
+    )
+
+    with pytest.raises(ValueError, match="duplicate component"):
+        source.observe_membership(BINDING)
+
+
+def test_runtime_membership_refuses_an_empty_runtime_set() -> None:
+    source = RuntimeMembershipSource(
+        list_handles=lambda binding: (),
+        observer=RuntimeObserver({}),
+    )
+
+    with pytest.raises(ValueError, match="membership is empty"):
+        source.observe_membership(BINDING)
+
+
+def test_runtime_membership_refuses_stale_component_evidence() -> None:
+    stale = ActualEvidence(
+        value=component("alpha"),
+        provenance=EvidenceProvenance.MEASURED,
+        correlation=EvidenceCorrelation("observation-1"),
+        freshness=EvidenceFreshness(False),
+    )
+    source = RuntimeMembershipSource(
+        list_handles=lambda binding: ("alpha-runtime",),
+        observer=RuntimeObserver({"alpha-runtime": stale}),
+    )
+
+    with pytest.raises(ValueError, match="stale"):
+        source.observe_membership(BINDING)
+
+
+def test_runtime_membership_refuses_mixed_correlations() -> None:
+    second = ActualEvidence(
+        value=component("beta"),
+        provenance=EvidenceProvenance.MEASURED,
+        correlation=EvidenceCorrelation("observation-2"),
+        freshness=EvidenceFreshness(True),
+    )
+    source = RuntimeMembershipSource(
+        list_handles=lambda binding: ("alpha-runtime", "beta-runtime"),
+        observer=RuntimeObserver(
+            {
+                "alpha-runtime": evidence(component("alpha")),
+                "beta-runtime": second,
+            }
+        ),
+    )
+
+    with pytest.raises(ValueError, match="mixed correlation"):
+        source.observe_membership(BINDING)
