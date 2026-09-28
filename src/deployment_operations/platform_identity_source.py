@@ -51,29 +51,6 @@ class ActualPlatformSnapshot:
     freshness_current: bool
 
 
-def _platform_id_from_configuration(field: IdentityField) -> str:
-    if field.state is not PresenceState.PRESENT or not isinstance(field.value, Mapping):
-        raise ActualIdentityUnavailable(
-            "actual platform_id requires identity-bearing configuration"
-        )
-
-    values: set[str] = set()
-    for section in field.value.values():
-        if not isinstance(section, Mapping):
-            continue
-        for key in IDENTITY_CONFIGURATION_KEYS:
-            value = section.get(key)
-            if value is not None:
-                if not isinstance(value, str) or not value:
-                    raise ActualIdentityUnavailable("actual platform_id is invalid")
-                values.add(value)
-
-    if len(values) != 1:
-        raise ActualIdentityUnavailable(
-            "actual platform_id is unavailable or contradictory"
-        )
-    return next(iter(values))
-
 
 class RunningPlatformIdentitySource(Protocol):
     """Owner-side source of actual Running Platform identity facts."""
