@@ -72,9 +72,7 @@ class RunningPlatformOwner:
         unavailable result rather than fabricated identity.
         """
         if not self._started:
-            raise ActualIdentityUnavailable(
-                "Running Platform owner is not established"
-            )
+            raise ActualIdentityUnavailable("Running Platform owner is not established")
         if self._surface is None:
             raise ActualIdentityUnavailable(
                 "Running Platform identity observation is unavailable"
@@ -94,7 +92,6 @@ class RunningPlatformOwner:
             )
         validate_actual_surface(surface)
         self._surface = surface
-        self._observation_correlation = surface.components[0].correlation
 
 
 __all__ = ["RunningPlatformOwner", "RunningPlatformOwnerError"]
