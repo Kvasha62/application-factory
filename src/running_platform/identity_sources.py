@@ -7,14 +7,17 @@ Concrete source implementations belong to the Running Platform owner.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
+from deployment_operations.environment import IDENTITY_CONFIGURATION_KEYS
 from deployment_operations.platform_identity import (
     ActualComponentIdentity,
     ActualEvidence,
     IdentityField,
     PlatformIdentityBinding,
+    PresenceState,
 )
 
 
@@ -127,6 +130,24 @@ class RuntimeMembershipSource:
         )
 
 
+def _platform_id_from_configuration(field: IdentityField) -> str:
+    if field.state is not PresenceState.PRESENT or not isinstance(field.value, Mapping):
+        raise ValueError("actual platform_id requires identity-bearing configuration")
+    values: set[str] = set()
+    for section in field.value.values():
+        if not isinstance(section, Mapping):
+            continue
+        for key in IDENTITY_CONFIGURATION_KEYS:
+            value = section.get(key)
+            if value is not None:
+                if not isinstance(value, str) or not value:
+                    raise ValueError("actual platform_id is invalid")
+                values.add(value)
+    if len(values) != 1:
+        raise ValueError("actual platform_id is unavailable or contradictory")
+    return next(iter(values))
+
+
 @dataclass(frozen=True)
 class ComposedRunningPlatformIdentitySource:
     """Compose owner sources into one complete actual platform snapshot."""
@@ -143,9 +164,6 @@ class ComposedRunningPlatformIdentitySource:
         binding: PlatformIdentityBinding,
     ) -> "ActualPlatformSnapshot":
         from deployment_operations.platform_identity_source import ActualPlatformSnapshot
-        from deployment_operations.platform_identity_source import (
-            _platform_id_from_configuration,
-        )
 
         evidence = (
             self.membership.observe_membership(binding),
