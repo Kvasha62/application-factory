@@ -18,6 +18,7 @@ from deployment_operations.platform_identity import (
     EvidenceProvenance,
     IdentityField,
     PlatformIdentityBinding,
+    PresenceState,
 )
 from deployment_operations.platform_identity_source import ActualPlatformSnapshot
 from running_platform.identity_sources import (
@@ -138,7 +139,7 @@ class OwnerStateSnapshotSource:
                 raise ActualIdentityUnavailable(
                     f"{name} source returned invalid identity field"
                 )
-            if field.state.name == "UNKNOWN":
+            if field.state is PresenceState.UNKNOWN:
                 raise ActualIdentityUnavailable(f"{name} identity evidence is unknown")
 
         membership = observations[0].value
