@@ -145,7 +145,6 @@ from deployment_operations.verification import (
     verify_input_unchanged,
     verify_instance,
 )
-from running_platform import RunningPlatformOwner, RunningPlatformOwnerError
 
 __all__ = [
     "DEPLOYABLE_INSTANCE_STATES",
@@ -197,8 +196,6 @@ __all__ = [
     "PresenceState",
     "ProvisionedEnvironment",
     "ProvisioningFailed",
-    "RunningPlatformOwner",
-    "RunningPlatformOwnerError",
     "RuntimeAdapter",
     "RuntimeElement",
     "RuntimeHandle",
