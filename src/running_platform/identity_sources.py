@@ -43,7 +43,6 @@ class ActualGoldenBundle:
 
 
 RuntimeHandle = object
-RuntimeHandleObserver = Protocol
 
 
 class RuntimeHandleObserver(Protocol):
@@ -99,6 +98,8 @@ class RuntimeMembershipSource:
                 raise ValueError("runtime membership evidence has mixed correlation")
             if evidence.freshness.current is not True:
                 raise ValueError("runtime membership evidence is stale")
+            if evidence.provenance != next(iter(evidence_by_component.values())).provenance if evidence_by_component else False:
+                raise ValueError("runtime membership evidence has mixed provenance")
             component = evidence.value
             if component.component_id in evidence_by_component:
                 raise ValueError(
