@@ -87,11 +87,6 @@ from deployment_operations.health import (
     evaluate_health,
     verify_identity,
 )
-from deployment_operations.platform_identity_source import (
-    ActualPlatformSnapshot,
-    OwnerSuppliedPlatformIdentityProvider,
-    RunningPlatformIdentitySource,
-)
 from deployment_operations.platform_identity import (
     ActualComponentIdentity,
     ActualEvidence,
@@ -110,6 +105,11 @@ from deployment_operations.platform_identity import (
     project_actual_identity,
     validate_actual_evidence,
     validate_actual_surface,
+)
+from deployment_operations.platform_identity_source import (
+    ActualPlatformSnapshot,
+    OwnerSuppliedPlatformIdentityProvider,
+    RunningPlatformIdentitySource,
 )
 from deployment_operations.provisioning import (
     ArtifactSource,
