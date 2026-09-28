@@ -10,6 +10,7 @@ from deployment_operations.platform_identity import (
     EvidenceProvenance,
     IdentityField,
     PlatformIdentityBinding,
+    project_actual_identity,
 )
 from deployment_operations.platform_identity_source import (
     ActualPlatformSnapshot,
@@ -104,7 +105,9 @@ def test_expected_digest_is_not_part_of_snapshot_contract():
 
 
 def test_unknown_identity_field_is_unavailable():
-    with pytest.raises(ActualIdentityUnavailable):
-        provider(snapshot(configuration=IdentityField.unknown())).observe_identity(
-            PlatformIdentityBinding("running-platform")
-        )
+    evidence = provider(
+        snapshot(configuration=IdentityField.unknown())
+    ).observe_identity(PlatformIdentityBinding("running-platform"))
+
+    with pytest.raises(ActualIdentityUnavailable, match="UNKNOWN"):
+        project_actual_identity(evidence)
