@@ -85,6 +85,7 @@ class RuntimeMembershipSource:
         evidence_by_component: dict[str, ActualEvidence] = {}
         correlation = None
         freshness = None
+        provenance = None
         for handle in handles:
             evidence = self.observer.observe_runtime_handle(handle)
             if not isinstance(evidence, ActualEvidence):
@@ -94,11 +95,12 @@ class RuntimeMembershipSource:
             if correlation is None:
                 correlation = evidence.correlation
                 freshness = evidence.freshness
+                provenance = evidence.provenance
             elif not evidence.correlation.matches(correlation):
                 raise ValueError("runtime membership evidence has mixed correlation")
             if evidence.freshness.current is not True:
                 raise ValueError("runtime membership evidence is stale")
-            if evidence.provenance != next(iter(evidence_by_component.values())).provenance if evidence_by_component else False:
+            if evidence.provenance != provenance:
                 raise ValueError("runtime membership evidence has mixed provenance")
             component = evidence.value
             if component.component_id in evidence_by_component:
@@ -111,7 +113,7 @@ class RuntimeMembershipSource:
 
         if not handles:
             raise ValueError("runtime membership is empty")
-        if correlation is None or freshness is None:
+        if correlation is None or freshness is None or provenance is None:
             raise ValueError("runtime membership has no evidence")
 
         return ActualEvidence(
@@ -119,7 +121,7 @@ class RuntimeMembershipSource:
                 established=True,
                 components=tuple(components),
             ),
-            provenance=next(iter(evidence_by_component.values())).provenance,
+            provenance=provenance,
             correlation=correlation,
             freshness=freshness,
         )
