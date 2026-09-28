@@ -437,6 +437,15 @@ def test_projection_does_not_copy_expected_identity() -> None:
     assert projected["branding"] != expected["branding"]
 
 
+def test_invalid_expected_digest_is_unavailable_not_mismatch() -> None:
+    expected = {"instance_digest": "not-a-sha256-digest"}
+
+    assert (
+        establish_identity_correspondence(expected, _evidence(_surface()))
+        is IdentityCorrespondenceResult.UNAVAILABLE
+    )
+
+
 def test_missing_expected_digest_is_unavailable_not_match() -> None:
     assert (
         establish_identity_correspondence({}, _evidence(_surface()))
@@ -723,7 +732,7 @@ def test_invalid_manifest_identity_formats_are_unavailable(
         branding=surface.branding,
     )
 
-    with pytest.raises(ActualIdentityUnavailable, match="schema"):
+    with pytest.raises(ActualIdentityUnavailable, match=field):
         project_actual_identity(_evidence(surface))
 
 

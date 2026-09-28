@@ -106,6 +106,11 @@ from deployment_operations.platform_identity import (
     validate_actual_evidence,
     validate_actual_surface,
 )
+from deployment_operations.platform_identity_source import (
+    ActualPlatformSnapshot,
+    OwnerSuppliedPlatformIdentityProvider,
+    RunningPlatformIdentitySource,
+)
 from deployment_operations.provisioning import (
     ArtifactSource,
     ProvisionedEnvironment,
@@ -156,6 +161,7 @@ __all__ = [
     "ActualComponentIdentity",
     "ActualEvidence",
     "ActualIdentityUnavailable",
+    "ActualPlatformSnapshot",
     "ArtifactSource",
     "ComponentBinding",
     "ComponentObservation",
@@ -190,12 +196,14 @@ __all__ = [
     "MigrationOrchestrationFailed",
     "MigrationRecord",
     "OperationalAction",
+    "OwnerSuppliedPlatformIdentityProvider",
     "PlatformIdentityBinding",
     "PlatformIdentityProvider",
     "PlatformIdentitySurface",
     "PresenceState",
     "ProvisionedEnvironment",
     "ProvisioningFailed",
+    "RunningPlatformIdentitySource",
     "RuntimeAdapter",
     "RuntimeElement",
     "RuntimeHandle",

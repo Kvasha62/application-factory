@@ -17,7 +17,13 @@ from deployment_operations.environment import IDENTITY_CONFIGURATION_KEYS
 from platform_instance.schema import load_schema, validate_structure_against_schema
 from platform_manifest.lifecycle import LIFECYCLE_STATES
 from platform_manifest.manifest import discover_root
-from platform_manifest.validation import ARTIFACT_TYPES, SHA256_NULLABLE_PATTERN
+from platform_manifest.validation import (
+    ARTIFACT_TYPES,
+    MANIFEST_ID_PATTERN,
+    SHA256_NULLABLE_PATTERN,
+    SHA256_PATTERN,
+    parse_semver,
+)
 
 T = TypeVar("T")
 Document = Mapping[str, Any]
@@ -252,7 +258,10 @@ def establish_identity_correspondence(
     except (ActualIdentityUnavailable, TypeError):
         return IdentityCorrespondenceResult.UNAVAILABLE
     expected_digest = expected_instance.get("instance_digest")
-    if not isinstance(expected_digest, str) or not expected_digest:
+    if (
+        not isinstance(expected_digest, str)
+        or re.fullmatch(SHA256_PATTERN, expected_digest) is None
+    ):
         return IdentityCorrespondenceResult.UNAVAILABLE
     if actual_digest == expected_digest:
         return IdentityCorrespondenceResult.MATCH
@@ -292,10 +301,21 @@ def _require_provenance(provenance: object) -> None:
 def _validate_manifest(manifest: object) -> None:
     if not isinstance(manifest, Mapping):
         raise ActualIdentityUnavailable("actual manifest is unavailable")
-    for key in ("manifest_id", "manifest_version", "manifest_digest"):
-        value = manifest.get(key)
-        if not isinstance(value, str) or not value:
-            raise ActualIdentityUnavailable(f"actual manifest {key} is unavailable")
+    manifest_id = manifest.get("manifest_id")
+    if (
+        not isinstance(manifest_id, str)
+        or re.fullmatch(MANIFEST_ID_PATTERN, manifest_id) is None
+    ):
+        raise ActualIdentityUnavailable("actual manifest_id is invalid")
+    manifest_version = manifest.get("manifest_version")
+    if parse_semver(manifest_version) is None:
+        raise ActualIdentityUnavailable("actual manifest_version is invalid")
+    manifest_digest = manifest.get("manifest_digest")
+    if (
+        not isinstance(manifest_digest, str)
+        or re.fullmatch(SHA256_PATTERN, manifest_digest) is None
+    ):
+        raise ActualIdentityUnavailable("actual manifest_digest is invalid")
 
 
 def _validate_components(

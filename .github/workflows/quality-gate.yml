@@ -18,8 +18,9 @@ name: Quality Gate
 
 on:
   push:
-    branches: [main]
+    branches: [main, arena/01a0e203-application-factory]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
