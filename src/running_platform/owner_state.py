@@ -16,6 +16,7 @@ from deployment_operations.platform_identity import (
     EvidenceCorrelation,
     EvidenceFreshness,
     EvidenceProvenance,
+    IdentityField,
     PlatformIdentityBinding,
 )
 from deployment_operations.platform_identity_source import ActualPlatformSnapshot
@@ -24,7 +25,6 @@ from running_platform.identity_sources import (
     ActualManifest,
     ActualMembership,
 )
-from deployment_operations.platform_identity import IdentityField
 
 
 @dataclass(frozen=True)
