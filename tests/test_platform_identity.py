@@ -82,7 +82,7 @@ def _surface(
         manifest={
             "manifest_id": "example-platform",
             "manifest_version": "1.0.0",
-            "manifest_digest": "sha256:manifest",
+            "manifest_digest": "sha256:" + "0" * 64,
         },
         manifest_state=manifest_state,
         components=components if components is not None else (_component(),),
