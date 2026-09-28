@@ -13,8 +13,8 @@ from deployment_operations.platform_identity import (
     project_actual_identity,
 )
 from deployment_operations.platform_identity_source import (
-    ComposedRunningPlatformIdentitySource,
     ActualPlatformSnapshot,
+    ComposedRunningPlatformIdentitySource,
     OwnerSuppliedPlatformIdentityProvider,
 )
 
@@ -221,7 +221,11 @@ def test_composed_owner_sources_refuse_mixed_correlation() -> None:
         EvidenceCorrelation,
         EvidenceFreshness,
     )
-    from running_platform.identity_sources import ActualManifest, ActualMembership
+    from running_platform.identity_sources import (
+        ActualGoldenBundle,
+        ActualManifest,
+        ActualMembership,
+    )
 
     class MixedManifestSource(EvidenceSource):
         def observe_manifest(self, binding: PlatformIdentityBinding) -> object:
