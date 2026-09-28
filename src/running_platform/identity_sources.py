@@ -168,7 +168,9 @@ class ComposedRunningPlatformIdentitySource:
         binding: PlatformIdentityBinding,
     ) -> ActualPlatformSnapshot:
 
-        from deployment_operations.platform_identity_source import ActualPlatformSnapshot
+        from deployment_operations.platform_identity_source import (
+            ActualPlatformSnapshot,
+        )
 
         evidence = (
             self.membership.observe_membership(binding),
