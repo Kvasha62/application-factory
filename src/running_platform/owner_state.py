@@ -183,9 +183,7 @@ class OwnerStateSnapshotSource:
 
         for item in evidence:
             if not isinstance(item, ActualEvidence):
-                raise ActualIdentityUnavailable(
-                    "owner source returned invalid evidence"
-                )
+                raise ActualIdentityUnavailable("owner source returned invalid evidence")
             if item.provenance != first.provenance:
                 raise ActualIdentityUnavailable(
                     "owner sources returned mixed provenance"
