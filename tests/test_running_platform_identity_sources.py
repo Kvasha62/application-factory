@@ -118,9 +118,7 @@ class ConfigurationImplementation:
 
 @dataclass
 class GoldenBundleImplementation:
-    def observe_golden_bundle(
-        self, binding: PlatformIdentityBinding
-    ) -> ActualEvidence:
+    def observe_golden_bundle(self, binding: PlatformIdentityBinding) -> ActualEvidence:
         assert binding == BINDING
         return evidence(
             ActualGoldenBundle(
