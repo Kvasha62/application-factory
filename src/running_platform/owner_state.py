@@ -139,9 +139,7 @@ class OwnerStateSnapshotSource:
                     f"{name} source returned invalid identity field"
                 )
             if field.state.name == "UNKNOWN":
-                raise ActualIdentityUnavailable(
-                    f"{name} identity evidence is unknown"
-                )
+                raise ActualIdentityUnavailable(f"{name} identity evidence is unknown")
 
         membership = observations[0].value
         manifest = observations[1].value
