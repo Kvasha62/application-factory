@@ -26,5 +26,5 @@ jobs:
           python -m pip_audit
       - run: python -m compileall -q src
       - run: ruff check .
-      - run: black --check .
+      - run: black --diff .
       - run: python -m pytest tests/
