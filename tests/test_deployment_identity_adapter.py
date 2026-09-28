@@ -88,12 +88,18 @@ def test_identity_adapter_does_not_forward_expected_digest_in_binding(
     assert provider.received.token == "opaque-deployment-evaluation"
 
 
-def test_identity_adapter_converts_unavailable_evidence_to_deployment_failure() -> None:
+def (
+    test_identity_adapter_converts_unavailable_evidence_to_deployment_failure
+) -> None:
     class UnavailableProvider:
-        def observe_identity(self, binding: PlatformIdentityBinding) -> ActualEvidence:
+        def observe_identity(
+            self, binding: PlatformIdentityBinding
+        ) -> ActualEvidence:
             raise ActualIdentityUnavailable("source is unavailable")
 
-    with pytest.raises(IdentityVerificationFailed, match="evidence is unavailable"):
+    with pytest.raises(
+        IdentityVerificationFailed, match="evidence is unavailable"
+    ):
         deployment._verify_running_platform_identity(
             UnavailableProvider(),
             EXPECTED,
@@ -103,7 +109,9 @@ def test_identity_adapter_converts_unavailable_evidence_to_deployment_failure() 
 
 def test_identity_adapter_converts_provider_crash_to_deployment_failure() -> None:
     class BrokenProvider:
-        def observe_identity(self, binding: PlatformIdentityBinding) -> ActualEvidence:
+        def observe_identity(
+            self, binding: PlatformIdentityBinding
+        ) -> ActualEvidence:
             raise RuntimeError("unexpected owner-side failure")
 
     with pytest.raises(IdentityVerificationFailed, match="failed closed"):
