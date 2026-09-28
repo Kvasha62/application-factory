@@ -106,7 +106,6 @@ from deployment_operations.platform_identity import (
     validate_actual_evidence,
     validate_actual_surface,
 )
-from running_platform import RunningPlatformOwner, RunningPlatformOwnerError
 from deployment_operations.provisioning import (
     ArtifactSource,
     ProvisionedEnvironment,
@@ -146,6 +145,7 @@ from deployment_operations.verification import (
     verify_input_unchanged,
     verify_instance,
 )
+from running_platform import RunningPlatformOwner, RunningPlatformOwnerError
 
 __all__ = [
     "DEPLOYABLE_INSTANCE_STATES",
