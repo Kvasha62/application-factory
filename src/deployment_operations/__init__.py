@@ -87,7 +87,12 @@ from deployment_operations.health import (
     evaluate_health,
     verify_identity,
 )
-from deployment_operations.platform_identity_source import (    ActualPlatformSnapshot,    OwnerSuppliedPlatformIdentityProvider,    RunningPlatformIdentitySource,)from deployment_operations.platform_identity import (
+from deployment_operations.platform_identity_source import (
+    ActualPlatformSnapshot,
+    OwnerSuppliedPlatformIdentityProvider,
+    RunningPlatformIdentitySource,
+)
+from deployment_operations.platform_identity import (
     ActualComponentIdentity,
     ActualEvidence,
     ActualIdentityUnavailable,
