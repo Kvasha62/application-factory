@@ -21,6 +21,7 @@ from running_platform.identity_sources import (
     ManifestSource,
     MembershipSource,
 )
+from deployment_operations.environment import IDENTITY_CONFIGURATION_KEYS
 from deployment_operations.platform_identity import (
     ActualComponentIdentity,
     ActualEvidence,
@@ -153,10 +154,25 @@ def _platform_id_from_configuration(field: IdentityField) -> str:
         raise ActualIdentityUnavailable(
             "actual platform_id requires identity-bearing configuration"
         )
-    value = field.value.get("platform_id")
-    if not isinstance(value, str) or not value:
-        raise ActualIdentityUnavailable("actual platform_id is unavailable")
-    return value
+
+    values: set[str] = set()
+    for section in field.value.values():
+        if not isinstance(section, Mapping):
+            continue
+        for key in IDENTITY_CONFIGURATION_KEYS:
+            value = section.get(key)
+            if value is not None:
+                if not isinstance(value, str) or not value:
+                    raise ActualIdentityUnavailable(
+                        "actual platform_id is invalid"
+                    )
+                values.add(value)
+
+    if len(values) != 1:
+        raise ActualIdentityUnavailable(
+            "actual platform_id is unavailable or contradictory"
+        )
+    return next(iter(values))
 
 
 class RunningPlatformIdentitySource(Protocol):
