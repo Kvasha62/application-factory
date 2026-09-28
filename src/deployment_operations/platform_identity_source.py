@@ -24,17 +24,6 @@ from deployment_operations.platform_identity import (
     PresenceState,
     validate_actual_evidence,
 )
-from running_platform.identity_sources import (
-    ActualGoldenBundle,
-    ActualManifest,
-    ActualMembership,
-    BrandingSource,
-    ConfigurationSource,
-    ExtensionSource,
-    GoldenBundleSource,
-    ManifestSource,
-    MembershipSource,
-)
 
 Document = Mapping[str, object]
 
@@ -60,94 +49,6 @@ class ActualPlatformSnapshot:
     provenance: str
     correlation_token: object
     freshness_current: bool
-
-
-@dataclass(frozen=True)
-class ComposedRunningPlatformIdentitySource:
-    """Compose the six owner sources into one complete actual snapshot.
-
-    Every source is queried against the same opaque binding. The first source
-    establishes the evaluation envelope; all other sources must carry the same
-    correlation and current freshness. No source can supply expected state.
-    """
-
-    membership: MembershipSource
-    manifest: ManifestSource
-    configuration: ConfigurationSource
-    golden_bundle: GoldenBundleSource
-    extensions: ExtensionSource
-    branding: BrandingSource
-
-    def observe(self, binding: PlatformIdentityBinding) -> ActualPlatformSnapshot:
-        membership = self.membership.observe_membership(binding)
-        manifest = self.manifest.observe_manifest(binding)
-        configuration = self.configuration.observe_configuration(binding)
-        golden_bundle = self.golden_bundle.observe_golden_bundle(binding)
-        extensions = self.extensions.observe_extensions(binding)
-        branding = self.branding.observe_branding(binding)
-
-        evidence = (
-            membership,
-            manifest,
-            configuration,
-            golden_bundle,
-            extensions,
-            branding,
-        )
-        correlation = membership.correlation
-        freshness = membership.freshness
-        provenance = membership.provenance
-        for item in evidence:
-            if not item.correlation.matches(correlation):
-                raise ActualIdentityUnavailable(
-                    "owner identity sources returned mixed correlation"
-                )
-            if item.freshness.current is not True:
-                raise ActualIdentityUnavailable(
-                    "owner identity sources returned stale evidence"
-                )
-            if item.provenance != provenance:
-                raise ActualIdentityUnavailable(
-                    "owner identity sources returned mixed provenance"
-                )
-
-        membership_value = membership.value
-        manifest_value = manifest.value
-        golden_value = golden_bundle.value
-        if not isinstance(membership_value, ActualMembership):
-            raise ActualIdentityUnavailable("membership source returned invalid value")
-        if not isinstance(manifest_value, ActualManifest):
-            raise ActualIdentityUnavailable("manifest source returned invalid value")
-        if not isinstance(manifest_value.manifest, Mapping):
-            raise ActualIdentityUnavailable("manifest source returned invalid manifest")
-        if not isinstance(golden_value, ActualGoldenBundle):
-            raise ActualIdentityUnavailable(
-                "Golden Bundle source returned invalid value"
-            )
-        if not isinstance(configuration.value, IdentityField):
-            raise ActualIdentityUnavailable(
-                "configuration source returned invalid value"
-            )
-        if not isinstance(extensions.value, IdentityField):
-            raise ActualIdentityUnavailable("extension source returned invalid value")
-        if not isinstance(branding.value, IdentityField):
-            raise ActualIdentityUnavailable("branding source returned invalid value")
-
-        return ActualPlatformSnapshot(
-            platform_id=_platform_id_from_configuration(configuration.value),
-            manifest=dict(manifest_value.manifest),
-            manifest_state=manifest_value.manifest_state,
-            components=membership_value.components,
-            membership_established=membership_value.established,
-            configuration=configuration.value,
-            golden_bundle=golden_value.identity,
-            golden_bundle_inventory_established=golden_value.inventory_established,
-            extensions=extensions.value,
-            branding=branding.value,
-            provenance=provenance,
-            correlation_token=correlation.token,
-            freshness_current=freshness.current,
-        )
 
 
 def _platform_id_from_configuration(field: IdentityField) -> str:
