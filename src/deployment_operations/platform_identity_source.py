@@ -10,17 +10,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
-from running_platform.identity_sources import (
-    ActualGoldenBundle,
-    ActualManifest,
-    ActualMembership,
-    BrandingSource,
-    ConfigurationSource,
-    ExtensionSource,
-    GoldenBundleSource,
-    ManifestSource,
-    MembershipSource,
-)
 from deployment_operations.environment import IDENTITY_CONFIGURATION_KEYS
 from deployment_operations.platform_identity import (
     ActualComponentIdentity,
