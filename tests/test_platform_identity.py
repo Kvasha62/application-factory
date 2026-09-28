@@ -723,7 +723,7 @@ def test_invalid_manifest_identity_formats_are_unavailable(
         branding=surface.branding,
     )
 
-    with pytest.raises(ActualIdentityUnavailable, match="schema"):
+    with pytest.raises(ActualIdentityUnavailable, match=field):
         project_actual_identity(_evidence(surface))
 
 
