@@ -57,11 +57,11 @@ def snapshot(**overrides: object) -> ActualPlatformSnapshot:
 
 @dataclass
 class Source:
-    value: ActualPlatformSnapshot
+    value: object
 
     def observe(self, binding: PlatformIdentityBinding) -> ActualPlatformSnapshot:
         assert binding.token == "running-platform"
-        return self.value
+        return self.value  # type: ignore[return-value]
 
 
 def provider(value: ActualPlatformSnapshot):
@@ -74,6 +74,30 @@ def test_provider_preserves_owner_supplied_actual_identity():
     )
     assert evidence.value.platform_id == "example-platform"
     assert evidence.value.components[0].value.component_id == "alpha"
+
+
+def test_malformed_owner_snapshot_is_unavailable():
+    class MalformedSource:
+        def observe(
+            self, binding: PlatformIdentityBinding
+        ) -> ActualPlatformSnapshot:
+            return None  # type: ignore[return-value]
+
+    with pytest.raises(ActualIdentityUnavailable, match="invalid snapshot"):
+        OwnerSuppliedPlatformIdentityProvider(MalformedSource()).observe_identity(
+            PlatformIdentityBinding("running-platform")
+        )
+
+
+def test_owner_source_failure_is_unavailable():
+    class FailingSource:
+        def observe(self, binding: PlatformIdentityBinding) -> ActualPlatformSnapshot:
+            raise RuntimeError("source unavailable")
+
+    with pytest.raises(ActualIdentityUnavailable, match="invalid actual evidence"):
+        OwnerSuppliedPlatformIdentityProvider(FailingSource()).observe_identity(
+            PlatformIdentityBinding("running-platform")
+        )
 
 
 def test_incomplete_membership_is_unavailable():
