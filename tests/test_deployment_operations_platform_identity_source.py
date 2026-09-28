@@ -78,9 +78,7 @@ def test_provider_preserves_owner_supplied_actual_identity():
 
 def test_malformed_owner_snapshot_is_unavailable():
     class MalformedSource:
-        def observe(
-            self, binding: PlatformIdentityBinding
-        ) -> ActualPlatformSnapshot:
+        def observe(self, binding: PlatformIdentityBinding) -> ActualPlatformSnapshot:
             return None  # type: ignore[return-value]
 
     with pytest.raises(ActualIdentityUnavailable, match="invalid snapshot"):
