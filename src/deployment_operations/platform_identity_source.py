@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from deployment_operations.platform_identity import (
+    ActualIdentityUnavailable,
     ActualComponentIdentity,
     ActualEvidence,
     EvidenceCorrelation,
