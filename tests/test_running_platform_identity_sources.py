@@ -86,9 +86,7 @@ def test_golden_bundle_contract_preserves_inventory_establishment() -> None:
 
 @dataclass
 class MembershipImplementation:
-    def observe_membership(
-        self, binding: PlatformIdentityBinding
-    ) -> ActualEvidence:
+    def observe_membership(self, binding: PlatformIdentityBinding) -> ActualEvidence:
         assert binding == BINDING
         return evidence(
             ActualMembership(established=True, components=(component("alpha"),))
@@ -113,9 +111,7 @@ class ManifestImplementation:
 
 @dataclass
 class ConfigurationImplementation:
-    def observe_configuration(
-        self, binding: PlatformIdentityBinding
-    ) -> ActualEvidence:
+    def observe_configuration(self, binding: PlatformIdentityBinding) -> ActualEvidence:
         assert binding == BINDING
         return evidence(IdentityField.absent())
 
@@ -198,3 +194,4 @@ def test_owner_source_module_does_not_import_expected_deployment_state() -> None
     }
 
     assert names.isdisjoint(forbidden)
+}
