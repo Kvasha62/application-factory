@@ -76,6 +76,13 @@ from deployment_operations.health import (
     evaluate_health,
     verify_identity,
 )
+from deployment_operations.platform_identity import (
+    ActualIdentityUnavailable,
+    IdentityCorrespondenceResult,
+    PlatformIdentityBinding,
+    PlatformIdentityProvider,
+    establish_identity_correspondence,
+)
 from deployment_operations.provisioning import provision
 from deployment_operations.runtime import (
     OP_PROBE,
@@ -158,6 +165,44 @@ def _requested_manifest(document: object) -> Mapping[str, Any]:
 def default_source_paths() -> tuple[Path, ...]:
     """Import paths of the runtime processes: this repository's ``src``."""
     return (Path(__file__).resolve().parent.parent,)
+
+
+def _verify_running_platform_identity(
+    provider: PlatformIdentityProvider,
+    expected_instance: Mapping[str, Any],
+    *,
+    binding_token: object,
+) -> None:
+    """Cross the owner-side identity adapter boundary exactly once.
+
+    The provider receives only an opaque evaluation binding. The expected
+    Platform Instance remains on the D&O side and is used only after actual
+    evidence has been independently obtained. RuntimeAdapter is deliberately
+    absent from this function: runtime control and Running Platform identity
+    evidence are separate boundaries.
+    """
+    binding = PlatformIdentityBinding(binding_token)
+    try:
+        evidence = provider.observe_identity(binding)
+        result = establish_identity_correspondence(expected_instance, evidence)
+    except ActualIdentityUnavailable as error:
+        raise IdentityVerificationFailed(
+            [f"running platform identity evidence is unavailable: {error}"]
+        ) from error
+    except Exception as error:
+        raise IdentityVerificationFailed(
+            [f"running platform identity provider failed closed: {error}"]
+        ) from error
+
+    if result is IdentityCorrespondenceResult.MATCH:
+        return
+    if result is IdentityCorrespondenceResult.MISMATCH:
+        raise IdentityVerificationFailed(
+            ["running platform identity does not match the requested instance"]
+        )
+    raise IdentityVerificationFailed(
+        ["running platform identity evidence is unavailable"]
+    )
 
 
 @dataclass(frozen=True)
@@ -565,6 +610,7 @@ def deploy(
     request: DeploymentRequest,
     *,
     runtime: RuntimeAdapter | None = None,
+    identity_provider: PlatformIdentityProvider | None = None,
     source_paths: Sequence[Path] | None = None,
     clock: Any = None,
 ) -> Deployment:
@@ -810,6 +856,12 @@ def deploy(
                 "identity/version/digest verification failed",
                 identity_errors,
                 IdentityVerificationFailed(identity_errors),
+            )
+        if identity_provider is not None:
+            _verify_running_platform_identity(
+                identity_provider,
+                request.instance_document,
+                binding_token=deployment_id,
             )
         recorder.identity_verified()
 
