@@ -75,7 +75,7 @@ class RuntimeMembershipSource:
     ) -> ActualEvidence:
         """Return complete actual membership or fail closed."""
         if not callable(self.list_handles):
-            raise ValueError("runtime membership registry is unavailable")
+            raise TypeError("runtime membership registry is unavailable")
         try:
             handles = tuple(self.list_handles(binding))
         except Exception as error:
@@ -89,9 +89,9 @@ class RuntimeMembershipSource:
         for handle in handles:
             evidence = self.observer.observe_runtime_handle(handle)
             if not isinstance(evidence, ActualEvidence):
-                raise ValueError("runtime observer returned invalid evidence")
+                raise TypeError("runtime observer returned invalid evidence")
             if not isinstance(evidence.value, ActualComponentIdentity):
-                raise ValueError("runtime observer returned invalid component identity")
+                raise TypeError("runtime observer returned invalid component identity")
             if correlation is None:
                 correlation = evidence.correlation
                 freshness = evidence.freshness
