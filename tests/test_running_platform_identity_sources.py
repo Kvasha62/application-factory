@@ -86,7 +86,9 @@ def test_golden_bundle_contract_preserves_inventory_establishment() -> None:
 
 @dataclass
 class MembershipImplementation:
-    def observe_membership(self, binding: PlatformIdentityBinding) -> ActualEvidence:
+    def observe_membership(
+        self, binding: PlatformIdentityBinding
+    ) -> ActualEvidence:
         assert binding == BINDING
         return evidence(
             ActualMembership(established=True, components=(component("alpha"),))
@@ -111,14 +113,18 @@ class ManifestImplementation:
 
 @dataclass
 class ConfigurationImplementation:
-    def observe_configuration(self, binding: PlatformIdentityBinding) -> ActualEvidence:
+    def observe_configuration(
+        self, binding: PlatformIdentityBinding
+    ) -> ActualEvidence:
         assert binding == BINDING
         return evidence(IdentityField.absent())
 
 
 @dataclass
 class GoldenBundleImplementation:
-    def observe_golden_bundle(self, binding: PlatformIdentityBinding) -> ActualEvidence:
+    def observe_golden_bundle(
+        self, binding: PlatformIdentityBinding
+    ) -> ActualEvidence:
         assert binding == BINDING
         return evidence(
             ActualGoldenBundle(
