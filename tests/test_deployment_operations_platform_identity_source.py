@@ -13,6 +13,7 @@ from deployment_operations.platform_identity import (
     project_actual_identity,
 )
 from deployment_operations.platform_identity_source import (
+    ComposedRunningPlatformIdentitySource,
     ActualPlatformSnapshot,
     OwnerSuppliedPlatformIdentityProvider,
 )
@@ -133,3 +134,132 @@ def test_unknown_identity_field_is_unavailable():
 
     with pytest.raises(ActualIdentityUnavailable, match="UNKNOWN"):
         project_actual_identity(evidence)
+
+
+@dataclass
+class EvidenceSource:
+    value: object
+    provenance: str = EvidenceProvenance.MEASURED
+
+    def _evidence(self) -> object:
+        from deployment_operations.platform_identity import (
+            ActualEvidence,
+            EvidenceCorrelation,
+            EvidenceFreshness,
+        )
+        return ActualEvidence(
+            value=self.value,
+            provenance=self.provenance,
+            correlation=EvidenceCorrelation("evaluation-1"),
+            freshness=EvidenceFreshness(True),
+        )
+
+    def observe_membership(self, binding: PlatformIdentityBinding) -> object:
+        return self._evidence()
+
+    def observe_manifest(self, binding: PlatformIdentityBinding) -> object:
+        return self._evidence()
+
+    def observe_configuration(self, binding: PlatformIdentityBinding) -> object:
+        return self._evidence()
+
+    def observe_golden_bundle(self, binding: PlatformIdentityBinding) -> object:
+        return self._evidence()
+
+    def observe_extensions(self, binding: PlatformIdentityBinding) -> object:
+        return self._evidence()
+
+    def observe_branding(self, binding: PlatformIdentityBinding) -> object:
+        return self._evidence()
+
+
+def test_composed_owner_sources_build_one_actual_snapshot() -> None:
+    from running_platform.identity_sources import (
+        ActualGoldenBundle,
+        ActualManifest,
+        ActualMembership,
+    )
+
+    configuration = IdentityField.present(
+        {"alpha": {"platform_id": "example-platform"}}
+    )
+    source = EvidenceSource(
+        {
+            "membership": ActualMembership(True, (component("alpha"),)),
+            "manifest": ActualManifest(
+                {
+                    "manifest_id": "example-manifest",
+                    "manifest_version": "1.0.0",
+                    "manifest_digest": "sha256:" + "1" * 64,
+                },
+                "published",
+            ),
+            "configuration": configuration,
+            "golden": ActualGoldenBundle(IdentityField.absent(), True),
+            "extensions": IdentityField.absent(),
+            "branding": IdentityField.absent(),
+        }
+    )
+
+    composed = ComposedRunningPlatformIdentitySource(
+        membership=source,
+        manifest=source,
+        configuration=source,
+        golden_bundle=source,
+        extensions=source,
+        branding=source,
+    )
+    actual = composed.observe(PlatformIdentityBinding("running-platform"))
+
+    assert actual.platform_id == "example-platform"
+    assert actual.components == (component("alpha"),)
+    assert actual.manifest_state == "published"
+    assert actual.golden_bundle_inventory_established is True
+
+
+def test_composed_owner_sources_refuse_mixed_correlation() -> None:
+    from deployment_operations.platform_identity import (
+        ActualEvidence,
+        EvidenceCorrelation,
+        EvidenceFreshness,
+    )
+    from running_platform.identity_sources import ActualManifest, ActualMembership
+
+    class MixedManifestSource(EvidenceSource):
+        def observe_manifest(self, binding: PlatformIdentityBinding) -> object:
+            return ActualEvidence(
+                value=ActualManifest(
+                    {
+                        "manifest_id": "example-manifest",
+                        "manifest_version": "1.0.0",
+                        "manifest_digest": "sha256:" + "1" * 64,
+                    },
+                    "published",
+                ),
+                provenance=EvidenceProvenance.MEASURED,
+                correlation=EvidenceCorrelation("other-evaluation"),
+                freshness=EvidenceFreshness(True),
+            )
+
+    base = EvidenceSource(
+        ActualMembership(True, (component("alpha"),))
+    )
+    source = MixedManifestSource(
+        base.value
+    )
+    source.value = base.value
+    composed = ComposedRunningPlatformIdentitySource(
+        membership=base,
+        manifest=source,
+        configuration=EvidenceSource(
+            IdentityField.present({"alpha": {"platform_id": "example-platform"}})
+        ),
+        golden_bundle=EvidenceSource(
+            ActualGoldenBundle(IdentityField.absent(), True)
+        ),
+        extensions=EvidenceSource(IdentityField.absent()),
+        branding=EvidenceSource(IdentityField.absent()),
+    )
+
+    with pytest.raises(ActualIdentityUnavailable, match="mixed correlation"):
+        composed.observe(PlatformIdentityBinding("running-platform"))
