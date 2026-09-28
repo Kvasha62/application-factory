@@ -30,10 +30,21 @@ from deployment_operations.platform_identity import (
     EvidenceFreshness,
     IdentityField,
     PlatformIdentityBinding,
-    PresenceState,
     PlatformIdentityProvider,
     PlatformIdentitySurface,
+    PresenceState,
     validate_actual_evidence,
+)
+from running_platform.identity_sources import (
+    ActualGoldenBundle,
+    ActualManifest,
+    ActualMembership,
+    BrandingSource,
+    ConfigurationSource,
+    ExtensionSource,
+    GoldenBundleSource,
+    ManifestSource,
+    MembershipSource,
 )
 
 Document = Mapping[str, object]
