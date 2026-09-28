@@ -42,6 +42,88 @@ class ActualGoldenBundle:
     inventory_established: bool
 
 
+RuntimeHandle = object
+RuntimeHandleObserver = Protocol
+
+
+class RuntimeHandleObserver(Protocol):
+    """Owner-side observer of one already-running runtime handle."""
+
+    def observe_runtime_handle(
+        self,
+        handle: RuntimeHandle,
+    ) -> ActualEvidence:
+        """Return independently observed component identity evidence."""
+        ...
+
+
+@dataclass(frozen=True)
+class RuntimeMembershipSource:
+    """Observe complete membership from an owner-controlled runtime registry.
+
+    The registry callback is the source of the *complete* set of running
+    handles. The observer callback turns each handle into independently
+    observed component identity evidence. Neither callback receives expected
+    deployment state; the source only preserves and validates actual facts.
+    """
+
+    list_handles: object
+    observer: RuntimeHandleObserver
+
+    def observe_membership(
+        self,
+        binding: PlatformIdentityBinding,
+    ) -> ActualEvidence:
+        """Return complete actual membership or fail closed."""
+        if not callable(self.list_handles):
+            raise ValueError("runtime membership registry is unavailable")
+        try:
+            handles = tuple(self.list_handles(binding))
+        except Exception as error:
+            raise ValueError("runtime membership registry is unavailable") from error
+
+        components: list[ActualComponentIdentity] = []
+        evidence_by_component: dict[str, ActualEvidence] = {}
+        correlation = None
+        freshness = None
+        for handle in handles:
+            evidence = self.observer.observe_runtime_handle(handle)
+            if not isinstance(evidence, ActualEvidence):
+                raise ValueError("runtime observer returned invalid evidence")
+            if not isinstance(evidence.value, ActualComponentIdentity):
+                raise ValueError("runtime observer returned invalid component identity")
+            if correlation is None:
+                correlation = evidence.correlation
+                freshness = evidence.freshness
+            elif not evidence.correlation.matches(correlation):
+                raise ValueError("runtime membership evidence has mixed correlation")
+            if evidence.freshness.current is not True:
+                raise ValueError("runtime membership evidence is stale")
+            component = evidence.value
+            if component.component_id in evidence_by_component:
+                raise ValueError(
+                    f"runtime membership contains duplicate component "
+                    f"{component.component_id!r}"
+                )
+            evidence_by_component[component.component_id] = evidence
+            components.append(component)
+
+        if not handles:
+            raise ValueError("runtime membership is empty")
+        if correlation is None or freshness is None:
+            raise ValueError("runtime membership has no evidence")
+
+        return ActualEvidence(
+            value=ActualMembership(
+                established=True,
+                components=tuple(components),
+            ),
+            provenance=next(iter(evidence_by_component.values())).provenance,
+            correlation=correlation,
+            freshness=freshness,
+        )
+
+
 class MembershipSource(Protocol):
     """Owner-side source for complete actual component membership."""
 
@@ -118,4 +200,6 @@ __all__ = [
     "GoldenBundleSource",
     "ManifestSource",
     "MembershipSource",
+    "RuntimeHandleObserver",
+    "RuntimeMembershipSource",
 ]
