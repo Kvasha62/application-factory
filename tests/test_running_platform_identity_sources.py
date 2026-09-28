@@ -111,18 +111,14 @@ class ManifestImplementation:
 
 @dataclass
 class ConfigurationImplementation:
-    def observe_configuration(
-        self, binding: PlatformIdentityBinding
-    ) -> ActualEvidence:
+    def observe_configuration(self, binding: PlatformIdentityBinding) -> ActualEvidence:
         assert binding == BINDING
         return evidence(IdentityField.absent())
 
 
 @dataclass
 class GoldenBundleImplementation:
-    def observe_golden_bundle(
-        self, binding: PlatformIdentityBinding
-    ) -> ActualEvidence:
+    def observe_golden_bundle(self, binding: PlatformIdentityBinding) -> ActualEvidence:
         assert binding == BINDING
         return evidence(
             ActualGoldenBundle(
