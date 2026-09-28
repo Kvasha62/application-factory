@@ -51,9 +51,7 @@ class ActualPlatformSnapshot:
 class RunningPlatformIdentitySource(Protocol):
     """Owner-side source of actual Running Platform identity facts."""
 
-    def observe(
-        self, binding: PlatformIdentityBinding
-    ) -> ActualPlatformSnapshot:
+    def observe(self, binding: PlatformIdentityBinding) -> ActualPlatformSnapshot:
         """Return one complete actual snapshot for the bound platform."""
         ...
 
@@ -64,9 +62,7 @@ class OwnerSuppliedPlatformIdentityProvider(PlatformIdentityProvider):
     def __init__(self, source: RunningPlatformIdentitySource) -> None:
         self._source = source
 
-    def observe_identity(
-        self, binding: PlatformIdentityBinding
-    ) -> ActualEvidence:
+    def observe_identity(self, binding: PlatformIdentityBinding) -> ActualEvidence:
         snapshot = self._source.observe(binding)
         correlation = EvidenceCorrelation(snapshot.correlation_token)
         freshness = EvidenceFreshness(snapshot.freshness_current)
@@ -87,7 +83,9 @@ class OwnerSuppliedPlatformIdentityProvider(PlatformIdentityProvider):
             membership_established=snapshot.membership_established,
             configuration=snapshot.configuration,
             golden_bundle=snapshot.golden_bundle,
-            golden_bundle_inventory_established=(                snapshot.golden_bundle_inventory_established            ),
+            golden_bundle_inventory_established=(
+                snapshot.golden_bundle_inventory_established
+            ),
             extensions=snapshot.extensions,
             branding=snapshot.branding,
         )
