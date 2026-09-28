@@ -127,6 +127,76 @@ class RuntimeMembershipSource:
         )
 
 
+@dataclass(frozen=True)
+class ComposedRunningPlatformIdentitySource:
+    """Compose owner sources into one complete actual platform snapshot."""
+
+    membership: MembershipSource
+    manifest: ManifestSource
+    configuration: ConfigurationSource
+    golden_bundle: GoldenBundleSource
+    extensions: ExtensionSource
+    branding: BrandingSource
+
+    def observe(
+        self,
+        binding: PlatformIdentityBinding,
+    ) -> "ActualPlatformSnapshot":
+        from deployment_operations.platform_identity_source import ActualPlatformSnapshot
+        from deployment_operations.platform_identity_source import (
+            _platform_id_from_configuration,
+        )
+
+        evidence = (
+            self.membership.observe_membership(binding),
+            self.manifest.observe_manifest(binding),
+            self.configuration.observe_configuration(binding),
+            self.golden_bundle.observe_golden_bundle(binding),
+            self.extensions.observe_extensions(binding),
+            self.branding.observe_branding(binding),
+        )
+        membership, manifest, configuration, golden_bundle, extensions, branding = evidence
+        correlation = membership.correlation
+        provenance = membership.provenance
+        freshness = membership.freshness
+        for item in evidence:
+            if not item.correlation.matches(correlation):
+                raise ValueError("owner identity sources returned mixed correlation")
+            if item.freshness.current is not True:
+                raise ValueError("owner identity sources returned stale evidence")
+            if item.provenance != provenance:
+                raise ValueError("owner identity sources returned mixed provenance")
+
+        if not isinstance(membership.value, ActualMembership):
+            raise TypeError("membership source returned invalid value")
+        if not isinstance(manifest.value, ActualManifest):
+            raise TypeError("manifest source returned invalid value")
+        if not isinstance(configuration.value, IdentityField):
+            raise TypeError("configuration source returned invalid value")
+        if not isinstance(golden_bundle.value, ActualGoldenBundle):
+            raise TypeError("Golden Bundle source returned invalid value")
+        if not isinstance(extensions.value, IdentityField):
+            raise TypeError("extension source returned invalid value")
+        if not isinstance(branding.value, IdentityField):
+            raise TypeError("branding source returned invalid value")
+
+        return ActualPlatformSnapshot(
+            platform_id=_platform_id_from_configuration(configuration.value),
+            manifest=dict(manifest.value.manifest),
+            manifest_state=manifest.value.manifest_state,
+            components=membership.value.components,
+            membership_established=membership.value.established,
+            configuration=configuration.value,
+            golden_bundle=golden_bundle.value.identity,
+            golden_bundle_inventory_established=golden_bundle.value.inventory_established,
+            extensions=extensions.value,
+            branding=branding.value,
+            provenance=provenance,
+            correlation_token=correlation.token,
+            freshness_current=freshness.current,
+        )
+
+
 class MembershipSource(Protocol):
     """Owner-side source for complete actual component membership."""
 
@@ -198,6 +268,7 @@ __all__ = [
     "ActualManifest",
     "ActualMembership",
     "BrandingSource",
+    "ComposedRunningPlatformIdentitySource",
     "ConfigurationSource",
     "ExtensionSource",
     "GoldenBundleSource",
