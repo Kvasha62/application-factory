@@ -274,5 +274,5 @@ def test_composed_owner_sources_refuse_mixed_correlation() -> None:
         branding=base,
     )
 
-    with pytest.raises(ActualIdentityUnavailable, match="mixed correlation"):
+    with pytest.raises(ValueError, match="mixed correlation"):
         composed.observe(PlatformIdentityBinding("running-platform"))
