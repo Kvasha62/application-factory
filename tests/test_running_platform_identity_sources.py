@@ -17,14 +17,7 @@ from running_platform.identity_sources import (
     ActualGoldenBundle,
     ActualManifest,
     ActualMembership,
-    BrandingSource,
-    ConfigurationSource,
-    ExtensionSource,
-    GoldenBundleSource,
-    ManifestSource,
-    MembershipSource,
 )
-
 
 BINDING = PlatformIdentityBinding("running-platform")
 
@@ -189,8 +182,6 @@ def test_sources_do_not_receive_expected_instance_digest() -> None:
             method(PlatformIdentityBinding("sha256:" + "0" * 64))
 
 
-# Static ownership checks: these names must remain consumer-only and therefore
-# must not appear in the owner-side source module's imports or annotations.
 def test_owner_source_module_does_not_import_expected_deployment_state() -> None:
     import running_platform.identity_sources as module
 
