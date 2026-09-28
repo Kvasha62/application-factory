@@ -239,4 +239,3 @@ __all__ = [
     "verify_input_unchanged",
     "verify_instance",
 ]
-]
