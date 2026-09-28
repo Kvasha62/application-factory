@@ -176,6 +176,7 @@ class EvidenceSource:
 def test_composed_owner_sources_build_one_actual_snapshot() -> None:
     from running_platform.identity_sources import (
         ActualGoldenBundle,
+        ComposedRunningPlatformIdentitySource,
         ActualManifest,
         ActualMembership,
     )
@@ -226,6 +227,7 @@ def test_composed_owner_sources_refuse_mixed_correlation() -> None:
         ActualGoldenBundle,
         ActualManifest,
         ActualMembership,
+        ComposedRunningPlatformIdentitySource,
     )
 
     class MixedManifestSource(EvidenceSource):
