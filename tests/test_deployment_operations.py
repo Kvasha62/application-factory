@@ -760,8 +760,7 @@ class TestIdentityAcceptanceGate:
         request = request_for(instance, manifest, environment)
 
         with pytest.raises(
-            IdentityVerificationFailed,
-            match="identity evidence is unavailable",
+            IdentityVerificationFailed, match="identity evidence is unavailable"
         ):
             _deployment_operations.deploy(
                 request,
