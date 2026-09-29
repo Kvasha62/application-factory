@@ -736,14 +736,6 @@ def deploy(
     recorder.stage("deploying", STAGE_IN_PROGRESS)
     paths = tuple(source_paths) if source_paths is not None else default_source_paths()
     adapter: RuntimeAdapter = runtime or LocalProcessRuntime(source_paths=paths)
-    if identity_provider is None:
-        identity_provider = OwnerSuppliedPlatformIdentityProvider(
-            OwnerStateSnapshotSource(
-                FileRunningPlatformOwnerStateReader(
-                    environment.runtime_root / "running_platform_identity.json"
-                )
-            )
-        )
     elements = build_elements(
         environment, provisioned, verification, source_paths=paths
     )
