@@ -298,7 +298,7 @@ class TestExactInstanceIdentity:
             InstanceReference.from_document({"platform_id": PLATFORM_ID})
 
     def test_reference_must_name_the_supplied_instance(
-        self, tmp_path, instance, manifest,
+        self, tmp_path, instance, manifest
     ):
         other = InstanceReference(
             instance_digest="sha256:" + "0" * 64, platform_id=PLATFORM_ID
@@ -748,7 +748,7 @@ class TestIdentityAcceptanceGate:
     """Running Platform identity is mandatory before the realized claim."""
 
     def test_unavailable_identity_provider_fails_closed_after_ready(
-        self, tmp_path, instance, manifest,
+        self, tmp_path, instance, manifest
     ):
         from deployment_operations.platform_identity import ActualIdentityUnavailable
 
@@ -784,7 +784,7 @@ class TestIdentityAcceptanceGate:
         assert events[-1]["event"] == "deployment_failed"
 
     def test_provider_exception_fails_closed_after_ready(
-        self, tmp_path, instance, manifest,
+        self, tmp_path, instance, manifest
     ):
         class BrokenProvider:
             def observe_identity(self, binding):
@@ -819,7 +819,7 @@ class TestIdentityAcceptanceGate:
         assert not any(entry["event"] == "deployment_realized" for entry in events)
 
     def test_identity_verified_precedes_realized_at_acceptance_seam(
-        self, tmp_path, instance, manifest, monkeypatch,
+        self, tmp_path, instance, manifest, monkeypatch
     ):
         calls: list[tuple[str, object]] = []
 
