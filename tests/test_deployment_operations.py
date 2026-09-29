@@ -604,6 +604,71 @@ class TestDeploymentProgression:
 # ---------------------------------------------------------------------------
 
 
+class TestIdentityAcceptanceGate:
+    """Running Platform identity is mandatory between ready and realized."""
+
+    @staticmethod
+    def request(tmp_path, instance, manifest):
+        return request_for(instance, manifest, environment_for(tmp_path / "runtime"))
+
+    def test_unavailable_identity_provider_fails_closed_after_ready(
+        self, tmp_path, instance, manifest
+    ):
+        class UnavailableSource:
+            def observe(self, binding: PlatformIdentityBinding):
+                raise RuntimeError("identity source is unavailable")
+
+        provider = OwnerSuppliedPlatformIdentityProvider(UnavailableSource())
+        request = self.request(tmp_path, instance, manifest)
+        with pytest.raises(IdentityVerificationFailed) as failure:
+            _deployment_operations.deploy(request, identity_provider=provider)
+        assert any("unavailable" in error for error in failure.value.errors)
+        record = read_state(request.environment, instance)
+        events = read_events(request.environment, instance)
+        assert record.lifecycle == LIFECYCLE_FAILED
+        assert record.failure is not None
+        assert record.failure.stage == "ready"
+        assert record.identity_verified is False
+        assert record.ready is False
+        assert record.running is False
+        assert record.deployed is False
+        assert [event["event"] for event in events][-1] == "deployment_failed"
+        assert not any(event["event"] == "deployment_realized" for event in events)
+
+    def test_provider_exception_fails_closed_after_ready(
+        self, tmp_path, instance, manifest
+    ):
+        class FailingProvider:
+            def observe_identity(self, binding: PlatformIdentityBinding):
+                raise RuntimeError("provider exploded")
+
+        request = self.request(tmp_path, instance, manifest)
+        with pytest.raises(IdentityVerificationFailed) as failure:
+            _deployment_operations.deploy(request, identity_provider=FailingProvider())
+        assert any("provider failed closed" in error for error in failure.value.errors)
+        record = read_state(request.environment, instance)
+        assert record.failure is not None
+        assert record.failure.stage == "ready"
+        assert record.identity_verified is False
+        assert record.running is False
+        assert record.deployed is False
+
+    def test_identity_verified_precedes_realized_at_acceptance_seam(
+        self, tmp_path, instance, manifest
+    ):
+        request = self.request(tmp_path, instance, manifest)
+        provider = OwnerSuppliedPlatformIdentityProvider(
+            _CanonicalTestIdentitySource(request)
+        )
+        with _deployment_operations.deploy(request, identity_provider=provider):
+            events = read_events(request.environment, instance)
+            names = [event["event"] for event in events]
+            ready = names.index("ready_reached")
+            verified = names.index("identity_verified")
+            realized = names.index("deployment_realized")
+            assert ready < verified < realized
+
+
 class TestHonestDeployedClaim:
     """``ready`` alone fixes nothing; both dimensions must hold together."""
 
