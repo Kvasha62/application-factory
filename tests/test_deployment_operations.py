@@ -55,7 +55,6 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
-import deployment_operations as _deployment_operations
 from _deployment_helpers import (
     COMPONENT_ID,
     COMPONENT_VERSION,
@@ -74,6 +73,7 @@ from _deployment_helpers import (
     tampered_instance,
 )
 
+import deployment_operations as _deployment_operations
 from deployment_operations import (
     DEPLOYABLE_INSTANCE_STATES,
     LIFECYCLE_FAILED,
@@ -123,7 +123,6 @@ from platform_instance import Instance, discover_root
 from platform_manifest import compute_manifest_digest, validate_document
 
 
-
 class _CanonicalTestIdentitySource:
     def __init__(self, request: DeploymentRequest) -> None:
         self.request = request
@@ -142,7 +141,11 @@ class _CanonicalTestIdentitySource:
         configuration = self.request.instance_document.get("configuration")
         return ActualPlatformSnapshot(
             platform_id=self.request.instance_document["platform_id"],
-            manifest=self.request.manifest_document,
+            manifest={
+                "manifest_id": self.request.manifest_document["manifest_id"],
+                "manifest_version": self.request.manifest_document["manifest_version"],
+                "manifest_digest": self.request.manifest_document["manifest_digest"],
+            },
             manifest_state=self.request.manifest_document["lifecycle"]["state"],
             components=tuple(components),
             membership_established=True,
@@ -163,8 +166,11 @@ class _CanonicalTestIdentitySource:
 
 def deploy(request: DeploymentRequest, **kwargs: object):
     """Keep legacy architecture tests explicit about their owner-side source."""
-    provider = OwnerSuppliedPlatformIdentityProvider(_CanonicalTestIdentitySource(request))
+    provider = OwnerSuppliedPlatformIdentityProvider(
+        _CanonicalTestIdentitySource(request)
+    )
     return _deployment_operations.deploy(request, identity_provider=provider, **kwargs)
+
 
 # ---------------------------------------------------------------------------
 # Test doubles of the runtime boundary
@@ -1625,6 +1631,7 @@ class TestOwnershipBoundary:
             "platform_instance",
             "platform_manifest",
             "re",
+            "running_platform",
             "threading",
             "shutil",
             "subprocess",
@@ -2080,6 +2087,48 @@ class TestCommandLine:
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         instance_path = tmp_path / "instance.json"
         instance_path.write_text(instance.render(), encoding="utf-8")
+        runtime_root = tmp_path / "runtime"
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        (runtime_root / "running_platform_identity.json").write_text(
+            json.dumps(
+                {
+                    "platform_id": PLATFORM_ID,
+                    "membership_established": True,
+                    "components": [
+                        {
+                            "component_id": component["component_id"],
+                            "component_version": component["component_version"],
+                            "artifact_identity": component["artifact"],
+                        }
+                        for component in manifest["components"]
+                    ],
+                    "manifest": dict(instance.document["manifest"]),
+                    "manifest_state": manifest["lifecycle"]["state"],
+                    "configuration": (
+                        {
+                            "state": "PRESENT",
+                            "value": instance.document["configuration"],
+                        }
+                        if "configuration" in instance.document
+                        else {"state": "ABSENT"}
+                    ),
+                    "golden_bundle": {"state": "ABSENT"},
+                    "golden_bundle_inventory_established": True,
+                    "extensions": {"state": "ABSENT"},
+                    "branding": {"state": "ABSENT"},
+                    "provenance": "MEASURED",
+                    "correlation_token": derive_deployment_id(
+                        PLATFORM_ID,
+                        instance.instance_digest,
+                        "local-cli",
+                        1,
+                    ),
+                    "freshness_current": True,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         environment_path = tmp_path / "environment.json"
         environment_path.write_text(
             json.dumps(
