@@ -1,10 +1,10 @@
 # DOCUMENTATION_BASELINE.md
 
 **Статус:** `CLEAN`  
-**Дата:** 2026-09-16  
-**Базовый `main` до ратификации:** `da3ac2e03255e6bfe0b42e0923326e9ed2bfb38d`  
-**Актуализация:** 2026-09-14 — после прохождения Factory Gate #1 и ратификации ADR-0015 зафиксирована активация Level 2 — Component Factory; при этом сами фабричные механизмы остаются не реализованными до прохождения отдельных implementation slices. 2026-09-15 — после реализации Slice B — Component Catalog (Issue #64): каталог реализован как производный discoverable view реестра и опубликованных контрактов; после реализации Slice C — Platform Manifest (Issue #66, PR #67): манифест реализован как явный машинно-читаемый артефакт композиции платформы; после реализации Slice D — Golden Bundles (Issue #71): Golden Bundle реализован как явный машинно-читаемый артефакт сертифицированного воспроизводимого набора совместимых версий компонентов; Slice E — Composer реализован (Issue #73, merge `319ab4b`): детерминированная композиция и детерминированное отклонение несовместимых или contract-invalid сборок платформы. 2026-09-16 — после реализации Slice F — Platform Instance Assembly (Issue #74): assembly-представление конкретного Platform Instance реализовано как детерминированная привязка `platform_id` к принятому/валидному Platform Manifest; deployment/provisioning/rollout-исполнение остаётся не реализованным и требует отдельного work item. 2026-09-16 — ADR-0016 — Deployment and Operations Boundary ратифицирован владельцем; выполнено контролируемое обновление `docs/ARCHITECTURE.md` (ADR-0016 §29): §2.2 — Platform Instance зафиксирован как desired state / deployment input, не runtime state; §37 — главная модель дополнена стадией Deployment & Operations → Running Platform; §37.1 — зафиксирована граница Deployment & Operations; версия документа не меняется (Level C, конвенция ADR-0011); реализация Deployment & Operations не выполнялась и требует отдельного утверждённого work item (ADR-0016 §30). 2026-09-16 — ADR-0017 — Deployment & Operations Implementation Scope ратифицирован владельцем: зафиксирован полный scope будущей реализации Deployment & Operations (ровно девять ответственностей ADR-0016 §4; retirement вне scope), первый минимальный вертикальный срез (§42–§43) и словарь `ready` / `deployed` / `realized`; архитектура не изменяется, документ технологически нейтрален; реализация не выполнялась и требует отдельного утверждённого work item (ADR-0017 §19, §25, §28).
-**Основание:** `docs/ARCHITECTURE.md` 1.2.0 + `docs/adr/ADR-0010-architecture-gap-review.md` + `docs/adr/ADR-0015-level-2-component-factory-activation.md` + `docs/adr/ADR-0016-deployment-and-operations-boundary.md` + `docs/adr/ADR-0017-deployment-operations-implementation-scope.md`
+**Дата:** 2026-09-29  
+**Базовый `main`:** `59072356de398f33b483db0a7fefc6c949464e4f`  
+**Актуализация:** 2026-09-14 — после прохождения Factory Gate #1 и ратификации ADR-0015 зафиксирована активация Level 2 — Component Factory; при этом сами фабричные механизмы остаются не реализованными до прохождения отдельных implementation slices. 2026-09-15 — после реализации Slice B — Component Catalog (Issue #64): каталог реализован как производный discoverable view реестра и опубликованных контрактов; после реализации Slice C — Platform Manifest (Issue #66, PR #67): манифест реализован как явный машинно-читаемый артефакт композиции платформы; после реализации Slice D — Golden Bundles (Issue #71): Golden Bundle реализован как явный машинно-читаемый артефакт сертифицированного воспроизводимого набора совместимых версий компонентов; Slice E — Composer реализован (Issue #73, merge `319ab4b`): детерминированная композиция и детерминированное отклонение несовместимых или contract-invalid сборок платформы. 2026-09-16 — после реализации Slice F — Platform Instance Assembly (Issue #74): assembly-представление конкретного Platform Instance реализовано как детерминированная привязка `platform_id` к принятому/валидному Platform Manifest; deployment/provisioning/rollout-исполнение остаётся не реализованным и требует отдельного work item. 2026-09-16 — ADR-0016 — Deployment and Operations Boundary ратифицирован владельцем; выполнено контролируемое обновление `docs/ARCHITECTURE.md` (ADR-0016 §29): §2.2 — Platform Instance зафиксирован как desired state / deployment input, не runtime state; §37 — главная модель дополнена стадией Deployment & Operations → Running Platform; §37.1 — зафиксирована граница Deployment & Operations; версия документа не меняется (Level C, конвенция ADR-0011); реализация Deployment & Operations не выполнялась и требует отдельного утверждённого work item (ADR-0016 §30). 2026-09-16 — ADR-0017 — Deployment & Operations Implementation Scope ратифицирован владельцем: зафиксирован полный scope будущей реализации Deployment & Operations (ровно девять ответственностей ADR-0016 §4; retirement вне scope), первый минимальный вертикальный срез (§42–§43) и словарь `ready` / `deployed` / `realized`; архитектура не изменяется, документ технологически нейтрален; реализация первого вертикального среза впоследствии выполнена отдельными implementation work items. 2026-09-20 — ADR-0018 ратифицирован: закрыта нормативная модель identity исполняемого artifact, при этом F-3B оставлен отдельным GAP до approved work item и verification. 2026-09-26 — ADR-0019 и ADR-0020 ратифицированы: определены correspondence фактического Running Platform с конкретным Platform Instance и ownership boundary для Platform Identity Surface. 2026-09-29 — baseline обновлён после merge `59072356`, включающего fail-closed lifecycle acceptance seam для Running Platform identity verification.
+**Основание:** `docs/ARCHITECTURE.md` 1.2.0 + `docs/adr/ADR-0010-architecture-gap-review.md` + `docs/adr/ADR-0015-level-2-component-factory-activation.md` + `docs/adr/ADR-0016-deployment-and-operations-boundary.md` + `docs/adr/ADR-0017-deployment-operations-implementation-scope.md` + `docs/adr/ADR-0018-closed-executable-artifact-identity.md` + `docs/adr/ADR-0019-running-platform-identity-correspondence.md` + `docs/adr/ADR-0020-platform-identity-surface.md`
 
 ## 1. Назначение
 
@@ -25,7 +25,7 @@
 | Область | Источник | Статус |
 |---|---|---|
 | Архитектурный закон | `docs/ARCHITECTURE.md` | RATIFIED 1.2.0 |
-| Архитектурные решения | `docs/adr/` | ACTIVE; ADR-0010…ADR-0017 подтверждены, ADR-0015 RATIFIED 2026-09-14, ADR-0016 RATIFIED 2026-09-16, ADR-0017 RATIFIED 2026-09-16 |
+| Архитектурные решения | `docs/adr/` | ACTIVE; ADR-0010…ADR-0020 подтверждены; ADR-0015 RATIFIED 2026-09-14, ADR-0016 RATIFIED 2026-09-16, ADR-0017 RATIFIED 2026-09-16, ADR-0018 RATIFIED 2026-09-20, ADR-0019/0020 RATIFIED 2026-09-26 |
 | Активация Component Factory | `docs/adr/ADR-0015-level-2-component-factory-activation.md` | RATIFIED; Level 2 ACTIVE |
 | Документационный baseline | `docs/DOCUMENTATION_BASELINE.md` | CLEAN |
 | Операционная модель | `docs/OPERATING_MODEL.md` | RATIFIED 1.0.0 |
@@ -55,6 +55,9 @@
 - `ADR-0015` — Level 2 Component Factory activation after Factory Gate #1 — `RATIFIED` 2026-09-14.
 - `ADR-0016` — Deployment and Operations Boundary — `RATIFIED` 2026-09-16.
 - `ADR-0017` — Deployment & Operations Implementation Scope — `RATIFIED` 2026-09-16.
+- `ADR-0018` — Closed Executable Artifact Identity — `RATIFIED` 2026-09-20.
+- `ADR-0019` — Running Platform Identity Correspondence — `RATIFIED` 2026-09-26.
+- `ADR-0020` — Platform Identity Surface for Running Platform — `RATIFIED` 2026-09-26.
 
 `ADR-0009` отсутствует в подтверждённой истории и не реконструируется предположением.
 
@@ -193,20 +196,13 @@ configuration, extensions, branding и ссылку на Golden Bundle (либо
 детерминированный `instance_digest` без зависимости от времени, случайности,
 окружения и сети. Assembly перепроверяет composition поверхностями
 существующих factory-контрактов (§18, §20, §21, contract validity) и не
-создаёт второго источника истины. Это representation step: deployment,
-provisioning и rollout не реализованы (ADR-0015 §15; ARCHITECTURE.md §2.2,
-§31).
+создаёт второго источника истины. Это representation step: он является входом для Deployment & Operations и сам по себе не означает runtime state (ADR-0015 §15; ARCHITECTURE.md §2.2, §31).
 
-На момент этой актуализации **не считаются реализованными и доступными**:
-
-- deployment/provisioning/rollout-исполнение поверх собранного Platform
-  Instance.
+На момент этой актуализации фабричные representation slices A–F реализованы. Поверх них реализован первый вертикальный срез Deployment & Operations, включая provisioning, deployment, migrations, runtime start/stop, health/readiness, deployment state, operational events и fail-closed Running Platform identity correspondence. Полный будущий capability scope ADR-0017 (в частности upgrade/rollback/retirement и последующие operational stages) не следует считать полностью реализованным только на основании этого вертикального среза.
 
 Slice A смержен (PR #63). Slice B смержен (PR #65). Slice C смержен (PR #67).
 Slice D смержен (PR #72, merge `d199f7a`). Slice E смержен
-(`319ab4bed5a668d215fe4aa92badf86417722926`). Slice F находится в отдельном
-PR и ожидает owner approval до merge. Последующие этапы требуют отдельных
-work item, проверки, независимого review и owner approval до merge.
+(`319ab4bed5a668d215fe4aa92badf86417722926`). Slice F смержен (PR #75, 2026-09-16). Последующие этапы Deployment & Operations выполнялись отдельными approved work items с отдельными тестами, review и owner approval.
 
 ## 6. Границы Level 2
 
@@ -223,47 +219,44 @@ work item, проверки, независимого review и owner approval �
 
 Фабрика владеет только factory-level metadata и knowledge of composition: registry metadata, catalog metadata, bundles, manifests и compatibility metadata.
 
-## 7. Документационная целостность
+## 7. Deployment & Operations / Running Platform
 
-`README.md` и `docs/adr/README.md` должны отражать, что Level 2 активирован, а фабричные механизмы вводятся инкрементально: Slice A/B/C/D/E/F реализованы, deployment/provisioning/rollout-исполнение поверх собранного Platform Instance — нет.
+ADR-0016 и ADR-0017 установили границу и scope Deployment & Operations. В текущем `main` реализован первый end-to-end вертикальный срез для конкретного Platform Instance: запрос/валидация, provisioning, deployment, migrations, runtime start, health/readiness, deployment state и operational observability.
+
+ADR-0019 и ADR-0020 дополнительно фиксируют независимое установление actual Running Platform identity. Production seam в Deployment & Operations проверяет correspondence fail-closed: отсутствие/ошибка identity evidence не может привести к `realized`/`deployed` acceptance.
+
+ADR-0018 остаётся отдельным архитектурным GAP F-3B: наличие artifact identity само по себе не означает, что весь closed executable artifact boundary доказан во всех необходимых runtime cases.
 
 Исторические conformance/audit документы не переписываются только потому, что проект развился после даты их снимка; они остаются историческими артефактами своего состояния.
 
 ## 8. Следующее изменение
 
-**Slice F — Platform Instance Assembly: `IMPLEMENTED`** (Issue #74; PR открыт;
-ожидается owner approval и merge).
+Следующим самостоятельным этапом является завершение capability scope Deployment & Operations по ADR-0017 через отдельные approved work items, а также закрытие архитектурного GAP F-3B по ADR-0018. Любое дальнейшее расширение identity/runtime semantics требует сохранения границ ADR-0019/0020 и отдельного review.
 
-Следующим самостоятельным этапом является **deployment/provisioning/rollout-
-исполнение поверх собранного Platform Instance**, но только после отдельного
-утверждённого work item и после завершения governance-процесса Slice F.
-
-До начала следующего этапа необходимо сохранить границу:
+Текущая цепочка:
 
 ```text
 ADR-0015 ratified
         ↓
-Slice A — Component Registry (IMPLEMENTED, PR #63)
+Slice A — Component Registry (IMPLEMENTED)
         ↓
-Slice B — Component Catalog (IMPLEMENTED, Issue #64, PR #65)
+Slice B — Component Catalog (IMPLEMENTED)
         ↓
-Slice C — Platform Manifest (IMPLEMENTED, Issue #66, PR #67)
+Slice C — Platform Manifest (IMPLEMENTED)
         ↓
-Slice D — Golden Bundles (IMPLEMENTED, Issue #71, PR #72, merge d199f7a)
+Slice D — Golden Bundles (IMPLEMENTED)
         ↓
-Slice E — Composer (IMPLEMENTED, Issue #73, merge 319ab4b)
+Slice E — Composer (IMPLEMENTED)
         ↓
-Slice F — Platform Instance Assembly (IMPLEMENTED in this PR; awaiting owner approval/merge)
+Slice F — Platform Instance Assembly (IMPLEMENTED, PR #75 merged)
         ↓
-approved implementation work item for the next stage
+ADR-0016/0017 — Deployment & Operations scope
         ↓
-deployment/provisioning/rollout-исполнение поверх собранного Platform Instance
+first vertical D&O deployment operation (IMPLEMENTED)
         ↓
-verification / independent review
+ADR-0018 — executable artifact identity / F-3B GAP remains separately governed
         ↓
-owner approval
-        ↓
-merge
+ADR-0019/0020 — Running Platform identity correspondence and identity surface
 ```
 
 ## 9. Итог
@@ -277,9 +270,8 @@ Slice B — Component Catalog `IMPLEMENTED`;
 Slice C — Platform Manifest `IMPLEMENTED`;
 Slice D — Golden Bundles `IMPLEMENTED`;
 Slice E — Composer `IMPLEMENTED`;
-Slice F — Platform Instance Assembly `IMPLEMENTED in this PR; pending merge`;
-deployment/provisioning/rollout-исполнение `NOT YET IMPLEMENTED`.
+Slice F — Platform Instance Assembly `IMPLEMENTED`; first Deployment & Operations vertical slice `IMPLEMENTED`; full ADR-0017 capability scope remains incremental; F-3B `GAP` per ADR-0018.
 
 **Factory Gate #1: PASSED.**
 
-Документационный baseline отражает переход от foundation/standalone состояния к активированному Level 2. Slice A–E зафиксированы как `IMPLEMENTED` после merge; Slice F — Platform Instance Assembly отражён как реализованный в текущем PR и ожидающий merge; deployment/provisioning/rollout-исполнение явно помечено как `NOT YET IMPLEMENTED`.
+Документационный baseline отражает актуальное состояние `main` на `59072356`: Level 2 активирован, Slice A–F реализованы, первый вертикальный срез Deployment & Operations реализован, а дальнейшее расширение D&O и закрытие F-3B остаются отдельными управляемыми этапами.
