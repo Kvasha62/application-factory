@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 
 import pytest
 
@@ -20,6 +21,7 @@ from running_platform.identity_sources import (
     ActualMembership,
 )
 from running_platform.owner_state import (
+    FileRunningPlatformOwnerStateReader,
     OwnerStateSnapshotSource,
     OwnerStateSource,
     RunningPlatformOwnerState,
@@ -143,3 +145,81 @@ def test_complete_owner_state_reaches_existing_provider() -> None:
 
     assert evidence.value.platform_id == "example-platform"
     assert evidence.value.components[0].value.component_id == "authorization"
+
+
+def _surface_document(token: object) -> dict[str, object]:
+    return {
+        "platform_id": "example-platform",
+        "membership_established": True,
+        "components": [
+            {
+                "component_id": "authorization",
+                "component_version": "0.1.0",
+                "artifact_identity": {
+                    "artifact_type": "none",
+                    "digest": None,
+                    "pinned": False,
+                    "canonical_form": None,
+                },
+            }
+        ],
+        "manifest": {
+            "manifest_id": "example-manifest",
+            "manifest_version": "1.0.0",
+            "manifest_digest": "sha256:" + "1" * 64,
+        },
+        "manifest_state": "published",
+        "configuration": {
+            "state": "PRESENT",
+            "value": {"identity": {"platform_id": "example-platform"}},
+        },
+        "golden_bundle": {"state": "ABSENT"},
+        "golden_bundle_inventory_established": True,
+        "extensions": {"state": "ABSENT"},
+        "branding": {"state": "ABSENT"},
+        "provenance": "MEASURED",
+        "correlation_token": token,
+        "freshness_current": True,
+    }
+
+
+def test_file_reader_accepts_independent_actual_identity_surface(tmp_path) -> None:
+    path = tmp_path / "running_platform_identity.json"
+    path.write_text(
+        json.dumps(_surface_document("evaluation-1")),
+        encoding="utf-8",
+    )
+
+    observed = FileRunningPlatformOwnerStateReader(path).read(BINDING)
+
+    assert observed.platform_id == "example-platform"
+    assert observed.membership.components[0].component_id == "authorization"
+    assert observed.correlation_token == "evaluation-1"
+
+
+def test_file_reader_rejects_expected_identity_contamination(tmp_path) -> None:
+    document = _surface_document("evaluation-1")
+    document["instance_digest"] = "sha256:" + "a" * 64
+    path = tmp_path / "running_platform_identity.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ActualIdentityUnavailable, match="expected identity"):
+        FileRunningPlatformOwnerStateReader(path).read(BINDING)
+
+
+def test_file_reader_rejects_foreign_correlation(tmp_path) -> None:
+    path = tmp_path / "running_platform_identity.json"
+    path.write_text(
+        json.dumps(_surface_document("different-evaluation")),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ActualIdentityUnavailable, match="stale or foreign"):
+        FileRunningPlatformOwnerStateReader(path).read(BINDING)
+
+
+def test_file_reader_rejects_missing_surface(tmp_path) -> None:
+    path = tmp_path / "missing.json"
+
+    with pytest.raises(ActualIdentityUnavailable, match="unavailable"):
+        FileRunningPlatformOwnerStateReader(path).read(BINDING)
