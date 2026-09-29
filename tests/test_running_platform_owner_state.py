@@ -138,6 +138,39 @@ def test_snapshot_source_contains_no_expected_identity() -> None:
     assert not hasattr(snapshot, "expected_instance")
 
 
+def test_snapshot_source_observes_owner_state_once_per_evaluation() -> None:
+    first = state()
+    replacement = state(
+        correlation_token="evaluation-2",
+        membership=ActualMembership(True, (component("booking"),)),
+    )
+
+    class SwappingReader:
+        calls = 0
+
+        def read(self, binding: PlatformIdentityBinding) -> RunningPlatformOwnerState:
+            assert binding is BINDING
+            self.calls += 1
+            return first if self.calls == 1 else replacement
+
+    reader = SwappingReader()
+    snapshot = OwnerStateSnapshotSource(reader).observe(BINDING)
+
+    assert reader.calls == 1
+    assert snapshot.correlation_token == "evaluation-1"
+    assert snapshot.components == (component(),)
+
+
+def test_file_reader_rejects_expected_instance_contamination(tmp_path) -> None:
+    document = _surface_document("evaluation-1")
+    document["expected_instance"] = {"instance_digest": "sha256:" + "a" * 64}
+    path = tmp_path / "running_platform_identity.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ActualIdentityUnavailable, match="expected identity"):
+        FileRunningPlatformOwnerStateReader(path).read(BINDING)
+
+
 def test_complete_owner_state_reaches_existing_provider() -> None:
     evidence = OwnerSuppliedPlatformIdentityProvider(
         OwnerStateSnapshotSource(Reader(state()))
