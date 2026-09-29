@@ -759,7 +759,9 @@ class TestIdentityAcceptanceGate:
         environment = environment_for(tmp_path / "runtime")
         request = request_for(instance, manifest, environment)
 
-        with pytest.raises(IdentityVerificationFailed, match="identity evidence is unavailable"):
+        with pytest.raises(
+            IdentityVerificationFailed, match="identity evidence is unavailable"
+        ):
             _deployment_operations.deploy(
                 request,
                 identity_provider=UnavailableProvider(),
@@ -818,7 +820,7 @@ class TestIdentityAcceptanceGate:
     def test_identity_verified_precedes_realized_at_acceptance_seam(
         self, tmp_path, instance, manifest, monkeypatch
     ):
-        calls = []
+        calls: list[tuple[str, object]] = []
 
         def observe_identity(_provider, _expected, *, binding_token):
             calls.append(("identity", binding_token))
