@@ -83,6 +83,9 @@ from deployment_operations.platform_identity import (
     PlatformIdentityProvider,
     establish_identity_correspondence,
 )
+from deployment_operations.platform_identity_source import (
+    OwnerSuppliedPlatformIdentityProvider,
+)
 from deployment_operations.provisioning import provision
 from deployment_operations.runtime import (
     OP_PROBE,
@@ -113,6 +116,10 @@ from deployment_operations.verification import (
     InstanceVerification,
     verify_input_unchanged,
     verify_instance,
+)
+from running_platform.owner_state import (
+    FileRunningPlatformOwnerStateReader,
+    OwnerStateSnapshotSource,
 )
 
 Clock = Callable[[], str]
@@ -728,6 +735,14 @@ def deploy(
     # -- deploying ---------------------------------------------------------
     recorder.stage("deploying", STAGE_IN_PROGRESS)
     paths = tuple(source_paths) if source_paths is not None else default_source_paths()
+    if identity_provider is None:
+        identity_provider = OwnerSuppliedPlatformIdentityProvider(
+            OwnerStateSnapshotSource(
+                FileRunningPlatformOwnerStateReader(
+                    environment.runtime_root / "running_platform_identity.json"
+                )
+            )
+        )
     adapter: RuntimeAdapter = runtime or LocalProcessRuntime(source_paths=paths)
     elements = build_elements(
         environment, provisioned, verification, source_paths=paths
