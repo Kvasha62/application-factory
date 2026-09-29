@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
+import deployment_operations as _deployment_operations
 from _deployment_helpers import (
     COMPONENT_ID,
     COMPONENT_VERSION,
@@ -73,7 +74,6 @@ from _deployment_helpers import (
     tampered_instance,
 )
 
-import deployment_operations as _deployment_operations
 from deployment_operations import (
     DEPLOYABLE_INSTANCE_STATES,
     LIFECYCLE_FAILED,
