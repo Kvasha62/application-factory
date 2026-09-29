@@ -849,6 +849,114 @@ class TestIdentityAcceptanceGate:
         assert names.index("identity_verified") < names.index("deployment_realized")
 
 
+
+class TestIdentityAcceptanceGate:
+    """Running Platform identity is mandatory before the realized claim."""
+
+    def test_unavailable_identity_provider_fails_closed_after_ready(
+        self, tmp_path, instance, manifest,
+    ):
+        from deployment_operations.platform_identity import ActualIdentityUnavailable
+
+        class UnavailableProvider:
+            def observe_identity(self, binding):
+                raise ActualIdentityUnavailable("owner identity surface disappeared")
+
+        environment = environment_for(tmp_path / "runtime")
+        request = request_for(instance, manifest, environment)
+
+        with pytest.raises(
+            IdentityVerificationFailed,
+            match="identity evidence is unavailable",
+        ):
+            _deployment_operations.deploy(
+                request,
+                identity_provider=UnavailableProvider(),
+            )
+
+        record = read_state(environment, instance)
+        events = read_events(environment, instance)
+        assert record.stage("ready").status == "completed"
+        assert record.identity_verified is False
+        assert record.lifecycle == LIFECYCLE_FAILED
+        assert record.running is False
+        assert record.ready is False
+        assert record.deployed is False
+        assert record.failure is not None
+        assert record.failure.stage == "ready"
+        assert any(entry["event"] == "ready_reached" for entry in events)
+        assert not any(entry["event"] == "identity_verified" for entry in events)
+        assert not any(entry["event"] == "deployment_realized" for entry in events)
+        assert events[-1]["event"] == "deployment_failed"
+
+    def test_provider_exception_fails_closed_after_ready(
+        self, tmp_path, instance, manifest,
+    ):
+        class BrokenProvider:
+            def observe_identity(self, binding):
+                raise RuntimeError("owner identity source crashed")
+
+        environment = environment_for(tmp_path / "runtime")
+        request = request_for(instance, manifest, environment)
+
+        with pytest.raises(
+            IdentityVerificationFailed,
+            match="identity provider failed closed",
+        ):
+            _deployment_operations.deploy(
+                request,
+                identity_provider=BrokenProvider(),
+            )
+
+        record = read_state(environment, instance)
+        events = read_events(environment, instance)
+        assert record.stage("ready").status == "completed"
+        assert record.identity_verified is False
+        assert record.lifecycle == LIFECYCLE_FAILED
+        assert record.running is False
+        assert record.ready is False
+        assert record.deployed is False
+        assert record.failure is not None
+        assert record.failure.stage == "ready"
+        assert any(
+            "owner identity source crashed" in error
+            for error in record.failure.errors
+        )
+        assert not any(entry["event"] == "deployment_realized" for entry in events)
+
+    def test_identity_verified_precedes_realized_at_acceptance_seam(
+        self, tmp_path, instance, manifest, monkeypatch,
+    ):
+        calls: list[tuple[str, object]] = []
+
+        def observe_identity(_provider, _expected, *, binding_token):
+            calls.append(("identity", binding_token))
+
+        monkeypatch.setattr(
+            _deployment_operations,
+            "_verify_running_platform_identity",
+            observe_identity,
+        )
+
+        environment = environment_for(tmp_path / "runtime")
+        request = request_for(instance, manifest, environment)
+
+        with _deployment_operations.deploy(
+            request,
+            identity_provider=object(),
+        ) as realized:
+            assert realized.record.identity_verified is True
+            assert realized.record.deployed is True
+
+        events = read_events(environment, instance)
+        names = [entry["event"] for entry in events]
+        assert calls and calls[0][0] == "identity"
+        assert names.index("ready_reached") < names.index("identity_verified")
+        assert names.index("identity_verified") < names.index("deployment_realized")
+
+
+
+
 # ---------------------------------------------------------------------------
 # AC6 — provisioning (and its fail-closed behaviour)
 # ---------------------------------------------------------------------------
