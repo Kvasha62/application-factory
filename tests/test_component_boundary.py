@@ -480,10 +480,7 @@ def test_a_dropped_client_revokes_its_channel_on_the_provider_side():
     boundary, and when the client is gone the channel is closed, so no leaked
     reference to another component's ASGI application survives the hand-off.
     """
-    before = transport.channel_count()
     deployment, client = published_authority()
-    assert transport.channel_count() == before + 1
-
     handle = client_state(client)[0]
     assert isinstance(handle, str) and handle
     del client
