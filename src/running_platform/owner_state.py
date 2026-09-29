@@ -66,7 +66,9 @@ class FileRunningPlatformOwnerStateReader:
                 "running platform identity surface is unavailable"
             ) from error
         if not isinstance(document, dict):
-            raise ActualIdentityUnavailable("running platform identity surface is invalid")
+            raise ActualIdentityUnavailable(
+                "running platform identity surface is invalid"
+            )
         if "instance_digest" in document or "expected_instance" in document:
             raise ActualIdentityUnavailable(
                 "running platform identity surface contains expected identity"
@@ -76,19 +78,25 @@ class FileRunningPlatformOwnerStateReader:
                 "running platform identity surface has stale or foreign correlation"
             )
         if document.get("freshness_current") is not True:
-            raise ActualIdentityUnavailable("running platform identity surface is stale")
+            raise ActualIdentityUnavailable(
+                "running platform identity surface is stale"
+            )
         provenance = document.get("provenance")
         if provenance not in (
             EvidenceProvenance.MEASURED,
             EvidenceProvenance.TRANSITIVE,
             EvidenceProvenance.ATTESTED,
         ):
-            raise ActualIdentityUnavailable("running platform identity surface has invalid provenance")
+            raise ActualIdentityUnavailable(
+                "running platform identity surface has invalid provenance"
+            )
 
         def field(name: str) -> IdentityField:
             value = document.get(name)
             if not isinstance(value, dict):
-                raise ActualIdentityUnavailable(f"actual {name} evidence is unavailable")
+                raise ActualIdentityUnavailable(
+                    f"actual {name} evidence is unavailable"
+                )
             state = value.get("state")
             if state == PresenceState.PRESENT:
                 return IdentityField.present(value.get("value"))
@@ -98,18 +106,24 @@ class FileRunningPlatformOwnerStateReader:
 
         raw_components = document.get("components")
         if not isinstance(raw_components, list):
-            raise ActualIdentityUnavailable("actual component membership is unavailable")
+            raise ActualIdentityUnavailable(
+                "actual component membership is unavailable"
+            )
         components: list[ActualComponentIdentity] = []
         for item in raw_components:
             if not isinstance(item, dict):
-                raise ActualIdentityUnavailable("actual component membership is malformed")
+                raise ActualIdentityUnavailable(
+                    "actual component membership is malformed"
+                )
             component_id = item.get("component_id")
             version = item.get("component_version")
             artifact = item.get("artifact_identity")
             if not isinstance(component_id, str) or not component_id:
                 raise ActualIdentityUnavailable("actual component_id is unavailable")
             if not isinstance(version, str) or not version:
-                raise ActualIdentityUnavailable("actual component_version is unavailable")
+                raise ActualIdentityUnavailable(
+                    "actual component_version is unavailable"
+                )
             if artifact is not None and not isinstance(artifact, dict):
                 raise ActualIdentityUnavailable("actual artifact identity is malformed")
             components.append(ActualComponentIdentity(component_id, version, artifact))
