@@ -274,4 +274,4 @@ Slice F — Platform Instance Assembly `IMPLEMENTED`; first Deployment & Operati
 
 **Factory Gate #1: PASSED.**
 
-Документационный baseline отражает актуальное состояние `main` на `59072356`: Level 2 активирован, Slice A–F реализованы, первый вертикальный срез Deployment & Operations реализован, а дальнейшее расширение D&O и закрытие F-3B остаются отдельными управляемыми этапами.
+Документационный baseline отражает актуальное состояние `main` на `847105a`: Level 2 активирован, Slice A–F реализованы, первый вертикальный срез Deployment & Operations реализован, а дальнейшее расширение D&O и закрытие F-3B остаются отдельными управляемыми этапами.
