@@ -873,11 +873,19 @@ def deploy(
                 IdentityVerificationFailed(identity_errors),
             )
         if identity_provider is not None:
-            _verify_running_platform_identity(
-                identity_provider,
-                request.instance_document,
-                binding_token=deployment_id,
-            )
+            try:
+                _verify_running_platform_identity(
+                    identity_provider,
+                    request.instance_document,
+                    binding_token=deployment_id,
+                )
+            except IdentityVerificationFailed as error:
+                recorder.fail(
+                    "ready",
+                    "identity/version/digest verification failed",
+                    error.errors,
+                    error,
+                )
         recorder.identity_verified()
 
         # -- realized / deployed -------------------------------------------
