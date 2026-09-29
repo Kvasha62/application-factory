@@ -73,6 +73,7 @@ from _deployment_helpers import (
     tampered_instance,
 )
 
+import deployment_operations as _deployment_operations
 from deployment_operations import (
     DEPLOYABLE_INSTANCE_STATES,
     LIFECYCLE_FAILED,
@@ -101,7 +102,6 @@ from deployment_operations import (
     RuntimeProcessError,
     SecretLeakRefused,
     StartupFailed,
-    deploy as _deploy,
     derive_deployment_id,
     load_record,
     runtime_worker,
@@ -164,7 +164,7 @@ class _CanonicalTestIdentitySource:
 def deploy(request: DeploymentRequest, **kwargs: object):
     """Keep legacy architecture tests explicit about their owner-side source."""
     provider = OwnerSuppliedPlatformIdentityProvider(_CanonicalTestIdentitySource(request))
-    return _deploy(request, identity_provider=provider, **kwargs)
+    return _deployment_operations.deploy(request, identity_provider=provider, **kwargs)
 
 # ---------------------------------------------------------------------------
 # Test doubles of the runtime boundary
