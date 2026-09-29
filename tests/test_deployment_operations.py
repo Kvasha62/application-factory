@@ -109,7 +109,6 @@ from deployment_operations import (
     verify_input_unchanged,
     verify_instance,
 )
-from deployment_operations.runtime import OP_PROBE, OP_START
 from deployment_operations.platform_identity import (
     ActualComponentIdentity,
     IdentityField,
@@ -119,6 +118,7 @@ from deployment_operations.platform_identity_source import (
     ActualPlatformSnapshot,
     OwnerSuppliedPlatformIdentityProvider,
 )
+from deployment_operations.runtime import OP_PROBE, OP_START
 from platform_instance import Instance, discover_root
 from platform_manifest import compute_manifest_digest, validate_document
 
