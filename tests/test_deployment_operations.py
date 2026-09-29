@@ -849,8 +849,6 @@ class TestIdentityAcceptanceGate:
         assert names.index("identity_verified") < names.index("deployment_realized")
 
 
-
-
 # ---------------------------------------------------------------------------
 # AC6 — provisioning (and its fail-closed behaviour)
 # ---------------------------------------------------------------------------
