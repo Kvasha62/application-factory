@@ -87,10 +87,6 @@ from deployment_operations.provisioning import provision
 from deployment_operations.platform_identity_source import (
     OwnerSuppliedPlatformIdentityProvider,
 )
-from running_platform.owner_state import (
-    FileRunningPlatformOwnerStateReader,
-    OwnerStateSnapshotSource,
-)
 from deployment_operations.runtime import (
     OP_PROBE,
     OP_START,
@@ -120,6 +116,10 @@ from deployment_operations.verification import (
     InstanceVerification,
     verify_input_unchanged,
     verify_instance,
+)
+from running_platform.owner_state import (
+    FileRunningPlatformOwnerStateReader,
+    OwnerStateSnapshotSource,
 )
 
 Clock = Callable[[], str]
