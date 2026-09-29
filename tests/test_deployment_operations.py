@@ -620,8 +620,9 @@ class TestIdentityAcceptanceGate:
 
         provider = OwnerSuppliedPlatformIdentityProvider(UnavailableSource())
         request = self.request(tmp_path, instance, manifest)
-        with pytest.raises(IdentityVerificationFailed, match="unavailable"):
+        with pytest.raises(IdentityVerificationFailed) as failure:
             _deployment_operations.deploy(request, identity_provider=provider)
+        assert any("unavailable" in error for error in failure.value.errors)
         record = read_state(request.environment, instance)
         events = read_events(request.environment, instance)
         assert record.lifecycle == LIFECYCLE_FAILED
@@ -642,8 +643,9 @@ class TestIdentityAcceptanceGate:
                 raise RuntimeError("provider exploded")
 
         request = self.request(tmp_path, instance, manifest)
-        with pytest.raises(IdentityVerificationFailed, match="provider failed closed"):
+        with pytest.raises(IdentityVerificationFailed) as failure:
             _deployment_operations.deploy(request, identity_provider=FailingProvider())
+        assert any("provider failed closed" in error for error in failure.value.errors)
         record = read_state(request.environment, instance)
         assert record.failure is not None
         assert record.failure.stage == "ready"
