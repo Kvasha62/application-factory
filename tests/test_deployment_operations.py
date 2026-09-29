@@ -101,7 +101,7 @@ from deployment_operations import (
     RuntimeProcessError,
     SecretLeakRefused,
     StartupFailed,
-    deploy,
+    deploy as _deploy,
     derive_deployment_id,
     load_record,
     runtime_worker,
@@ -110,8 +110,61 @@ from deployment_operations import (
     verify_instance,
 )
 from deployment_operations.runtime import OP_PROBE, OP_START
+from deployment_operations.platform_identity import (
+    ActualComponentIdentity,
+    IdentityField,
+    PlatformIdentityBinding,
+)
+from deployment_operations.platform_identity_source import (
+    ActualPlatformSnapshot,
+    OwnerSuppliedPlatformIdentityProvider,
+)
 from platform_instance import Instance, discover_root
 from platform_manifest import compute_manifest_digest, validate_document
+
+
+
+class _CanonicalTestIdentitySource:
+    def __init__(self, request: DeploymentRequest) -> None:
+        self.request = request
+
+    def observe(self, binding: PlatformIdentityBinding) -> ActualPlatformSnapshot:
+        components = []
+        for component in self.request.manifest_document.get("components", []):
+            artifact = component.get("artifact")
+            components.append(
+                ActualComponentIdentity(
+                    component["component_id"],
+                    component["component_version"],
+                    artifact if isinstance(artifact, Mapping) else None,
+                )
+            )
+        configuration = self.request.instance_document.get("configuration")
+        return ActualPlatformSnapshot(
+            platform_id=self.request.instance_document["platform_id"],
+            manifest=self.request.manifest_document,
+            manifest_state=self.request.manifest_document["lifecycle"]["state"],
+            components=tuple(components),
+            membership_established=True,
+            configuration=(
+                IdentityField.present(configuration)
+                if configuration is not None
+                else IdentityField.absent()
+            ),
+            golden_bundle=IdentityField.absent(),
+            golden_bundle_inventory_established=True,
+            extensions=IdentityField.absent(),
+            branding=IdentityField.absent(),
+            provenance="MEASURED",
+            correlation_token=binding.token,
+            freshness_current=True,
+        )
+
+
+def deploy(request: DeploymentRequest, **kwargs: object):
+    """Keep legacy architecture tests explicit about their owner-side source."""
+    provider = OwnerSuppliedPlatformIdentityProvider(_CanonicalTestIdentitySource(request))
+    return _deploy(request, identity_provider=provider, **kwargs)
 
 # ---------------------------------------------------------------------------
 # Test doubles of the runtime boundary
