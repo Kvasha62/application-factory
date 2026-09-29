@@ -83,10 +83,10 @@ from deployment_operations.platform_identity import (
     PlatformIdentityProvider,
     establish_identity_correspondence,
 )
-from deployment_operations.provisioning import provision
 from deployment_operations.platform_identity_source import (
     OwnerSuppliedPlatformIdentityProvider,
 )
+from deployment_operations.provisioning import provision
 from deployment_operations.runtime import (
     OP_PROBE,
     OP_START,
