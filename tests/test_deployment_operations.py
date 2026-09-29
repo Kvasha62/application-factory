@@ -298,7 +298,7 @@ class TestExactInstanceIdentity:
             InstanceReference.from_document({"platform_id": PLATFORM_ID})
 
     def test_reference_must_name_the_supplied_instance(
-        self, tmp_path, instance, manifest
+        self, tmp_path, instance, manifest,
     ):
         other = InstanceReference(
             instance_digest="sha256:" + "0" * 64, platform_id=PLATFORM_ID
@@ -760,7 +760,8 @@ class TestIdentityAcceptanceGate:
         request = request_for(instance, manifest, environment)
 
         with pytest.raises(
-            IdentityVerificationFailed, match="identity evidence is unavailable"
+            IdentityVerificationFailed,
+            match="identity evidence is unavailable",
         ):
             _deployment_operations.deploy(
                 request,
@@ -818,7 +819,7 @@ class TestIdentityAcceptanceGate:
         assert not any(entry["event"] == "deployment_realized" for entry in events)
 
     def test_identity_verified_precedes_realized_at_acceptance_seam(
-        self, tmp_path, instance, manifest, monkeypatch
+        self, tmp_path, instance, manifest, monkeypatch,
     ):
         calls: list[tuple[str, object]] = []
 
