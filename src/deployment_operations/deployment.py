@@ -121,10 +121,6 @@ from deployment_operations.verification import (
     verify_input_unchanged,
     verify_instance,
 )
-from running_platform.owner_state import (
-    FileRunningPlatformOwnerStateReader,
-    OwnerStateSnapshotSource,
-)
 
 Clock = Callable[[], str]
 _MISSING_DIGEST = "the deployment request does not pin a concrete instance digest"
