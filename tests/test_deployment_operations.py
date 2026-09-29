@@ -101,6 +101,7 @@ from deployment_operations import (
     RuntimeProcessError,
     SecretLeakRefused,
     StartupFailed,
+    deploy as _deploy,
     derive_deployment_id,
     load_record,
     runtime_worker,
@@ -108,7 +109,6 @@ from deployment_operations import (
     verify_input_unchanged,
     verify_instance,
 )
-from deployment_operations import deploy as _deploy
 from deployment_operations.platform_identity import (
     ActualComponentIdentity,
     IdentityField,
