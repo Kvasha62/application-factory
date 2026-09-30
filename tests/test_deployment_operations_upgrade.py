@@ -129,7 +129,9 @@ def test_upgrade_rejects_replacement_digest_drift(tmp_path: Path, monkeypatch):
 def test_failed_replacement_leaves_old_deployed(tmp_path: Path, monkeypatch):
     current = _current(tmp_path)
     replacement = _request(tmp_path)
-    request = UpgradeRequest(current, replacement, derive_upgrade_id(current, replacement))
+    request = UpgradeRequest(
+        current, replacement, derive_upgrade_id(current, replacement)
+    )
 
     def fail(*args, **kwargs):
         raise RuntimeError("replacement refused")
