@@ -11,6 +11,12 @@ Nothing here is retried silently, repaired or worked around: a failure is a
 fail-closed state, never a reason to alter composition, versions, artifacts or
 ownership (ADR-0016 §7, §20). These errors are the vocabulary of that failure;
 deployment state and the operational event journal are its record.
+
+Reconciliation failures follow the same rule without adding a stage to the
+initial path above: :class:`ReconciliationEvidenceUnavailable` and
+:class:`ReconciliationDriftDetected` carry ``stage = "reconciliation"``, and
+neither of them is ever a reason to deploy, upgrade, roll back or restart
+anything (ADR-0016 §18, §20).
 """
 
 from __future__ import annotations
@@ -121,6 +127,50 @@ class IdentityVerificationFailed(DeploymentOperationsError):
         super().__init__(message, errors=errors, stage=stage)
 
 
+class ReconciliationEvidenceUnavailable(DeploymentOperationsError):
+    """Actual Running Platform state could not be independently established.
+
+    ADR-0016 §18–§20: a divergence is only ever *proven* from independent actual
+    evidence. Missing, malformed, unverifiable, invalid or stale evidence is
+    therefore an operational failure — never health, and never a reason to fall
+    back to the desired state as if it were the actual one. ``expected`` is not
+    evidence, and this error exists so that it can never be read as one.
+    """
+
+    def __init__(self, errors: Sequence[str]) -> None:
+        message = (
+            "the actual Running Platform state could not be established; "
+            "reconciliation is fail-closed"
+        )
+        super().__init__(message, errors=errors, stage="reconciliation")
+
+
+class ReconciliationDriftDetected(DeploymentOperationsError):
+    """The observed Running Platform does not correspond to the desired instance.
+
+    A proven divergence between immutable desired state and independently
+    observed actual state (ADR-0016 §18–§19). It is recorded in deployment state
+    and published as an operational failure signal, and it is never repaired,
+    replaced or silently corrected by reconciliation itself (ADR-0016 §20;
+    ADR-0017 §11, §39).
+    """
+
+    def __init__(
+        self,
+        errors: Sequence[str],
+        *,
+        instance_digest: str | None = None,
+        actual_instance_digest: str | None = None,
+    ) -> None:
+        message = (
+            "the observed Running Platform does not correspond to the desired "
+            "Platform Instance"
+        )
+        super().__init__(message, errors=errors, stage="reconciliation")
+        self.instance_digest = instance_digest
+        self.actual_instance_digest = actual_instance_digest
+
+
 class DeploymentStateError(DeploymentOperationsError):
     """Deployment state could not be read, written or trusted (§9).
 
@@ -169,6 +219,8 @@ __all__ = [
     "InvalidDeploymentStateTransition",
     "MigrationOrchestrationFailed",
     "ProvisioningFailed",
+    "ReconciliationDriftDetected",
+    "ReconciliationEvidenceUnavailable",
     "SecretLeakRefused",
     "StartupFailed",
 ]

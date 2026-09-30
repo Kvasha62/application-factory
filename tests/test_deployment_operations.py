@@ -1747,6 +1747,10 @@ class TestOwnershipBoundary:
                 "migrations",
                 "operational_actions",
                 "platform_instance",
+                # Reconciliation results are part of deployment state
+                # (ADR-0016 §9) and are still operational metadata: the exact
+                # identity/version/digest compared, never business data.
+                "reconciliation",
                 "stages",
                 "updated_at",
             }
