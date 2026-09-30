@@ -6,7 +6,10 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from deployment_operations.deployment import Deployment, DeploymentRequest, deploy
-from deployment_operations.errors import (\n    DeploymentInputRejected,\n    InvalidDeploymentStateTransition,\n)
+from deployment_operations.errors import (
+    DeploymentInputRejected,
+    InvalidDeploymentStateTransition,
+)
 from deployment_operations.events import (
     EVENT_OLD_INSTANCE_SUPERSEDED,
     EVENT_NEW_IDENTITY_VERIFIED,
