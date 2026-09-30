@@ -439,7 +439,9 @@ class DeploymentRecord:
             raise InvalidDeploymentStateTransition(message, errors=missing)
         return replace(self, lifecycle=LIFECYCLE_REALIZED, updated_at=at)
 
-    def mark_superseded(self, *, at: str, detail: Mapping[str, Any] | None = None) -> DeploymentRecord:
+    def mark_superseded(
+        self, *, at: str, detail: Mapping[str, Any] | None = None
+    ) -> DeploymentRecord:
         """Mark this realized deployment as superseded by an accepted upgrade."""
         if not self.deployed:
             raise InvalidDeploymentStateTransition(
