@@ -146,9 +146,9 @@ def upgrade(
         superseded = old.mark_superseded(
             at=utc_now(),
             detail={
-            "upgrade_id": upgrade_id,
-            "replacement_deployment_id": candidate.record.deployment_id,
-            "replacement_instance_digest": candidate.record.instance_digest,
+                "upgrade_id": upgrade_id,
+                "replacement_deployment_id": candidate.record.deployment_id,
+                "replacement_instance_digest": candidate.record.instance_digest,
             },
         )
         old_store.write(superseded)
