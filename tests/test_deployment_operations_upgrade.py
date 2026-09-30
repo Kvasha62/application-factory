@@ -69,9 +69,7 @@ def test_upgrade_rejects_non_deployed_current_platform(tmp_path: Path):
 
 def test_upgrade_rejects_same_instance(tmp_path: Path):
     current = _current(tmp_path)
-    request = UpgradeRequest(
-        current, _request(tmp_path, "a" * 64), "upgrade-1"
-    )
+    request = UpgradeRequest(current, _request(tmp_path, "a" * 64), "upgrade-1")
 
     with pytest.raises(DeploymentInputRejected):
         upgrade(request)
@@ -98,9 +96,7 @@ def test_success_supersedes_old_only_after_new_deployed(tmp_path: Path, monkeypa
     request = UpgradeRequest(current, _request(tmp_path), "upgrade-1")
     new_record = _record(tmp_path, instance="c" * 64)
     candidate = SimpleNamespace(record=new_record, deployed=True)
-    monkeypatch.setattr(
-        upgrade_module, "deploy", lambda *args, **kwargs: candidate
-    )
+    monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
 
     result = upgrade(request)
 
