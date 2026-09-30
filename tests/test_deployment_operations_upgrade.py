@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import deployment_operations.upgrade as upgrade_module
+upgrade_module = __import__("deployment_operations.upgrade", fromlist=["*"])
 from deployment_operations.errors import (
     DeploymentInputRejected,
     InvalidDeploymentStateTransition,
@@ -31,6 +31,7 @@ def _record(tmp_path: Path, *, instance: str = "a" * 64) -> DeploymentRecord:
     )
     record = record.mark_ready(at="2026-09-30T00:01:00Z")
     record = record.mark_identity_verified(at="2026-09-30T00:02:00Z")
+    record = record.mark_running(at="2026-09-30T00:02:30Z", running=True)
     return record.mark_realized(at="2026-09-30T00:03:00Z")
 
 
