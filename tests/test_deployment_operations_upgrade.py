@@ -18,9 +18,11 @@ from deployment_operations.state import (
 from deployment_operations.upgrade import UpgradeRequest, derive_upgrade_id, upgrade
 
 
-def _record(tmp_path: Path, *, instance: str = "a" * 64) -> DeploymentRecord:
+def _record(
+    tmp_path: Path, *, instance: str = "a" * 64, deployment_id: str = "old-deployment"
+) -> DeploymentRecord:
     record = DeploymentRecord.initial(
-        deployment_id="old-deployment",
+        deployment_id=deployment_id,
         environment_id="env",
         attempt=1,
         platform_id="platform",
@@ -211,7 +213,10 @@ def test_success_records_correlated_upgrade_events(tmp_path: Path, monkeypatch):
         current, replacement, derive_upgrade_id(current, replacement)
     )
     candidate = SimpleNamespace(
-        record=_record(tmp_path, instance="c" * 64), deployed=True
+        record=_record(
+            tmp_path, instance="c" * 64, deployment_id="new-deployment"
+        ),
+        deployed=True,
     )
     monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
 
@@ -221,8 +226,9 @@ def test_success_records_correlated_upgrade_events(tmp_path: Path, monkeypatch):
         EventJournal.path_for(tmp_path, current.record.deployment_id)
     )
     old_events = journal.events()
-    superseded = old_events[-1]
-    assert superseded.event == "old_instance_superseded"
+    superseded = next(
+        event for event in old_events if event.event == "old_instance_superseded"
+    )
     assert superseded.detail["upgrade_id"] == request.upgrade_id
     assert superseded.detail["replacement_instance_digest"] == "c" * 64
 
