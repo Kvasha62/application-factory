@@ -183,7 +183,7 @@ def reconcile(
         request,
         desired=_desired_identity(record),
     )
-    recorded = _record(deployment, request, observation)
+    recorded = _record_observation(deployment, request, observation)
 
     if recorded.outcome == RECONCILIATION_DRIFT:
         raise ReconciliationDriftDetected(
@@ -467,7 +467,7 @@ def _actual_digest(observation: ReconciliationRecord) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _record(
+def _record_observation(
     deployment: Deployment,
     request: ReconciliationRequest,
     observation: ReconciliationRecord,
