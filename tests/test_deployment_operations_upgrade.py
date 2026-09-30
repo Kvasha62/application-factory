@@ -9,6 +9,7 @@ upgrade_module = importlib.import_module("deployment_operations.upgrade")
 from deployment_operations.deployment import Deployment
 from deployment_operations.errors import (
     DeploymentInputRejected,
+    DeploymentStateError,
     InvalidDeploymentStateTransition,
 )
 from deployment_operations.events import EventJournal
@@ -963,3 +964,91 @@ def test_candidate_cleanup_stop_failure_withdraws_candidate_readiness_and_preser
         action.name == "readiness_withdrawn"
         for action in persisted_candidate.operational_actions
     )
+
+
+@pytest.mark.parametrize("candidate_has_store", [True, False])
+def test_candidate_cleanup_state_write_failure_is_recorded_and_removes_false_deployed_claim(
+    tmp_path: Path, monkeypatch, candidate_has_store: bool
+):
+    current_record = _record(
+        tmp_path, instance="a" * 64, deployment_id="old-deployment"
+    )
+    current = _real_deployment(tmp_path, current_record)
+    replacement = _request(tmp_path, "c" * 64)
+    request = UpgradeRequest(
+        current, replacement, derive_upgrade_id(current, replacement)
+    )
+    cleanup_calls: list[str] = []
+
+    class CandidateRuntime:
+        def stop(self, handle: str):
+            cleanup_calls.append(handle)
+            return {"status": "stopped"}
+
+    candidate = _real_deployment(
+        tmp_path,
+        _record(tmp_path, instance="c" * 64, deployment_id="new-deployment"),
+        runtime=CandidateRuntime(),
+        handles=("replacement-runtime-handle",),
+    )
+    if not candidate_has_store:
+        candidate._store = None
+
+    monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
+    monkeypatch.setattr(
+        current,
+        "stop",
+        lambda: (_ for _ in ()).throw(RuntimeError("old runtime refused to stop")),
+    )
+
+    original_write = DeploymentStateStore.write
+    cleanup_write_attempts: list[DeploymentRecord] = []
+
+    def fail_candidate_cleanup_write(store, record, *, secrets=()):
+        if store.path == candidate.state_path and not record.deployed:
+            cleanup_write_attempts.append(record)
+            raise OSError("injected candidate cleanup state write failure")
+        return original_write(store, record, secrets=secrets)
+
+    monkeypatch.setattr(DeploymentStateStore, "write", fail_candidate_cleanup_write)
+
+    with pytest.raises(RuntimeError, match="old runtime refused to stop") as exc_info:
+        upgrade(request)
+
+    assert len(cleanup_write_attempts) == 1
+    assert cleanup_calls == ["replacement-runtime-handle"]
+    assert candidate.deployed is False
+    assert candidate.record.deployed is False
+    assert candidate.record.running is False
+    assert candidate.record.ready is False
+    assert not candidate.state_path.exists()
+    with pytest.raises(DeploymentStateError):
+        DeploymentStateStore(candidate.state_path).read()
+
+    notes = getattr(exc_info.value, "__notes__", ())
+    assert any(
+        "candidate cleanup state persistence failed" in note
+        and "injected candidate cleanup state write failure" in note
+        for note in notes
+    )
+
+    persisted_current = DeploymentStateStore(current.state_path).read()
+    assert persisted_current == current_record
+    assert persisted_current.deployed is True
+    assert current.deployed is True
+
+    old_events = current.events()
+    new_events = candidate.events()
+    assert [event.event for event in old_events] == [
+        "upgrade_requested",
+        "upgrade_failed",
+    ]
+    failed_event = old_events[-1]
+    assert failed_event.detail["candidate_cleanup_persistence_failed"] is True
+    assert failed_event.detail["candidate_cleanup_error_type"] == "OSError"
+    assert (
+        "injected candidate cleanup state write failure"
+        in failed_event.detail["candidate_cleanup_error"]
+    )
+    assert not any(event.event == "old_instance_superseded" for event in old_events)
+    assert not any(event.event == "upgrade_completed" for event in new_events)

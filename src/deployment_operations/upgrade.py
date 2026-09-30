@@ -142,12 +142,30 @@ def _stop_deployment_runtime(deployment: Any) -> None:
             runtime.stop(handle)
 
 
-def _cleanup_candidate(candidate: Any) -> None:
+def _cleanup_candidate(
+    candidate: Any,
+    *,
+    causal_error: BaseException | None = None,
+) -> Exception | None:
     stop_error: Exception | None = None
+    persistence_error: Exception | None = None
     try:
         _stop_deployment_runtime(candidate)
-    except Exception as error:  # noqa: BLE001 - preserve the causal upgrade error
-        stop_error = error
+    except Exception as error:  # noqa: BLE001 - classified below
+        record_after_stop = getattr(candidate, "record", None)
+        runtime_stopped = (
+            isinstance(record_after_stop, DeploymentRecord)
+            and not record_after_stop.running
+            and not record_after_stop.ready
+            and any(
+                action.name == "platform_stopped"
+                for action in record_after_stop.operational_actions
+            )
+        )
+        if runtime_stopped:
+            persistence_error = error
+        else:
+            stop_error = error
     record = getattr(candidate, "record", None)
     if isinstance(record, DeploymentRecord):
         if stop_error is None and (record.running or record.ready):
@@ -159,14 +177,55 @@ def _cleanup_candidate(candidate: Any) -> None:
                 reason="upgrade_aborted_candidate_stop_failed",
             )
             candidate.record = record
-        if getattr(candidate, "_store", None) is not None or hasattr(
+        has_state_target = getattr(candidate, "_store", None) is not None or hasattr(
             candidate, "state_path"
-        ):
-            try:
-                _write_state(candidate, candidate.record)
-            except Exception:  # noqa: BLE001, S110
-                pass
+        )
+        if has_state_target:
+            if persistence_error is None:
+                try:
+                    persisted_candidate = _read_persisted(candidate.state_path)
+                except Exception:  # noqa: BLE001
+                    persisted_candidate = None
+                if persisted_candidate != candidate.record:
+                    try:
+                        _write_state(candidate, candidate.record)
+                        persisted_candidate = _read_persisted(
+                            candidate.state_path,
+                            unavailable_message=(
+                                "the cleaned-up candidate deployment state "
+                                "could not be confirmed"
+                            ),
+                        )
+                        if (
+                            persisted_candidate != candidate.record
+                            or persisted_candidate.deployed
+                        ):
+                            raise InvalidDeploymentStateTransition(
+                                "the cleaned-up candidate deployment state "
+                                "still claims deployed"
+                            )
+                    except Exception as error:  # noqa: BLE001
+                        persistence_error = error
+            if persistence_error is not None:
+                state_path = getattr(candidate, "state_path", None)
+                if state_path is not None:
+                    try:
+                        Path(state_path).unlink(missing_ok=True)
+                    except OSError as unlink_error:
+                        persistence_error.add_note(
+                            "failed to remove stale candidate state file "
+                            f"{state_path}: {unlink_error}"
+                        )
     _sync_deployed_attr(candidate)
+    if persistence_error is not None:
+        if causal_error is not None:
+            causal_error.add_note(
+                "candidate cleanup state persistence failed: "
+                f"{persistence_error.__class__.__name__}: {persistence_error}"
+            )
+            return persistence_error
+        raise persistence_error
+    return None
 
 
 def upgrade(
@@ -339,7 +398,7 @@ def upgrade(
             },
         )
         return candidate
-    except Exception:
+    except Exception as error:
         if state_committed:
             # Runtime cutover and superseded state write have durably committed.
             # A post-commit completion-signal failure does not undo the upgrade,
@@ -368,18 +427,28 @@ def upgrade(
                 _write_state(current, recovery_record)
             except Exception:  # noqa: BLE001, S110 - preserve the causal upgrade error
                 pass
+        cleanup_persistence_error: Exception | None = None
         if candidate is not None:
-            _cleanup_candidate(candidate)
+            cleanup_persistence_error = _cleanup_candidate(
+                candidate, causal_error=error
+            )
+        failure_detail: dict[str, Any] = {
+            "old_instance_digest": old.instance_digest,
+            "new_instance_digest": new_ref.instance_digest,
+        }
+        if cleanup_persistence_error is not None:
+            failure_detail["candidate_cleanup_persistence_failed"] = True
+            failure_detail["candidate_cleanup_error_type"] = (
+                cleanup_persistence_error.__class__.__name__
+            )
+            failure_detail["candidate_cleanup_error"] = str(cleanup_persistence_error)
         try:
             _append_upgrade_event(
                 old_journal,
                 deployment=current,
                 event=EVENT_UPGRADE_FAILED,
                 upgrade_id=upgrade_id,
-                detail={
-                    "old_instance_digest": old.instance_digest,
-                    "new_instance_digest": new_ref.instance_digest,
-                },
+                detail=failure_detail,
                 record=old,
             )
         except Exception:  # noqa: BLE001, S110 - preserve the causal upgrade error
