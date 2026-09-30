@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 from deployment_operations.deployment import Deployment, DeploymentRequest, deploy
@@ -156,7 +156,7 @@ def upgrade(
 
         _append_upgrade_event(
             old_journal,
-            deployment=replace(current, record=superseded),
+            deployment=current,
             event=EVENT_OLD_INSTANCE_SUPERSEDED,
             upgrade_id=upgrade_id,
             detail={
