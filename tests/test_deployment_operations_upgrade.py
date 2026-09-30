@@ -4,8 +4,15 @@ from types import SimpleNamespace
 import pytest
 
 import deployment_operations.upgrade as upgrade_module
-from deployment_operations.errors import DeploymentInputRejected, InvalidDeploymentStateTransition
-from deployment_operations.state import DeploymentRecord, LIFECYCLE_SUPERSEDED, DeploymentStateStore
+from deployment_operations.errors import (
+    DeploymentInputRejected,
+    InvalidDeploymentStateTransition,
+)
+from deployment_operations.state import (
+    LIFECYCLE_SUPERSEDED,
+    DeploymentRecord,
+    DeploymentStateStore,
+)
 from deployment_operations.upgrade import UpgradeRequest, derive_upgrade_id, upgrade
 
 
@@ -99,4 +106,7 @@ def test_success_supersedes_old_only_after_new_deployed(tmp_path: Path, monkeypa
     persisted = DeploymentStateStore(current.state_path).read()
     assert persisted.lifecycle == LIFECYCLE_SUPERSEDED
     assert persisted.deployed is False
-    assert any(action.name == "platform_superseded" for action in persisted.operational_actions)
+    assert any(
+        action.name == "platform_superseded"
+        for action in persisted.operational_actions
+    )
