@@ -145,8 +145,6 @@ def test_failed_replacement_leaves_old_deployed(tmp_path: Path, monkeypatch):
     assert current.record.deployed is True
     assert current.record.lifecycle != LIFECYCLE_SUPERSEDED
 
-
-
 def test_upgrade_rejects_empty_replacement_digest(tmp_path: Path):
     current = _current(tmp_path)
     replacement = _request(tmp_path, "")
