@@ -141,6 +141,7 @@ from deployment_operations.state import (
     load_record,
     utc_now,
 )
+from deployment_operations.upgrade import UpgradeRequest, derive_upgrade_id, upgrade
 from deployment_operations.verification import (
     DEPLOYABLE_INSTANCE_STATES,
     ComponentBinding,
@@ -175,6 +176,7 @@ __all__ = [
     "DeploymentOperationsError",
     "DeploymentRecord",
     "DeploymentRequest",
+    "UpgradeRequest",
     "DeploymentStateError",
     "DeploymentStateStore",
     "EventJournal",
@@ -215,6 +217,8 @@ __all__ = [
     "compute_actual_digest",
     "default_source_paths",
     "deploy",
+    "derive_upgrade_id",
+    "upgrade",
     "derive_deployment_id",
     "establish_identity_correspondence",
     "evaluate_health",
