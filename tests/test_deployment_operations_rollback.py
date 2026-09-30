@@ -503,3 +503,88 @@ def test_final_state_write_failure_restores_stopped_state_without_success_claim(
     candidate_actions = [action.name for action in candidate.record.operational_actions]
     assert "rollback_completed" not in candidate_actions
     assert not any(event.event == "rollback_completed" for event in candidate.events())
+
+
+@pytest.mark.parametrize("failed_journal", ["candidate", "current"])
+def test_completion_event_failure_preserves_committed_success_without_failure_event(
+    tmp_path: Path, monkeypatch, failed_journal: str
+):
+    request = _request(tmp_path)
+    monkeypatch.setattr(rollback_module, "verify_instance", _verified_target)
+    deploy_calls = []
+    cleanup_calls = []
+    candidate_holder = {}
+
+    class CandidateRuntime:
+        def stop(self, handle):
+            cleanup_calls.append(handle)
+            return {"status": "stopped"}
+
+    def deploy_target(deployment_request, **_kwargs):
+        deploy_calls.append(1)
+        candidate = _candidate_for_request(tmp_path, deployment_request)
+        candidate._runtime = CandidateRuntime()
+        candidate._handles = ("candidate-handle",)
+        candidate_holder["candidate"] = candidate
+        return candidate
+
+    monkeypatch.setattr(rollback_module, "deploy", deploy_target)
+    original_append = EventJournal.append
+    failed_appends = []
+
+    def fail_selected_completion(journal, event, *, secrets=()):
+        if event.event == "rollback_completed":
+            candidate = candidate_holder["candidate"]
+            target_path = (
+                candidate.events_path
+                if failed_journal == "candidate"
+                else request.current.events_path
+            )
+            if journal.path == target_path:
+                failed_appends.append((journal.path, event.event))
+                raise OSError(f"injected {failed_journal} completion-event failure")
+        return original_append(journal, event, secrets=secrets)
+
+    monkeypatch.setattr(EventJournal, "append", fail_selected_completion)
+    with pytest.raises(
+        OSError, match=f"injected {failed_journal} completion-event failure"
+    ):
+        rollback(request)
+
+    candidate = candidate_holder["candidate"]
+    current_state = DeploymentStateStore(request.current.state_path).read()
+    candidate_state = DeploymentStateStore(candidate.state_path).read()
+    assert len(failed_appends) == 1
+    assert deploy_calls == [1]
+    assert cleanup_calls == []
+    assert candidate.deployed
+    assert current_state.lifecycle == LIFECYCLE_ROLLED_BACK
+    assert current_state.deployed is False
+    assert candidate_state.deployed is True
+    assert any(
+        action.name == "rollback_completed"
+        for action in current_state.operational_actions
+    )
+    assert any(
+        action.name == "rollback_completed"
+        for action in candidate_state.operational_actions
+    )
+    assert not any(
+        action.name == "rollback_failed" for action in current_state.operational_actions
+    )
+
+    current_events = request.current.events()
+    candidate_events = candidate.events()
+    assert not any(event.event == "rollback_failed" for event in current_events)
+    assert not any(event.event == "rollback_failed" for event in candidate_events)
+    assert any(event.event == "rollback_completed" for event in candidate_events) is (
+        failed_journal == "current"
+    )
+    assert not any(event.event == "rollback_completed" for event in current_events)
+
+    event_counts = (len(current_events), len(candidate_events))
+    with pytest.raises(InvalidDeploymentStateTransition):
+        rollback(request)
+    assert deploy_calls == [1]
+    assert cleanup_calls == []
+    assert (len(request.current.events()), len(candidate.events())) == event_counts

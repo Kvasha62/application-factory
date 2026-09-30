@@ -262,7 +262,7 @@ def rollback(
     stopped_record: DeploymentRecord | None = None
     candidate_precompletion_record: DeploymentRecord | None = None
     candidate_completion_attempted = False
-    rollback_finalized = False
+    state_committed = False
     try:
         deployment_request = _validate(request)
         operation = "target_realization"
@@ -398,7 +398,8 @@ def rollback(
         else:
             DeploymentStateStore(candidate.state_path).write(candidate_record)
         candidate.record = candidate_record
-        rollback_finalized = True
+        state_committed = True
+        operation = "candidate_completion_event"
         _event(
             candidate_journal,
             candidate,
@@ -408,6 +409,7 @@ def rollback(
             target_digest=target_digest,
             detail={"previous_deployment_id": current.record.deployment_id},
         )
+        operation = "current_completion_event"
         _event(
             current_journal,
             current,
@@ -419,51 +421,56 @@ def rollback(
         )
         return candidate
     except Exception as error:
-        if not rollback_finalized:
-            # Before stop succeeds, restore the original record. After a
-            # successful stop, retain its honest stopped conditions rather than
-            # resurrecting a stale deployed claim.
-            observed_record = current.record
-            stop_was_recorded = any(
-                action.name == "platform_stopped"
-                for action in observed_record.operational_actions
-            )
-            if stopped_record is not None:
-                recovery_record = stopped_record
-            elif (
-                stop_was_recorded
-                and not observed_record.running
-                and not observed_record.ready
-            ):
-                recovery_record = observed_record
+        if state_committed:
+            # Runtime transition and both authoritative state writes committed.
+            # A completion-signal failure is not a failed rollback: retain the
+            # deployed candidate and successful state, and surface the journal
+            # error without emitting a contradictory rollback_failed signal.
+            raise
+        # Before stop succeeds, restore the original record. After a
+        # successful stop, retain its honest stopped conditions rather than
+        # resurrecting a stale deployed claim.
+        observed_record = current.record
+        stop_was_recorded = any(
+            action.name == "platform_stopped"
+            for action in observed_record.operational_actions
+        )
+        if stopped_record is not None:
+            recovery_record = stopped_record
+        elif (
+            stop_was_recorded
+            and not observed_record.running
+            and not observed_record.ready
+        ):
+            recovery_record = observed_record
+        else:
+            recovery_record = original_current_record
+        current.record = recovery_record
+        try:
+            if current._store is not None:
+                current._store.write(recovery_record, secrets=current._secrets)
             else:
-                recovery_record = original_current_record
-            current.record = recovery_record
+                DeploymentStateStore(current.state_path).write(recovery_record)
+        except Exception:  # noqa: BLE001, S110 - preserve the causal rollback error
+            pass
+        if (
+            candidate is not None
+            and candidate_completion_attempted
+            and candidate_precompletion_record is not None
+        ):
+            candidate.record = candidate_precompletion_record
             try:
-                if current._store is not None:
-                    current._store.write(recovery_record, secrets=current._secrets)
+                if candidate._store is not None:
+                    candidate._store.write(
+                        candidate_precompletion_record,
+                        secrets=candidate._secrets,
+                    )
                 else:
-                    DeploymentStateStore(current.state_path).write(recovery_record)
-            except Exception:  # noqa: BLE001, S110 - preserve the causal rollback error
+                    DeploymentStateStore(candidate.state_path).write(
+                        candidate_precompletion_record
+                    )
+            except Exception:  # noqa: BLE001, S110 - best-effort restore
                 pass
-            if (
-                candidate is not None
-                and candidate_completion_attempted
-                and candidate_precompletion_record is not None
-            ):
-                candidate.record = candidate_precompletion_record
-                try:
-                    if candidate._store is not None:
-                        candidate._store.write(
-                            candidate_precompletion_record,
-                            secrets=candidate._secrets,
-                        )
-                    else:
-                        DeploymentStateStore(candidate.state_path).write(
-                            candidate_precompletion_record
-                        )
-                except Exception:  # noqa: BLE001, S110 - best-effort restore
-                    pass
         if candidate is not None and candidate.deployed:
             try:
                 candidate.stop()
