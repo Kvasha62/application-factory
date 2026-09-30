@@ -26,6 +26,15 @@ Three notions are kept apart, exactly as ADR-0017 §35 fixes them:
 
 ``rolled_back`` is recorded only by the explicit Rollback Slice; ``superseded``
 continues to record an accepted replacement in the Upgrade Slice.
+
+Reconciliation results are part of this record too (ADR-0016 §9, §18, §19):
+:class:`ReconciliationRecord` keeps the append-only history of independent
+observations of the Running Platform against the exact desired state this record
+pins. That history changes no lifecycle position and no operational condition —
+it is how a proven divergence is surfaced honestly (ADR-0016 §18) instead of
+being silently patched, and :attr:`DeploymentRecord.in_correspondence` says
+plainly that nothing conclusive has been observed yet rather than reporting
+unproven health.
 """
 
 from __future__ import annotations
@@ -70,6 +79,25 @@ LIFECYCLE_REALIZED = "realized"
 LIFECYCLE_FAILED = "failed"
 LIFECYCLE_SUPERSEDED = "superseded"
 LIFECYCLE_ROLLED_BACK = "rolled_back"
+
+#: Outcomes of one reconciliation observation (ADR-0016 §18–§19). These are the
+#: operational names of the existing identity-correspondence result — MATCH is
+#: ``in_correspondence``, MISMATCH is ``drift``, UNAVAILABLE is ``unverifiable``
+#: — and they introduce no second identity semantics: ``in_correspondence`` means
+#: the independently computed actual instance digest equals the pinned one,
+#: ``drift`` means it provably does not, and ``unverifiable`` means actual state
+#: could not be established and the observation is therefore fail-closed rather
+#: than healthy (ADR-0016 §20).
+RECONCILIATION_IN_CORRESPONDENCE = "in_correspondence"
+RECONCILIATION_DRIFT = "drift"
+RECONCILIATION_UNVERIFIABLE = "unverifiable"
+
+#: Every outcome a reconciliation record may carry.
+RECONCILIATION_OUTCOMES: tuple[str, ...] = (
+    RECONCILIATION_IN_CORRESPONDENCE,
+    RECONCILIATION_DRIFT,
+    RECONCILIATION_UNVERIFIABLE,
+)
 
 Clock = Callable[[], str]
 
@@ -222,6 +250,68 @@ class FailureRecord:
 
 
 @dataclass(frozen=True)
+class ReconciliationRecord:
+    """One independent observation of the Running Platform against desired state.
+
+    The record keeps what was compared, what was observed and what followed
+    (ADR-0016 §9, §18, §19) — never a repair:
+
+    * ``desired`` is the exact identity/version/digest state already fixed in the
+      deployment record, and ``actual`` is what independent observation
+      established (``None`` when it could not be established at all);
+    * ``differences`` names every identity/version/digest field that provably
+      diverged, so drift is attributable instead of being flattened into a
+      generic failure;
+    * ``evidence`` records the normative provenance of the actual evidence and
+      that its freshness was current; the opaque owner-side correlation token is
+      not copied here;
+    * ``errors`` carries the fail-closed reason of an ``unverifiable``
+      observation.
+
+    The entry is operational metadata: no secrets, no business or tenant data,
+    and nothing that rewrites what the deployment operation did.
+    """
+
+    reconciliation_id: str
+    sequence: int
+    outcome: str
+    occurred_at: str
+    desired: Mapping[str, Any] = field(default_factory=dict)
+    actual: Mapping[str, Any] | None = None
+    differences: tuple[str, ...] = ()
+    evidence: Mapping[str, Any] | None = None
+    errors: tuple[str, ...] = ()
+
+    @property
+    def in_correspondence(self) -> bool:
+        """True when the observed platform is the exact desired instance."""
+        return self.outcome == RECONCILIATION_IN_CORRESPONDENCE
+
+    @property
+    def drifted(self) -> bool:
+        """True when a divergence between desired and actual state was proven."""
+        return self.outcome == RECONCILIATION_DRIFT
+
+    @property
+    def unverifiable(self) -> bool:
+        """True when actual state could not be established (fail-closed)."""
+        return self.outcome == RECONCILIATION_UNVERIFIABLE
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "reconciliation_id": self.reconciliation_id,
+            "sequence": self.sequence,
+            "outcome": self.outcome,
+            "occurred_at": self.occurred_at,
+            "desired": dict(self.desired),
+            "actual": dict(self.actual) if self.actual is not None else None,
+            "differences": list(self.differences),
+            "evidence": dict(self.evidence) if self.evidence is not None else None,
+            "errors": list(self.errors),
+        }
+
+
+@dataclass(frozen=True)
 class DeploymentRecord:
     """Deployment state of exactly one deployment operation."""
 
@@ -243,6 +333,9 @@ class DeploymentRecord:
     migrations: tuple[MigrationRecord, ...] = ()
     operational_actions: tuple[OperationalAction, ...] = ()
     failure: FailureRecord | None = None
+    #: Append-only history of independent reconciliation observations (§9, §18).
+    #: Never a lifecycle position, never a repair: it says what was observed.
+    reconciliations: tuple[ReconciliationRecord, ...] = ()
     created_at: str = ""
     updated_at: str = ""
 
@@ -304,6 +397,41 @@ class DeploymentRecord:
             and self.identity_verified
             and self.failure is None
         )
+
+    @property
+    def last_reconciliation(self) -> ReconciliationRecord | None:
+        """The latest reconciliation observation, or ``None`` if never reconciled."""
+        return self.reconciliations[-1] if self.reconciliations else None
+
+    @property
+    def in_correspondence(self) -> bool | None:
+        """Whether the latest conclusive observation found correspondence.
+
+        ``True`` or ``False`` come only from a conclusive observation: identity
+        correspondence, or a proven divergence. ``None`` means no conclusive
+        observation exists — nothing has been reconciled, or every observation
+        was unverifiable. ``None`` is never health: missing or unverifiable
+        evidence is fail-closed (ADR-0016 §20), and a reader must not read it as
+        «no drift».
+        """
+        for observation in reversed(self.reconciliations):
+            if observation.outcome == RECONCILIATION_IN_CORRESPONDENCE:
+                return True
+            if observation.outcome == RECONCILIATION_DRIFT:
+                return False
+        return None
+
+    @property
+    def drifted(self) -> bool:
+        """True while a proven divergence is not disproved by a later observation.
+
+        This condition is *additional* to ``ready``, ``realized``,
+        ``identity_verified`` and the ``deployed`` claim, and it changes none of
+        them: it states what independent observation proved about the platform
+        now (ADR-0016 §18). ``deployed`` remains what the deployment operation
+        did and verified; ``drifted`` is what a later observation found.
+        """
+        return self.in_correspondence is False
 
     def stage(self, name: str) -> StageRecord:
         for entry in self.stages:
@@ -511,6 +639,45 @@ class DeploymentRecord:
             updated_at=at,
         )
 
+    def with_reconciliation(
+        self, observation: ReconciliationRecord, *, at: str
+    ) -> DeploymentRecord:
+        """Append one completed reconciliation observation (§9, §18, §19).
+
+        Reconciliation is observational. This transition records what an
+        independent observation found, and it changes no lifecycle position and
+        no operational condition: ``ready``, ``realized``, ``identity_verified``
+        and the ``deployed`` claim keep exactly the meaning they had. A proven
+        divergence becomes visible through :attr:`drifted` — it is a signal, not
+        a silent rewrite of what the deployment operation did, and not a repair.
+
+        A divergence is deliberately not written into ``failure`` either: the
+        deployment operation did not stop and did not fail, and rewriting its
+        failure record would misstate where and why an operation stopped
+        (ADR-0016 §20). The reconciliation history is where the observation
+        lives, and :attr:`drifted` is how it is read.
+        """
+        if observation.outcome not in RECONCILIATION_OUTCOMES:
+            message = (
+                f"reconciliation outcome {observation.outcome!r} is not one of "
+                f"{', '.join(RECONCILIATION_OUTCOMES)}"
+            )
+            raise DeploymentStateError(message)
+        sequenced = replace(
+            observation,
+            sequence=len(self.reconciliations) + 1,
+            desired=_plain_value(observation.desired),
+            actual=_plain_value(observation.actual),
+            differences=tuple(str(entry) for entry in observation.differences),
+            evidence=_plain_value(observation.evidence),
+            errors=tuple(str(entry) for entry in observation.errors),
+        )
+        return replace(
+            self,
+            reconciliations=(*self.reconciliations, sequenced),
+            updated_at=at,
+        )
+
     # -- serialization -----------------------------------------------------
     def document(self) -> dict[str, Any]:
         return {
@@ -538,6 +705,16 @@ class DeploymentRecord:
             "operational_actions": [
                 entry.document() for entry in self.operational_actions
             ],
+            "reconciliation": {
+                "observations": [entry.document() for entry in self.reconciliations],
+                "outcome": (
+                    self.last_reconciliation.outcome
+                    if self.last_reconciliation is not None
+                    else None
+                ),
+                "in_correspondence": self.in_correspondence,
+                "drifted": self.drifted,
+            },
             "failure": self.failure.document() if self.failure else None,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -614,6 +791,29 @@ class DeploymentStateStore:
         return record_from_document(document)
 
 
+def _string_tuple(value: Any) -> tuple[str, ...]:
+    """Read a JSON array of strings, ignoring any other shape."""
+    if not isinstance(value, list):
+        return ()
+    return tuple(str(item) for item in value)
+
+
+def _plain_value(value: Any) -> Any:
+    """Normalize a value to the shape one JSON round trip preserves.
+
+    A reconciliation record is persisted and read back, and deployment state is
+    compared with its persisted form before an operation acts on it, so the
+    in-memory shape must be exactly the shape a round trip yields: mappings stay
+    mappings, sequences are lists. A tuple where the reader produces a list
+    would make a freshly written record look tampered with.
+    """
+    if isinstance(value, Mapping):
+        return {key: _plain_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_value(item) for item in value]
+    return value
+
+
 def record_from_document(document: Mapping[str, Any]) -> DeploymentRecord:
     """Rebuild a deployment record from its persisted document."""
     platform = document.get("platform_instance")
@@ -625,6 +825,11 @@ def record_from_document(document: Mapping[str, Any]) -> DeploymentRecord:
     components = document.get("components")
     migrations = document.get("migrations")
     actions = document.get("operational_actions")
+    reconciliation = document.get("reconciliation")
+    block: Mapping[str, Any] = (
+        reconciliation if isinstance(reconciliation, Mapping) else {}
+    )
+    observations = block.get("observations")
 
     return DeploymentRecord(
         deployment_id=str(document.get("deployment_id", "")),
@@ -729,6 +934,37 @@ def record_from_document(document: Mapping[str, Any]) -> DeploymentRecord:
             if isinstance(actions, list)
             else ()
         ),
+        reconciliations=(
+            tuple(
+                ReconciliationRecord(
+                    reconciliation_id=str(item.get("reconciliation_id", "")),
+                    sequence=int(item.get("sequence", 0)),
+                    outcome=str(item.get("outcome", "")),
+                    occurred_at=str(item.get("occurred_at", "")),
+                    desired=(
+                        item.get("desired")
+                        if isinstance(item.get("desired"), Mapping)
+                        else {}
+                    ),
+                    actual=(
+                        item.get("actual")
+                        if isinstance(item.get("actual"), Mapping)
+                        else None
+                    ),
+                    differences=_string_tuple(item.get("differences")),
+                    evidence=(
+                        item.get("evidence")
+                        if isinstance(item.get("evidence"), Mapping)
+                        else None
+                    ),
+                    errors=_string_tuple(item.get("errors")),
+                )
+                for item in observations
+                if isinstance(item, Mapping)
+            )
+            if isinstance(observations, list)
+            else ()
+        ),
         failure=(
             FailureRecord(
                 stage=str(failure.get("stage", "")),
@@ -755,6 +991,10 @@ __all__ = [
     "LIFECYCLE_REALIZED",
     "LIFECYCLE_ROLLED_BACK",
     "LIFECYCLE_SUPERSEDED",
+    "RECONCILIATION_DRIFT",
+    "RECONCILIATION_IN_CORRESPONDENCE",
+    "RECONCILIATION_OUTCOMES",
+    "RECONCILIATION_UNVERIFIABLE",
     "STAGES",
     "STAGE_COMPLETED",
     "STAGE_FAILED",
@@ -766,6 +1006,7 @@ __all__ = [
     "FailureRecord",
     "MigrationRecord",
     "OperationalAction",
+    "ReconciliationRecord",
     "StageRecord",
     "derive_deployment_id",
     "load_record",

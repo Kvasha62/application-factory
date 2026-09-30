@@ -30,10 +30,11 @@ Two consequences of that path are deliberate and easy to get wrong:
   operation did and the verification it performed, and stops claiming a
   platform that is no longer running.
 
-Upgrade and rollback are separate explicit orchestration slices. What is
-deliberately absent here: implicit recovery, drift reconciliation, fleet
-management, autoscaling, scheduling and any general deployment platform
-(ADR-0017 §38–§39). Nothing in this package owns business
+Upgrade and rollback are separate explicit orchestration slices; reconciliation
+of actual state against the exact desired state is a separate observational one.
+What is deliberately absent here: implicit recovery, automatic remediation or
+drift repair, fleet management, autoscaling, scheduling and any general
+deployment platform (ADR-0017 §38–§39). Nothing in this package owns business
 data, opens a component database, creates an SCS or a new component, or turns
 the Factory into a deployment engine (ADR-0016 §6, §21, §22; LAW-03, LAW-04).
 
@@ -42,12 +43,15 @@ Public surface:
 * :func:`deploy` — realize one accepted Platform Instance in one environment;
 * :func:`rollback` — explicitly re-realize an exact previously verified instance;
 * :func:`upgrade` — realize a new accepted instance before superseding current;
+* :func:`reconcile` — observe the Running Platform and compare it with the exact
+  desired state, recording drift honestly and repairing nothing (ADR-0016 §18);
 * :class:`DeploymentRequest` / :class:`InstanceReference` — the deployment input;
 * :class:`Deployment` — the completed operation, its record and its platform;
 * :class:`DeploymentEnvironment` / :func:`load_environment` — the operational
   side: where an instance is realized here, and through which entrypoints;
 * :func:`verify_instance` — the exact identity/version/digest verification;
 * :class:`DeploymentRecord` / :class:`DeploymentStateStore` — deployment state;
+* :class:`ReconciliationRecord` — the append-only reconciliation history;
 * :class:`DeploymentEvent` / :class:`EventJournal` — the operational signals;
 * :class:`LocalProcessRuntime` — the replaceable runtime adapter of this slice.
 """
@@ -80,6 +84,8 @@ from deployment_operations.errors import (
     InvalidDeploymentStateTransition,
     MigrationOrchestrationFailed,
     ProvisioningFailed,
+    ReconciliationDriftDetected,
+    ReconciliationEvidenceUnavailable,
     SecretLeakRefused,
     StartupFailed,
 )
@@ -120,6 +126,12 @@ from deployment_operations.provisioning import (
     provision,
     resolve_artifact,
 )
+from deployment_operations.reconciliation import (
+    Reconciliation,
+    ReconciliationRequest,
+    derive_reconciliation_id,
+    reconcile,
+)
 from deployment_operations.rollback import (
     RollbackRequest,
     derive_rollback_id,
@@ -140,6 +152,10 @@ from deployment_operations.state import (
     LIFECYCLE_REALIZED,
     LIFECYCLE_ROLLED_BACK,
     LIFECYCLE_SUPERSEDED,
+    RECONCILIATION_DRIFT,
+    RECONCILIATION_IN_CORRESPONDENCE,
+    RECONCILIATION_OUTCOMES,
+    RECONCILIATION_UNVERIFIABLE,
     STAGES,
     ComponentRecord,
     DeploymentRecord,
@@ -147,6 +163,7 @@ from deployment_operations.state import (
     FailureRecord,
     MigrationRecord,
     OperationalAction,
+    ReconciliationRecord,
     derive_deployment_id,
     load_record,
     utc_now,
@@ -170,6 +187,10 @@ __all__ = [
     "LIFECYCLE_REALIZED",
     "LIFECYCLE_ROLLED_BACK",
     "LIFECYCLE_SUPERSEDED",
+    "RECONCILIATION_DRIFT",
+    "RECONCILIATION_IN_CORRESPONDENCE",
+    "RECONCILIATION_OUTCOMES",
+    "RECONCILIATION_UNVERIFIABLE",
     "STAGES",
     "ActualComponentIdentity",
     "ActualEvidence",
@@ -216,6 +237,11 @@ __all__ = [
     "PresenceState",
     "ProvisionedEnvironment",
     "ProvisioningFailed",
+    "Reconciliation",
+    "ReconciliationDriftDetected",
+    "ReconciliationEvidenceUnavailable",
+    "ReconciliationRecord",
+    "ReconciliationRequest",
     "RollbackRequest",
     "RunningPlatformIdentitySource",
     "RuntimeAdapter",
@@ -231,6 +257,7 @@ __all__ = [
     "default_source_paths",
     "deploy",
     "derive_deployment_id",
+    "derive_reconciliation_id",
     "derive_rollback_id",
     "derive_upgrade_id",
     "establish_identity_correspondence",
@@ -239,6 +266,7 @@ __all__ = [
     "load_record",
     "project_actual_identity",
     "provision",
+    "reconcile",
     "render_environment",
     "resolve_artifact",
     "rollback",

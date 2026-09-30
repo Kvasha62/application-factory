@@ -6,6 +6,12 @@ identity, the Manifest identity/version/digest and the instance digest are on
 every event, and every component-scoped event additionally carries the
 component, its version and its artifact identity (ADR-0016 §8, §19; AC15).
 
+Reconciliation results are signals of the same journal (ADR-0016 §19;
+ADR-0017 §15): one event per completed observation, carrying the pinned
+instance identity/version/digest, the observed actual digest when one was
+established, the outcome and the fields that provably diverged. A drift signal
+is never a repair signal — nothing here restarts, redeploys or substitutes.
+
 The journal is append-only JSON lines: one event per line, in the order the
 deployment path produced it, so a failure is diagnosable from the recorded
 sequence alone. Events are operational metadata — never business data, never
@@ -51,6 +57,9 @@ EVENT_ROLLBACK_TARGET_VERIFIED = "rollback_target_verified"
 EVENT_ROLLBACK_TARGET_REALIZED = "rollback_target_realized"
 EVENT_ROLLBACK_COMPLETED = "rollback_completed"
 EVENT_ROLLBACK_FAILED = "rollback_failed"
+EVENT_RECONCILIATION_IN_CORRESPONDENCE = "reconciliation_in_correspondence"
+EVENT_RECONCILIATION_DRIFT_DETECTED = "reconciliation_drift_detected"
+EVENT_RECONCILIATION_UNVERIFIABLE = "reconciliation_unverifiable"
 
 
 @dataclass(frozen=True)
@@ -216,6 +225,9 @@ __all__ = [
     "EVENT_OLD_INSTANCE_SUPERSEDED",
     "EVENT_PLATFORM_STOPPED",
     "EVENT_READY_REACHED",
+    "EVENT_RECONCILIATION_DRIFT_DETECTED",
+    "EVENT_RECONCILIATION_IN_CORRESPONDENCE",
+    "EVENT_RECONCILIATION_UNVERIFIABLE",
     "EVENT_ROLLBACK_COMPLETED",
     "EVENT_ROLLBACK_FAILED",
     "EVENT_ROLLBACK_REQUESTED",
