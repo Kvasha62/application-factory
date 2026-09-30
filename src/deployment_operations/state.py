@@ -23,8 +23,8 @@ Three notions are kept apart, exactly as ADR-0017 §35 fixes them:
 * **lifecycle position** — ``in_progress``, ``realized`` or ``failed``;
 * **the record** — this document, which is deployment state itself.
 
-``superseded`` and ``rolled_back`` belong to ADR-0016 §9 as well but are
-deferred to later slices (ADR-0017 §39); this slice never fabricates them.
+``rolled_back`` remains deferred to a later slice; ``superseded`` is introduced
+here as the terminal state of the accepted replacement in the Upgrade Slice.
 """
 
 from __future__ import annotations
@@ -726,6 +726,7 @@ __all__ = [
     "LIFECYCLE_FAILED",
     "LIFECYCLE_IN_PROGRESS",
     "LIFECYCLE_REALIZED",
+    "LIFECYCLE_SUPERSEDED",
     "STAGES",
     "STAGE_COMPLETED",
     "STAGE_FAILED",
