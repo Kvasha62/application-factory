@@ -15,11 +15,7 @@ from deployment_operations.state import (
     DeploymentRecord,
     DeploymentStateStore,
 )
-from deployment_operations.upgrade import (
-    UpgradeRequest,
-    derive_upgrade_id,
-    upgrade,
-)
+from deployment_operations.upgrade import UpgradeRequest, derive_upgrade_id, upgrade
 
 
 def _record(tmp_path: Path, *, instance: str = "a" * 64) -> DeploymentRecord:
