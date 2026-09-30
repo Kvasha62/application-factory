@@ -74,6 +74,7 @@ from deployment_operations import (
     PlatformIdentityBinding,
     ReconciliationDriftDetected,
     ReconciliationEvidenceUnavailable,
+    ReconciliationRecord,
     ReconciliationRequest,
     SecretLeakRefused,
     derive_reconciliation_id,
@@ -391,6 +392,64 @@ class TestExactDesiredTarget:
                 lambda: _record(identity_verified=False),
                 "verified identity",
             ),
+            (lambda: replace(_record(), manifest_id=""), "Manifest identity"),
+            (
+                lambda: replace(_record(), manifest_id="Not-A-Manifest"),
+                "Manifest identity",
+            ),
+            (lambda: replace(_record(), manifest_version=""), "Manifest version"),
+            (lambda: replace(_record(), manifest_version="1.0"), "Manifest version"),
+            (
+                lambda: replace(_record(), manifest_state=""),
+                "Manifest lifecycle state",
+            ),
+            (
+                lambda: replace(_record(), platform_id="latest"),
+                "floating selector",
+            ),
+            (
+                lambda: replace(
+                    _record(), components=_components(component_version="")
+                ),
+                "component version",
+            ),
+            (
+                lambda: replace(
+                    _record(), components=_components(component_version="9.9")
+                ),
+                "component version",
+            ),
+            (
+                lambda: replace(_record(), components=_components(component_id="")),
+                "concrete component identity",
+            ),
+            (
+                lambda: replace(_record(), components=_components(artifact_type="")),
+                "artifact identity is incomplete",
+            ),
+            (
+                lambda: replace(
+                    _record(),
+                    components=_components(artifact_type="source_package"),
+                ),
+                "sealed artifact digest",
+            ),
+            (
+                lambda: replace(
+                    _record(),
+                    components=_components(
+                        artifact_type="none", artifact_digest="sha256:" + "d" * 64
+                    ),
+                ),
+                "artifact_type none",
+            ),
+            (
+                lambda: replace(
+                    _record(),
+                    components=_components() + _components(),
+                ),
+                "lists this component twice",
+            ),
         ],
         ids=[
             "empty-digest",
@@ -399,6 +458,19 @@ class TestExactDesiredTarget:
             "absent-platform",
             "no-components",
             "unverified-identity",
+            "empty-manifest-id",
+            "malformed-manifest-id",
+            "empty-manifest-version",
+            "non-semver-manifest-version",
+            "absent-manifest-state",
+            "floating-platform-id",
+            "empty-component-version",
+            "non-semver-component-version",
+            "empty-component-id",
+            "incomplete-artifact",
+            "unsealed-artifact",
+            "artifact-where-none-expected",
+            "duplicate-component",
         ],
     )
     def test_an_inexact_subject_is_refused_before_any_observation(
@@ -1186,6 +1258,115 @@ class TestNoRemediation:
         assert [line["event"] for line in signals] == ["reconciliation_drift_detected"]
         assert signals[0]["detail"]["reconciliation_sequence"] == 2
         assert deployment.record.drifted is True
+
+
+class TestConcurrentAndUnconfirmedWrites:
+    """One observation, one authoritative record: nothing is overwritten."""
+
+    def test_an_observation_of_a_changed_record_is_refused_before_writing(
+        self, tmp_path: Path
+    ):
+        record = _record()
+        deployment = _deployment(tmp_path, record)
+        competing = record.with_reconciliation(
+            ReconciliationRecord(
+                reconciliation_id="recon:concurrent-writer",
+                sequence=0,
+                outcome=RECONCILIATION_IN_CORRESPONDENCE,
+                occurred_at=AT,
+                desired={"platform_id": "reconciliation-platform"},
+            ),
+            at=AT,
+        )
+
+        class _ConcurrentWriter(_OwnerSource):
+            def observe(self, binding: PlatformIdentityBinding) -> Any:
+                DeploymentStateStore(deployment.state_path).write(competing)
+                return _snapshot(correlation_token=binding.token)
+
+        with pytest.raises(InvalidDeploymentStateTransition) as failure:
+            reconcile(
+                _request(deployment),
+                identity_provider=_provider(
+                    _ConcurrentWriter(
+                        lambda binding: _snapshot(correlation_token=binding.token)
+                    )
+                ),
+            )
+        assert "changed while this reconciliation was observing" in str(failure.value)
+        persisted = DeploymentStateStore(deployment.state_path).read()
+        assert persisted == competing, (
+            "the concurrently recorded observation is the authoritative one and "
+            "must not be overwritten"
+        )
+        assert [entry.sequence for entry in persisted.reconciliations] == [1]
+        assert (
+            _journal_lines(deployment) == []
+        ), "no signal may be published for an observation that was refused"
+        assert deployment.record == record
+
+    def test_a_write_replaced_by_a_concurrent_writer_is_not_published(
+        self, tmp_path: Path, monkeypatch
+    ):
+        record = _record()
+        deployment = _deployment(tmp_path, record)
+        competing = record.with_reconciliation(
+            ReconciliationRecord(
+                reconciliation_id="recon:concurrent-writer",
+                sequence=0,
+                outcome=RECONCILIATION_IN_CORRESPONDENCE,
+                occurred_at=AT,
+                desired={"platform_id": "reconciliation-platform"},
+            ),
+            at=AT,
+        )
+        original = DeploymentStateStore.write
+
+        def racing_write(
+            store: DeploymentStateStore,
+            state: Any,
+            *,
+            secrets: Sequence[str] = (),
+        ) -> None:
+            original(store, state, secrets=secrets)
+            if state.reconciliations:
+                # A concurrent writer replaces this very write immediately.
+                original(store, competing, secrets=secrets)
+
+        monkeypatch.setattr(DeploymentStateStore, "write", racing_write)
+        with pytest.raises(DeploymentStateError):
+            reconcile(_request(deployment), identity_provider=_provider(_owner()))
+
+        assert DeploymentStateStore(deployment.state_path).read() == competing
+        assert deployment.record == record
+        assert _journal_lines(deployment) == []
+
+    def test_the_fallback_store_path_also_refuses_secret_material(self, tmp_path: Path):
+        secret = "correct-horse-battery-staple"
+        record = _record()
+        deployment = _deployment(tmp_path, record, secrets=(secret,))
+        deployment._store = None
+
+        with pytest.raises(SecretLeakRefused):
+            reconcile(
+                _request(deployment),
+                identity_provider=_provider(_owner(platform_id=secret)),
+            )
+        assert DeploymentStateStore(deployment.state_path).read() == record
+        assert _journal_lines(deployment) == []
+
+    def test_a_handle_without_a_journal_publishes_into_the_operation_journal(
+        self, tmp_path: Path
+    ):
+        deployment = _deployment(tmp_path, _record())
+        deployment._journal = None
+
+        result = reconcile(_request(deployment), identity_provider=_provider(_owner()))
+        assert result.in_correspondence is True
+        assert [event.event for event in deployment.events()] == [
+            "reconciliation_in_correspondence"
+        ]
+        assert len(_journal_lines(deployment)) == 1
 
 
 # ---------------------------------------------------------------------------

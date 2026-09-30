@@ -36,6 +36,12 @@ The operation is deliberately narrow:
   unavailable evidence, an invalid surface or stale evidence is recorded in
   authoritative deployment state and published as a correlated operational
   signal, and the operation then raises. Unproven health is never reported.
+* **one observation, one record.** An outcome is appended to the exact
+  authoritative record the observation was made against, and that write is
+  confirmed before any signal is published: a record that changed while the
+  observation was being made — a concurrent reconciliation, any other state
+  transition — is refused instead of overwritten, so the history stays
+  append-only and no observation number repeats.
 * **there is no remediation path.** Reconciliation observes and publishes only.
   It never deploys, upgrades, rolls back, restarts, stops, replaces or
   substitutes anything, never mutates a Manifest or an Instance, and never
@@ -46,13 +52,14 @@ The operation is deliberately narrow:
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
 from deployment_operations.deployment import Deployment
 from deployment_operations.errors import (
     DeploymentInputRejected,
+    DeploymentStateError,
     InvalidDeploymentStateTransition,
     ReconciliationDriftDetected,
     ReconciliationEvidenceUnavailable,
@@ -82,12 +89,21 @@ from deployment_operations.state import (
     RECONCILIATION_DRIFT,
     RECONCILIATION_IN_CORRESPONDENCE,
     RECONCILIATION_UNVERIFIABLE,
+    ComponentRecord,
     DeploymentRecord,
     DeploymentStateStore,
     ReconciliationRecord,
     utc_now,
 )
-from platform_manifest.validation import SHA256_PATTERN
+from platform_manifest.lifecycle import LIFECYCLE_STATES
+from platform_manifest.validation import (
+    ARTIFACT_TYPES,
+    COMPONENT_ID_PATTERN,
+    MANIFEST_ID_PATTERN,
+    SHA256_PATTERN,
+    is_floating_selector,
+    parse_semver,
+)
 from running_platform.owner_state import (
     FileRunningPlatformOwnerStateReader,
     OwnerStateSnapshotSource,
@@ -478,26 +494,89 @@ def _record_observation(
     publication can never leave a signal about an outcome that state does not
     hold, and a failed state write publishes nothing at all: the operation
     raises without recording a contradiction (ADR-0016 §9, §19, §20).
+
+    The write is a compare-and-swap against the record this observation was made
+    against, and the persisted result is confirmed before anything is published.
+    An observation is a fact about one observation of one authoritative record:
+    if that record changed while the observation was being made — a concurrent
+    reconciliation, any other state transition — the observation is refused
+    instead of overwriting the other outcome or repeating its number. Nothing
+    was then published, and the caller re-reads the authoritative record before
+    repeating the operation (which is side-effect free, §20).
     """
-    updated = deployment.record.with_reconciliation(
-        observation, at=observation.occurred_at
-    )
-    if deployment._store is not None:
-        deployment._store.write(updated, secrets=deployment._secrets)
-    else:
-        DeploymentStateStore(deployment.state_path).write(updated)
+    base = deployment.record
+    updated = base.with_reconciliation(observation, at=observation.occurred_at)
+    _refuse_if_superseded(deployment, base)
+    _write_state(deployment, updated)
+    _confirm_persisted(deployment, updated)
     deployment.record = updated
 
-    recorded = updated.reconciliations[-1]
     journal = _journal_for(deployment)
-    journal.append(_event(deployment, request, recorded), secrets=deployment._secrets)
-    return recorded
+    journal.append(
+        _event(deployment, request, updated.reconciliations[-1]),
+        secrets=deployment._secrets,
+    )
+    return updated.reconciliations[-1]
 
 
 def _journal_for(deployment: Deployment) -> EventJournal:
-    if deployment._journal is not None:
-        return deployment._journal
-    return EventJournal(deployment.events_path)
+    """The operation's journal, attached to the handle when it has none.
+
+    A handle created without a journal still publishes into the journal of its
+    deployment operation — and the handle must then report those signals, or
+    ``Deployment.events()`` would hide the outcome reconciliation published.
+    """
+    if deployment._journal is None:
+        deployment._journal = EventJournal(deployment.events_path)
+    return deployment._journal
+
+
+def _persisted_state(deployment: Deployment) -> DeploymentRecord:
+    """The persisted authoritative record, or a fail-closed error."""
+    try:
+        if deployment._store is not None:
+            return deployment._store.read()
+        return DeploymentStateStore(deployment.state_path).read()
+    except DeploymentStateError:
+        raise
+    except Exception as error:
+        raise DeploymentStateError(
+            "the persisted deployment state is unavailable: "
+            f"{error.__class__.__name__}"
+        ) from error
+
+
+def _write_state(deployment: Deployment, record: DeploymentRecord) -> None:
+    """Persist state through the operation's store, never without its secrets.
+
+    The secret-leak guard of the boundary applies to every write of this
+    capability (ADR-0016 §12), including a write made through a handle that
+    carries no store object of its own.
+    """
+    if deployment._store is not None:
+        deployment._store.write(record, secrets=deployment._secrets)
+    else:
+        DeploymentStateStore(deployment.state_path).write(
+            record, secrets=deployment._secrets
+        )
+
+
+def _refuse_if_superseded(deployment: Deployment, base: DeploymentRecord) -> None:
+    """Refuse to append to a record that is no longer the persisted one."""
+    if _persisted_state(deployment) != base:
+        raise InvalidDeploymentStateTransition(
+            "the authoritative deployment state changed while this reconciliation "
+            "was observing; the observation is refused and nothing was published"
+        )
+
+
+def _confirm_persisted(deployment: Deployment, expected: DeploymentRecord) -> None:
+    """Fail closed when this write did not become the persisted record."""
+    if _persisted_state(deployment) != expected:
+        raise DeploymentStateError(
+            "the reconciliation observation was not persisted as the authoritative "
+            "record; nothing was published"
+        )
 
 
 def _event(
@@ -546,7 +625,7 @@ def _event(
 def _check_persisted(deployment: Deployment) -> None:
     """Refuse to reconcile anything other than the persisted authoritative record."""
     try:
-        persisted = DeploymentStateStore(deployment.state_path).read()
+        persisted = _persisted_state(deployment)
     except Exception as error:
         raise InvalidDeploymentStateTransition(
             "the persisted deployment state is unavailable"
@@ -555,6 +634,67 @@ def _check_persisted(deployment: Deployment) -> None:
         raise InvalidDeploymentStateTransition(
             "the persisted deployment state changed or was tampered with"
         )
+
+
+def _component_errors(components: Sequence[ComponentRecord]) -> list[str]:
+    """Every pinned component must carry a complete, self-consistent identity.
+
+    The desired state of a reconciliation is exact or it is not a desired state:
+    a component entry whose identity, version or artifact identity is missing or
+    contradictory is refused before any observation, exactly as an inexact
+    instance digest is.
+    """
+    errors: list[str] = []
+    seen: set[str] = set()
+    for entry in components:
+        component_id = entry.component_id
+        if (
+            not isinstance(component_id, str)
+            or re.fullmatch(COMPONENT_ID_PATTERN, component_id) is None
+        ):
+            errors.append(
+                f"$.components[{component_id!r}]: a concrete component identity "
+                "is required"
+            )
+            continue
+        if component_id in seen:
+            errors.append(
+                f"$.components[{component_id}]: the record lists this component twice"
+            )
+        seen.add(component_id)
+        if parse_semver(entry.component_version) is None:
+            errors.append(
+                f"$.components[{component_id}].component_version: a concrete "
+                "component version is required"
+            )
+        errors.extend(_artifact_errors(component_id, entry))
+    return errors
+
+
+def _artifact_errors(component_id: str, entry: ComponentRecord) -> list[str]:
+    """The artifact identity of one component is sealed, or explicitly absent."""
+    errors: list[str] = []
+    artifact_type = entry.artifact_type
+    digest = entry.artifact_digest
+    if artifact_type == "none":
+        if digest is not None:
+            errors.append(
+                f"$.components[{component_id}].artifact: artifact_type none "
+                f"carries the digest {digest!r}"
+            )
+        return errors
+    if artifact_type not in ARTIFACT_TYPES:
+        errors.append(
+            f"$.components[{component_id}].artifact: the artifact identity is "
+            "incomplete"
+        )
+        return errors
+    if not isinstance(digest, str) or re.fullmatch(SHA256_PATTERN, digest) is None:
+        errors.append(
+            f"$.components[{component_id}].artifact: a sealed artifact digest is "
+            "required"
+        )
+    return errors
 
 
 def _validate(request: ReconciliationRequest) -> None:
@@ -595,17 +735,33 @@ def _validate(request: ReconciliationRequest) -> None:
     platform_id = record.platform_id
     if not isinstance(platform_id, str) or not platform_id.strip():
         errors.append("the record does not carry a concrete Platform Instance identity")
+    elif is_floating_selector(platform_id):
+        errors.append(
+            "$.platform_id: the record carries a floating selector, not a stable "
+            "Platform Instance identity"
+        )
+    manifest_id = record.manifest_id
+    if (
+        not isinstance(manifest_id, str)
+        or re.fullmatch(MANIFEST_ID_PATTERN, manifest_id) is None
+    ):
+        errors.append("the record does not carry a concrete Manifest identity")
+    if parse_semver(record.manifest_version) is None:
+        errors.append("the record does not carry a concrete Manifest version")
     manifest_digest = record.manifest_digest
     if (
         not isinstance(manifest_digest, str)
         or re.fullmatch(SHA256_PATTERN, manifest_digest) is None
     ):
         errors.append("the record does not pin a concrete Manifest digest")
+    if record.manifest_state not in LIFECYCLE_STATES:
+        errors.append("the record does not carry a Platform Manifest lifecycle state")
     if not record.components:
         errors.append(
             "the record carries no component identity/version/artifact digest; "
             "the desired state is not exact"
         )
+    errors.extend(_component_errors(record.components))
     if errors:
         raise DeploymentInputRejected(errors, stage="reconciliation")
 
