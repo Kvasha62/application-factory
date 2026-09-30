@@ -37,11 +37,18 @@ def derive_upgrade_id(current: Deployment, replacement: DeploymentRequest) -> st
     )
 
 
-def _append_upgrade_event(journal: EventJournal, *, deployment: Deployment, event: str, upgrade_id: str, detail: dict[str, Any]) -> None:
+def _append_upgrade_event(
+    journal: EventJournal,
+    *,
+    deployment: Deployment,
+    event: str,
+    upgrade_id: str,
+    detail: dict[str, Any],
+) -> None:
     record = deployment.record
     journal.append(
         DeploymentEvent(
-            sequence=0,
+            sequence=journal.next_sequence(),
             event=event,
             occurred_at=utc_now(),
             deployment_id=record.deployment_id,
@@ -57,7 +64,12 @@ def _append_upgrade_event(journal: EventJournal, *, deployment: Deployment, even
     )
 
 
-def upgrade(request: UpgradeRequest, *, runtime: Any = None, identity_provider: Any = None) -> Deployment:
+def upgrade(
+    request: UpgradeRequest,
+    *,
+    runtime: Any = None,
+    identity_provider: Any = None,
+) -> Deployment:
     """Deploy the replacement, accept its actual identity, then supersede the old one."""
     current = request.current
     replacement = request.replacement
@@ -66,15 +78,28 @@ def upgrade(request: UpgradeRequest, *, runtime: Any = None, identity_provider: 
     upgrade_id = request.upgrade_id
 
     if not current.deployed:
-        raise InvalidDeploymentStateTransition("upgrade requires the current deployment to be an honest deployed state")
+        raise InvalidDeploymentStateTransition(
+            "upgrade requires the current deployment to be an honest deployed state"
+        )
     if old.environment_id != replacement.environment.environment_id:
-        raise DeploymentInputRejected(["upgrade must keep the same deployment environment"])
+        raise DeploymentInputRejected(
+            ["upgrade must keep the same deployment environment"]
+        )
     if old.instance_digest == new_ref.instance_digest:
-        raise DeploymentInputRejected(["upgrade replacement must identify a different Platform Instance"])
+        raise DeploymentInputRejected(
+            ["upgrade replacement must identify a different Platform Instance"]
+        )
     if not new_ref.instance_digest.strip():
-        raise DeploymentInputRejected(["upgrade replacement requires a concrete instance digest"])
+        raise DeploymentInputRejected(
+            ["upgrade replacement requires a concrete instance digest"]
+        )
 
-    old_journal = EventJournal(EventJournal.path_for(replacement.environment.operations_dir, old.deployment_id))
+    old_journal = EventJournal(
+        EventJournal.path_for(
+            replacement.environment.operations_dir,
+            old.deployment_id,
+        )
+    )
     _append_upgrade_event(old_journal, deployment=current, event=EVENT_UPGRADE_REQUESTED, upgrade_id=upgrade_id, detail={
         "old_instance_digest": old.instance_digest, "new_instance_digest": new_ref.instance_digest
     })
