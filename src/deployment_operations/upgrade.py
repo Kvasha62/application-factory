@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from deployment_operations.deployment import Deployment, DeploymentRequest, deploy
@@ -19,7 +21,21 @@ from deployment_operations.events import (
     DeploymentEvent,
     EventJournal,
 )
-from deployment_operations.state import DeploymentStateStore, utc_now
+from deployment_operations.state import (
+    LIFECYCLE_REALIZED,
+    DeploymentRecord,
+    DeploymentStateStore,
+    utc_now,
+)
+
+_TRANSITION_GUARD = threading.Lock()
+_TRANSITION_LOCKS: dict[Path, threading.Lock] = {}
+
+
+def _transition_lock(state_path: Path) -> threading.Lock:
+    key = Path(state_path).resolve()
+    with _TRANSITION_GUARD:
+        return _TRANSITION_LOCKS.setdefault(key, threading.Lock())
 
 
 @dataclass(frozen=True)
@@ -40,6 +56,24 @@ def derive_upgrade_id(current: Deployment, replacement: DeploymentRequest) -> st
     )
 
 
+def _journal_for(
+    deployment: Any, operations_dir: Path, deployment_id: str
+) -> EventJournal:
+    journal = getattr(deployment, "_journal", None)
+    if journal is not None:
+        return journal
+    events_path = getattr(deployment, "events_path", None) or EventJournal.path_for(
+        operations_dir, deployment_id
+    )
+    created = EventJournal(events_path)
+    if hasattr(deployment, "_journal"):
+        try:
+            deployment._journal = created
+        except Exception:  # noqa: BLE001, S110
+            pass
+    return created
+
+
 def _append_upgrade_event(
     journal: EventJournal,
     *,
@@ -47,24 +81,92 @@ def _append_upgrade_event(
     event: str,
     upgrade_id: str,
     detail: dict[str, Any],
+    record: DeploymentRecord | None = None,
 ) -> None:
-    record = deployment.record
+    subject = record if record is not None else deployment.record
+    secrets = getattr(deployment, "_secrets", ()) or ()
     journal.append(
         DeploymentEvent(
             sequence=journal.next_sequence(),
             event=event,
             occurred_at=utc_now(),
-            deployment_id=record.deployment_id,
-            environment_id=record.environment_id,
-            platform_id=record.platform_id,
-            instance_digest=record.instance_digest,
-            manifest_id=record.manifest_id,
-            manifest_version=record.manifest_version,
-            manifest_digest=record.manifest_digest,
+            deployment_id=subject.deployment_id,
+            environment_id=subject.environment_id,
+            platform_id=subject.platform_id,
+            instance_digest=subject.instance_digest,
+            manifest_id=subject.manifest_id,
+            manifest_version=subject.manifest_version,
+            manifest_digest=subject.manifest_digest,
             stage="upgrade",
             detail={"upgrade_id": upgrade_id, **detail},
-        )
+        ),
+        secrets=secrets,
     )
+
+
+def _read_persisted(
+    state_path: Path,
+    *,
+    unavailable_message: str = "the persisted current deployment state is unavailable",
+) -> DeploymentRecord:
+    try:
+        return DeploymentStateStore(state_path).read()
+    except Exception as error:
+        raise InvalidDeploymentStateTransition(unavailable_message) from error
+
+
+def _write_state(deployment: Any, record: DeploymentRecord) -> None:
+    secrets = getattr(deployment, "_secrets", ()) or ()
+    store = getattr(deployment, "_store", None)
+    if store is not None:
+        store.write(record, secrets=secrets)
+    else:
+        DeploymentStateStore(deployment.state_path).write(record, secrets=secrets)
+
+
+def _sync_deployed_attr(deployment: Any) -> None:
+    if not isinstance(getattr(type(deployment), "deployed", None), property):
+        try:
+            deployment.deployed = bool(deployment.record.deployed)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+
+def _stop_deployment_runtime(deployment: Any) -> None:
+    if hasattr(deployment, "stop") and callable(deployment.stop):
+        deployment.stop()
+        return
+    runtime = getattr(deployment, "_runtime", None)
+    if runtime is not None:
+        for handle in getattr(deployment, "_handles", ()) or ():
+            runtime.stop(handle)
+
+
+def _cleanup_candidate(candidate: Any) -> None:
+    stop_error: Exception | None = None
+    try:
+        _stop_deployment_runtime(candidate)
+    except Exception as error:  # noqa: BLE001 - preserve the causal upgrade error
+        stop_error = error
+    record = getattr(candidate, "record", None)
+    if isinstance(record, DeploymentRecord):
+        if stop_error is None and (record.running or record.ready):
+            record = record.mark_stopped(at=utc_now())
+            candidate.record = record
+        elif stop_error is not None and record.ready:
+            record = record.withdraw_ready(
+                at=utc_now(),
+                reason="upgrade_aborted_candidate_stop_failed",
+            )
+            candidate.record = record
+        if getattr(candidate, "_store", None) is not None or hasattr(
+            candidate, "state_path"
+        ):
+            try:
+                _write_state(candidate, candidate.record)
+            except Exception:  # noqa: BLE001, S110
+                pass
+    _sync_deployed_attr(candidate)
 
 
 def upgrade(
@@ -80,16 +182,11 @@ def upgrade(
     new_ref = replacement.instance
     upgrade_id = request.upgrade_id
 
-    if not current.deployed:
+    if not current.deployed or not old.deployed:
         raise InvalidDeploymentStateTransition(
             "upgrade requires the current deployment to be an honest deployed state"
         )
-    try:
-        persisted = DeploymentStateStore(current.state_path).read()
-    except Exception as error:
-        raise InvalidDeploymentStateTransition(
-            "the persisted current deployment state is unavailable"
-        ) from error
+    persisted = _read_persisted(current.state_path)
     if persisted != old:
         raise InvalidDeploymentStateTransition(
             "the persisted current deployment state changed or was tampered with"
@@ -111,12 +208,8 @@ def upgrade(
             ["upgrade replacement requires a concrete instance digest"]
         )
 
-    old_journal = EventJournal(
-        EventJournal.path_for(
-            replacement.environment.operations_dir,
-            old.deployment_id,
-        )
-    )
+    operations_dir = replacement.environment.operations_dir
+    old_journal = _journal_for(current, operations_dir, old.deployment_id)
     _append_upgrade_event(
         old_journal,
         deployment=current,
@@ -126,15 +219,20 @@ def upgrade(
             "old_instance_digest": old.instance_digest,
             "new_instance_digest": new_ref.instance_digest,
         },
+        record=old,
     )
 
+    candidate: Deployment | None = None
+    stopped_record: DeploymentRecord | None = None
+    concurrent_state_conflict = False
+    state_committed = False
     try:
         candidate = deploy(
             replacement,
             runtime=runtime,
             identity_provider=identity_provider,
         )
-        if not candidate.deployed:
+        if not candidate.deployed or not getattr(candidate.record, "deployed", True):
             raise InvalidDeploymentStateTransition(
                 "replacement deployment completed without an honest deployed claim"
             )
@@ -143,11 +241,8 @@ def upgrade(
                 "replacement deployment realized a different Platform Instance"
             )
 
-        new_journal = EventJournal(
-            EventJournal.path_for(
-                replacement.environment.operations_dir,
-                candidate.record.deployment_id,
-            )
+        new_journal = _journal_for(
+            candidate, operations_dir, candidate.record.deployment_id
         )
         _append_upgrade_event(
             new_journal,
@@ -160,17 +255,67 @@ def upgrade(
             },
         )
 
-        old_store = DeploymentStateStore(current.state_path)
-        superseded = old.mark_superseded(
-            at=utc_now(),
-            detail={
-                "upgrade_id": upgrade_id,
-                "replacement_deployment_id": candidate.record.deployment_id,
-                "replacement_instance_digest": candidate.record.instance_digest,
-            },
-        )
-        old_store.write(superseded)
-        current.record = superseded
+        with _transition_lock(current.state_path):
+            if not current.deployed or current.record != old:
+                concurrent_state_conflict = True
+                raise InvalidDeploymentStateTransition(
+                    "the current deployment state changed during upgrade"
+                )
+            persisted_before_stop = _read_persisted(current.state_path)
+            if persisted_before_stop != old:
+                concurrent_state_conflict = True
+                raise InvalidDeploymentStateTransition(
+                    "the persisted current deployment state changed during upgrade"
+                )
+
+            # Keep the old deployment's lifecycle and deployed claim authoritative
+            # until its runtime elements have stopped successfully.
+            _stop_deployment_runtime(current)
+            persisted_after_stop = _read_persisted(current.state_path)
+            if persisted_after_stop != current.record and persisted_after_stop != old:
+                concurrent_state_conflict = True
+                raise InvalidDeploymentStateTransition(
+                    "the persisted current deployment state changed during upgrade"
+                )
+
+            stopped_record = (
+                current.record.mark_stopped(at=utc_now())
+                if current.record.running or current.record.ready
+                else current.record
+            )
+            at = utc_now()
+            superseded = old.mark_superseded(
+                at=at,
+                detail={
+                    "upgrade_id": upgrade_id,
+                    "replacement_deployment_id": candidate.record.deployment_id,
+                    "replacement_instance_digest": candidate.record.instance_digest,
+                },
+            )
+            superseded = replace(
+                stopped_record,
+                lifecycle=superseded.lifecycle,
+                updated_at=superseded.updated_at,
+                operational_actions=(
+                    *stopped_record.operational_actions,
+                    superseded.operational_actions[-1],
+                ),
+            )
+            _write_state(current, superseded)
+            persisted_after_write = _read_persisted(
+                current.state_path,
+                unavailable_message=(
+                    "the superseded current deployment state could not be confirmed"
+                ),
+            )
+            if persisted_after_write != superseded:
+                concurrent_state_conflict = True
+                raise InvalidDeploymentStateTransition(
+                    "the persisted current deployment state changed during upgrade"
+                )
+            current.record = superseded
+            _sync_deployed_attr(current)
+            state_committed = True
 
         _append_upgrade_event(
             old_journal,
@@ -181,9 +326,8 @@ def upgrade(
                 "replacement_deployment_id": candidate.record.deployment_id,
                 "replacement_instance_digest": candidate.record.instance_digest,
             },
+            record=superseded,
         )
-        if hasattr(current, "stop"):
-            current.stop()
         _append_upgrade_event(
             new_journal,
             deployment=candidate,
@@ -196,16 +340,50 @@ def upgrade(
         )
         return candidate
     except Exception:
-        _append_upgrade_event(
-            old_journal,
-            deployment=current,
-            event=EVENT_UPGRADE_FAILED,
-            upgrade_id=upgrade_id,
-            detail={
-                "old_instance_digest": old.instance_digest,
-                "new_instance_digest": new_ref.instance_digest,
-            },
-        )
+        if state_committed:
+            # Runtime cutover and superseded state write have durably committed.
+            # A post-commit completion-signal failure does not undo the upgrade,
+            # stop the replacement runtime, or emit a contradictory failure event.
+            raise
+        if not concurrent_state_conflict:
+            observed_record = current.record
+            stop_was_recorded = any(
+                action.name == "platform_stopped"
+                for action in observed_record.operational_actions
+            )
+            if stopped_record is not None:
+                recovery_record = stopped_record
+            elif (
+                stop_was_recorded
+                and observed_record.lifecycle == LIFECYCLE_REALIZED
+                and not observed_record.running
+                and not observed_record.ready
+            ):
+                recovery_record = observed_record
+            else:
+                recovery_record = old
+            current.record = recovery_record
+            _sync_deployed_attr(current)
+            try:
+                _write_state(current, recovery_record)
+            except Exception:  # noqa: BLE001, S110 - preserve the causal upgrade error
+                pass
+        if candidate is not None:
+            _cleanup_candidate(candidate)
+        try:
+            _append_upgrade_event(
+                old_journal,
+                deployment=current,
+                event=EVENT_UPGRADE_FAILED,
+                upgrade_id=upgrade_id,
+                detail={
+                    "old_instance_digest": old.instance_digest,
+                    "new_instance_digest": new_ref.instance_digest,
+                },
+                record=old,
+            )
+        except Exception:  # noqa: BLE001, S110 - preserve the causal upgrade error
+            pass
         raise
 
 
