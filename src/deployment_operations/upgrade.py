@@ -11,8 +11,8 @@ from deployment_operations.errors import (
     InvalidDeploymentStateTransition,
 )
 from deployment_operations.events import (
-    EVENT_OLD_INSTANCE_SUPERSEDED,
     EVENT_NEW_IDENTITY_VERIFIED,
+    EVENT_OLD_INSTANCE_SUPERSEDED,
     EVENT_UPGRADE_COMPLETED,
     EVENT_UPGRADE_FAILED,
     EVENT_UPGRADE_REQUESTED,
