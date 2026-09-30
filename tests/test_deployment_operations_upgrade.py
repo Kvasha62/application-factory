@@ -19,7 +19,10 @@ from deployment_operations.upgrade import UpgradeRequest, derive_upgrade_id, upg
 
 
 def _record(
-    tmp_path: Path, *, instance: str = "a" * 64, deployment_id: str = "old-deployment"
+    tmp_path: Path,
+    *,
+    instance: str = "a" * 64,
+    deployment_id: str = "old-deployment",
 ) -> DeploymentRecord:
     record = DeploymentRecord.initial(
         deployment_id=deployment_id,
