@@ -84,6 +84,20 @@ def upgrade(
         raise InvalidDeploymentStateTransition(
             "upgrade requires the current deployment to be an honest deployed state"
         )
+    try:
+        persisted = DeploymentStateStore(current.state_path).read()
+    except Exception as error:
+        raise InvalidDeploymentStateTransition(
+            "the persisted current deployment state is unavailable"
+        ) from error
+    if persisted != old:
+        raise InvalidDeploymentStateTransition(
+            "the persisted current deployment state changed or was tampered with"
+        )
+    if request.upgrade_id != derive_upgrade_id(current, replacement):
+        raise DeploymentInputRejected(
+            ["upgrade_id does not match the old/new deployment identities"]
+        )
     if old.environment_id != replacement.environment.environment_id:
         raise DeploymentInputRejected(
             ["upgrade must keep the same deployment environment"]
@@ -123,6 +137,10 @@ def upgrade(
         if not candidate.deployed:
             raise InvalidDeploymentStateTransition(
                 "replacement deployment completed without an honest deployed claim"
+            )
+        if candidate.record.instance_digest != new_ref.instance_digest:
+            raise InvalidDeploymentStateTransition(
+                "replacement deployment realized a different Platform Instance"
             )
 
         new_journal = EventJournal(
