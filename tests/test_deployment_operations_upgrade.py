@@ -216,9 +216,7 @@ def test_success_records_correlated_upgrade_events(tmp_path: Path, monkeypatch):
         current, replacement, derive_upgrade_id(current, replacement)
     )
     candidate = SimpleNamespace(
-        record=_record(
-            tmp_path, instance="c" * 64, deployment_id="new-deployment"
-        ),
+        record=_record(tmp_path, instance="c" * 64, deployment_id="new-deployment"),
         deployed=True,
     )
     monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
