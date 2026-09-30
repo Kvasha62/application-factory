@@ -50,7 +50,9 @@ def _request(tmp_path: Path, digest: str = "c" * 64):
     return replacement
 
 
-def test_derive_upgrade_id_is_correlated_to_old_and_new_identity(tmp_path: Path):
+def test_derive_upgrade_id_is_correlated_to_old_and_new_identity(
+    tmp_path: Path,
+):
     current = _current(tmp_path)
     replacement = _request(tmp_path)
     assert derive_upgrade_id(current, replacement) == (
@@ -93,12 +95,16 @@ def test_failed_replacement_leaves_old_deployed(tmp_path: Path, monkeypatch):
     assert current.record.lifecycle != LIFECYCLE_SUPERSEDED
 
 
-def test_success_supersedes_old_only_after_new_deployed(tmp_path: Path, monkeypatch):
+def test_success_supersedes_old_only_after_new_deployed(
+    tmp_path: Path, monkeypatch
+):
     current = _current(tmp_path)
     request = UpgradeRequest(current, _request(tmp_path), "upgrade-1")
     new_record = _record(tmp_path, instance="c" * 64)
     candidate = SimpleNamespace(record=new_record, deployed=True)
-    monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
+    monkeypatch.setattr(
+        upgrade_module, "deploy", lambda *args, **kwargs: candidate
+    )
 
     result = upgrade(request)
 
