@@ -41,6 +41,11 @@ EVENT_IDENTITY_VERIFIED = "identity_verified"
 EVENT_DEPLOYMENT_REALIZED = "deployment_realized"
 EVENT_DEPLOYMENT_FAILED = "deployment_failed"
 EVENT_PLATFORM_STOPPED = "platform_stopped"
+EVENT_UPGRADE_REQUESTED = "upgrade_requested"
+EVENT_NEW_IDENTITY_VERIFIED = "new_identity_verified"
+EVENT_OLD_INSTANCE_SUPERSEDED = "old_instance_superseded"
+EVENT_UPGRADE_COMPLETED = "upgrade_completed"
+EVENT_UPGRADE_FAILED = "upgrade_failed"
 
 
 @dataclass(frozen=True)
