@@ -14,7 +14,11 @@ from deployment_operations.state import (
     DeploymentRecord,
     DeploymentStateStore,
 )
-from deployment_operations.upgrade import UpgradeRequest, derive_upgrade_id, upgrade
+from deployment_operations.upgrade import (
+    UpgradeRequest,
+    derive_upgrade_id,
+    upgrade,
+)
 
 
 def _record(tmp_path: Path, *, instance: str = "a" * 64) -> DeploymentRecord:
@@ -83,14 +87,14 @@ def test_upgrade_rejects_same_instance(tmp_path: Path):
         upgrade(request)
 
 
-
-
 def test_upgrade_rejects_tampered_persisted_old_state(tmp_path: Path):
     current = _current(tmp_path)
     tampered = _record(tmp_path, instance="d" * 64)
     DeploymentStateStore(current.state_path).write(tampered)
     replacement = _request(tmp_path)
-    request = UpgradeRequest(current, replacement, derive_upgrade_id(current, replacement))
+    request = UpgradeRequest(
+        current, replacement, derive_upgrade_id(current, replacement)
+    )
 
     with pytest.raises(InvalidDeploymentStateTransition):
         upgrade(request)
