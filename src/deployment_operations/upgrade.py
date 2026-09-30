@@ -96,11 +96,14 @@ def upgrade(request: UpgradeRequest, *, runtime: Any = None, identity_provider: 
             "replacement_instance_digest": candidate.record.instance_digest,
         })
         old_store.write(superseded)
+        current.record = superseded
 
         _append_upgrade_event(old_journal, deployment=replace(current, record=superseded), event=EVENT_OLD_INSTANCE_SUPERSEDED, upgrade_id=upgrade_id, detail={
             "replacement_deployment_id": candidate.record.deployment_id,
             "replacement_instance_digest": candidate.record.instance_digest,
         })
+        if hasattr(current, "stop"):
+            current.stop()
         _append_upgrade_event(new_journal, deployment=candidate, event=EVENT_UPGRADE_COMPLETED, upgrade_id=upgrade_id, detail={
             "old_deployment_id": old.deployment_id, "old_instance_digest": old.instance_digest
         })
