@@ -457,10 +457,20 @@ class DeploymentRecord:
     def mark_rolled_back(
         self, *, at: str, detail: Mapping[str, Any] | None = None
     ) -> DeploymentRecord:
-        """Record an explicit rollback away from this honestly deployed instance."""
-        if not self.deployed:
+        """Record rollback only after the previous Running Platform has stopped."""
+        stopped = any(
+            action.name == "platform_stopped" for action in self.operational_actions
+        )
+        if (
+            self.lifecycle != LIFECYCLE_REALIZED
+            or self.running
+            or self.ready
+            or not self.identity_verified
+            or self.failure is not None
+            or not stopped
+        ):
             raise InvalidDeploymentStateTransition(
-                "only an honest deployed record can be rolled back"
+                "only a verified realized deployment stopped by rollback can be rolled back"
             )
         record = replace(self, lifecycle=LIFECYCLE_ROLLED_BACK, updated_at=at)
         return record.with_operational_action(

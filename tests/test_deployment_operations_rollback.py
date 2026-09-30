@@ -170,6 +170,8 @@ def test_rollback_success_realizes_exact_prior_target_then_rolls_back_current(
     assert candidate.record.deployed
     assert candidate.record.instance_digest == request.target.record.instance_digest
     assert request.current.record.lifecycle == LIFECYCLE_ROLLED_BACK
+    assert request.current.record.running is False
+    assert request.current.record.ready is False
     assert request.current.record.deployed is False
     action_names = [
         action.name for action in request.current.record.operational_actions
@@ -181,6 +183,12 @@ def test_rollback_success_realizes_exact_prior_target_then_rolls_back_current(
         "rollback_target_realized"
     )
     assert action_names.index("rollback_target_realized") < action_names.index(
+        "platform_stopped"
+    )
+    assert action_names.index("platform_stopped") < action_names.index(
+        "platform_rolled_back"
+    )
+    assert action_names.index("platform_rolled_back") < action_names.index(
         "rollback_completed"
     )
     assert (
@@ -366,3 +374,61 @@ def test_rollback_uses_only_forward_migration_deployment_path(
         action.name == "platform_rolled_back"
         for action in request.current.record.operational_actions
     )
+
+
+def test_current_stop_failure_preserves_authoritative_state_and_cleans_candidate(
+    tmp_path: Path, monkeypatch
+):
+    request = _request(tmp_path)
+    monkeypatch.setattr(rollback_module, "verify_instance", _verified_target)
+    cleanup_calls = []
+
+    class CandidateRuntime:
+        def stop(self, handle):
+            cleanup_calls.append(handle)
+            return {"status": "stopped"}
+
+    candidate_holder = {}
+
+    def deploy_target(deployment_request, **_kwargs):
+        candidate = _candidate_for_request(tmp_path, deployment_request)
+        candidate._runtime = CandidateRuntime()
+        candidate._handles = ("target-runtime-handle",)
+        candidate_holder["candidate"] = candidate
+        return candidate
+
+    monkeypatch.setattr(rollback_module, "deploy", deploy_target)
+    stop_attempts = []
+
+    def fail_current_stop():
+        stop_attempts.append("stop")
+        raise RuntimeError("old runtime refused to stop")
+
+    monkeypatch.setattr(request.current, "stop", fail_current_stop)
+    original = request.current.record
+
+    with pytest.raises(RuntimeError, match="old runtime refused to stop"):
+        rollback(request)
+
+    candidate = candidate_holder["candidate"]
+    persisted = DeploymentStateStore(request.current.state_path).read()
+    assert stop_attempts == ["stop"]
+    assert cleanup_calls == ["target-runtime-handle"]
+    assert not candidate.deployed
+    assert persisted.lifecycle == LIFECYCLE_REALIZED
+    assert persisted.running is True
+    assert persisted.ready is True
+    assert persisted.identity_verified is True
+    assert persisted.platform_id == original.platform_id
+    assert persisted.instance_digest == original.instance_digest
+    assert persisted.deployed
+    assert request.current.record == persisted
+    action_names = [action.name for action in persisted.operational_actions]
+    assert action_names.count("rollback_failed") == 1
+    assert "rollback_completed" not in action_names
+    assert "platform_rolled_back" not in action_names
+
+    current_events = request.current.events()
+    assert sum(event.event == "rollback_failed" for event in current_events) == 1
+    assert not any(event.event == "rollback_completed" for event in current_events)
+    assert not any(event.event == "rollback_completed" for event in candidate.events())

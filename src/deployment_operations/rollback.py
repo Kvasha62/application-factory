@@ -28,6 +28,7 @@ from deployment_operations.state import (
     LIFECYCLE_REALIZED,
     LIFECYCLE_ROLLED_BACK,
     LIFECYCLE_SUPERSEDED,
+    DeploymentRecord,
     DeploymentStateStore,
     derive_deployment_id,
     utc_now,
@@ -257,6 +258,7 @@ def rollback(
     current_journal = _journal_for(current)
     operation = "target_verification"
     candidate: Deployment | None = None
+    pre_stop_record: DeploymentRecord | None = None
     try:
         deployment_request = _validate(request)
         operation = "target_realization"
@@ -343,20 +345,14 @@ def rollback(
             target_digest=target_digest,
             detail={"previous_deployment_id": current.record.deployment_id},
         )
-        candidate_record = candidate.record.with_operational_action(
-            "rollback_completed",
-            at=utc_now(),
-            detail={
-                "rollback_id": request.rollback_id,
-                "previous_deployment_id": current.record.deployment_id,
-                "target_deployment_id": target.record.deployment_id,
-                "target_instance_digest": target_digest,
-            },
-        )
-        if candidate._store is not None:
-            candidate._store.write(candidate_record, secrets=candidate._secrets)
-        candidate.record = candidate_record
 
+        # Keep the old deployment's lifecycle and deployed claim authoritative
+        # until all of its runtime elements have stopped successfully.
+        pre_stop_record = current.record
+        operation = "current_runtime_stop"
+        current.stop()
+
+        operation = "final_state_persistence"
         rolled_back = current.record.mark_rolled_back(
             at=utc_now(),
             detail={
@@ -378,12 +374,24 @@ def rollback(
         current.record = completed_record
         if current._store is not None:
             current._store.write(completed_record, secrets=current._secrets)
-        elif current.state_path:
+        else:
             DeploymentStateStore(current.state_path).write(completed_record)
 
-        # Do not withdraw the old deployed claim until the replacement is
-        # verified and authoritative state has recorded the supersession.
-        current.stop()
+        candidate_record = candidate.record.with_operational_action(
+            "rollback_completed",
+            at=utc_now(),
+            detail={
+                "rollback_id": request.rollback_id,
+                "previous_deployment_id": current.record.deployment_id,
+                "target_deployment_id": target.record.deployment_id,
+                "target_instance_digest": target_digest,
+            },
+        )
+        candidate.record = candidate_record
+        if candidate._store is not None:
+            candidate._store.write(candidate_record, secrets=candidate._secrets)
+        else:
+            DeploymentStateStore(candidate.state_path).write(candidate_record)
         _event(
             candidate_journal,
             candidate,
@@ -404,18 +412,24 @@ def rollback(
         )
         return candidate
     except Exception as error:
-        if (
-            candidate is not None
-            and current.record.lifecycle == LIFECYCLE_REALIZED
-            and candidate.deployed
-        ):
+        if operation == "current_runtime_stop" and pre_stop_record is not None:
+            # stop() may have changed the in-memory record before a persistence
+            # failure; restore the last authoritative pre-stop record.
+            current.record = pre_stop_record
+            try:
+                if current._store is not None:
+                    current._store.write(pre_stop_record, secrets=current._secrets)
+                else:
+                    DeploymentStateStore(current.state_path).write(pre_stop_record)
+            except Exception:  # noqa: BLE001, S110 - preserve the causal stop error
+                pass
+        if candidate is not None and candidate.deployed:
             try:
                 candidate.stop()
             except Exception:  # noqa: BLE001, S110 - preserve the causal rollback error
                 pass
-        # A failed target realization never supersedes or stops the current
-        # platform. Persist the failed operation as operational metadata while
-        # retaining its honest deployed state.
+        # A failed rollback is recorded without asserting that its target was
+        # realized. The current deployment's prior lifecycle claim is retained.
         try:
             already_terminal = any(
                 action.detail.get("rollback_id") == request.rollback_id
