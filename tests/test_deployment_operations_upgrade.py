@@ -108,14 +108,19 @@ def test_upgrade_rejects_wrong_upgrade_correlation(tmp_path: Path):
 def test_upgrade_rejects_replacement_digest_drift(tmp_path: Path, monkeypatch):
     current = _current(tmp_path)
     replacement = _request(tmp_path)
-    request = UpgradeRequest(current, replacement, derive_upgrade_id(current, replacement))
-    candidate = SimpleNamespace(record=_record(tmp_path, instance="e" * 64), deployed=True)
+    request = UpgradeRequest(
+        current, replacement, derive_upgrade_id(current, replacement)
+    )
+    candidate = SimpleNamespace(
+        record=_record(tmp_path, instance="e" * 64), deployed=True
+    )
     monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
 
     with pytest.raises(InvalidDeploymentStateTransition):
         upgrade(request)
 
     assert current.record.lifecycle != LIFECYCLE_SUPERSEDED
+
 
 def test_failed_replacement_leaves_old_deployed(tmp_path: Path, monkeypatch):
     current = _current(tmp_path)
