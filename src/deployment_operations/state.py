@@ -23,8 +23,8 @@ Three notions are kept apart, exactly as ADR-0017 §35 fixes them:
 * **lifecycle position** — ``in_progress``, ``realized`` or ``failed``;
 * **the record** — this document, which is deployment state itself.
 
-``superseded`` and ``rolled_back`` belong to ADR-0016 §9 as well but are
-deferred to later slices (ADR-0017 §39); this slice never fabricates them.
+``rolled_back`` remains deferred to a later slice; ``superseded`` is introduced
+here as the terminal state of the accepted replacement in the Upgrade Slice.
 """
 
 from __future__ import annotations
@@ -67,6 +67,7 @@ STAGE_FAILED = "failed"
 LIFECYCLE_IN_PROGRESS = "in_progress"
 LIFECYCLE_REALIZED = "realized"
 LIFECYCLE_FAILED = "failed"
+LIFECYCLE_SUPERSEDED = "superseded"
 
 Clock = Callable[[], str]
 
@@ -438,6 +439,19 @@ class DeploymentRecord:
             raise InvalidDeploymentStateTransition(message, errors=missing)
         return replace(self, lifecycle=LIFECYCLE_REALIZED, updated_at=at)
 
+    def mark_superseded(
+        self, *, at: str, detail: Mapping[str, Any] | None = None
+    ) -> DeploymentRecord:
+        """Mark this realized deployment as superseded by an accepted upgrade."""
+        if not self.deployed:
+            raise InvalidDeploymentStateTransition(
+                "only an honest deployed record can be superseded"
+            )
+        record = replace(self, lifecycle=LIFECYCLE_SUPERSEDED, updated_at=at)
+        return record.with_operational_action(
+            "platform_superseded", at=at, detail=detail
+        )
+
     def mark_failed(
         self,
         *,
@@ -714,6 +728,7 @@ __all__ = [
     "LIFECYCLE_FAILED",
     "LIFECYCLE_IN_PROGRESS",
     "LIFECYCLE_REALIZED",
+    "LIFECYCLE_SUPERSEDED",
     "STAGES",
     "STAGE_COMPLETED",
     "STAGE_FAILED",
