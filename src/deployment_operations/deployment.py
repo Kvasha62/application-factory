@@ -313,9 +313,12 @@ class Deployment:
         there is none — nothing is running, the verified operational condition
         no longer holds, and so no ``deployed`` claim stands (§10, §33).
 
-        Restart policy, ongoing runtime management and drift handling are later
-        stages (ADR-0017 §39) and are not implemented here; stopping twice is
-        idempotent and records nothing twice (§20).
+        A plain stop starts nothing again, and no failure triggers an automatic
+        restart: re-executing a runtime is the separate, explicit operation of
+        :mod:`deployment_operations.restart`, under the stop/start policy stated
+        there, and drift handling is the separate observational operation of
+        :mod:`deployment_operations.reconciliation` (ADR-0016 §18, §20;
+        ADR-0017 §39). Stopping twice is idempotent and records nothing twice.
         """
         at = self._clock()
         for handle in self._handles:

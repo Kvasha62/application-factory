@@ -35,6 +35,14 @@ it is how a proven divergence is surfaced honestly (ADR-0016 §18) instead of
 being silently patched, and :attr:`DeploymentRecord.in_correspondence` says
 plainly that nothing conclusive has been observed yet rather than reporting
 unproven health.
+
+Ongoing runtime management is recorded here as well (ADR-0016 §18): every
+admitted restart attempt appends one :class:`RestartRecord` with its ordered
+phase evidence and the identity/version/artifact state it re-executed. A restart
+is an operational action on the Running Platform, so it changes the operational
+conditions — and only those: it creates no new deployment operation, invents no
+lifecycle position, rewrites no failure record of the deployment operation, and
+erases no reconciliation observation.
 """
 
 from __future__ import annotations
@@ -97,6 +105,34 @@ RECONCILIATION_OUTCOMES: tuple[str, ...] = (
     RECONCILIATION_IN_CORRESPONDENCE,
     RECONCILIATION_DRIFT,
     RECONCILIATION_UNVERIFIABLE,
+)
+
+#: Outcomes of one restart attempt — the runtime-management operation of
+#: ADR-0016 §18. They are **not** lifecycle positions: the lifecycle vocabulary
+#: of ADR-0016 §9 stays closed, and a restart neither realizes nor fails the
+#: deployment operation it re-executes the runtime of.
+RESTART_COMPLETED = "restarted"
+RESTART_FAILED = "failed"
+
+#: Every outcome a restart record may carry.
+RESTART_OUTCOMES: tuple[str, ...] = (RESTART_COMPLETED, RESTART_FAILED)
+
+#: The observable phases of one restart attempt, in order:
+#:
+#:     running → stop → execution/content verification → fresh start
+#:         → health/readiness verification → identity re-verification → ready
+#:
+#: This is the observable sequence of the runtime-management operation, not a
+#: second initial deployment path: the stages of ADR-0017 §36 stay exactly as
+#: they are, and no phase here is one of them.
+RESTART_PHASES: tuple[str, ...] = (
+    "requested",
+    "stop",
+    "execution_verification",
+    "start",
+    "health_check",
+    "identity_verification",
+    "completed",
 )
 
 Clock = Callable[[], str]
@@ -312,6 +348,102 @@ class ReconciliationRecord:
 
 
 @dataclass(frozen=True)
+class RestartPhaseRecord:
+    """The recorded outcome of one phase of one restart attempt (§18).
+
+    A phase status reuses the stage vocabulary already fixed above
+    (``pending`` / ``in_progress`` / ``completed`` / ``failed``) so that the
+    order and the outcome of a restart are readable without a second set of
+    words. ``detail`` holds operational facts only — which components were
+    stopped, which were started, what the fresh verification observed — never
+    business data and never secret material (ADR-0016 §6, §12).
+    """
+
+    name: str
+    status: str = STAGE_PENDING
+    occurred_at: str = ""
+    detail: Mapping[str, Any] = field(default_factory=dict)
+    errors: tuple[str, ...] = ()
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "status": self.status,
+            "occurred_at": self.occurred_at,
+            "detail": dict(self.detail),
+            "errors": list(self.errors),
+        }
+
+
+@dataclass(frozen=True)
+class RestartRecord:
+    """One restart attempt of the runtime of one deployment operation (§18).
+
+    The record is the runtime-management evidence of the attempt: what was
+    asked for, in which order it was executed, what each phase established, and
+    — for a successful attempt — the identity/version/artifact evidence the
+    restart acted on and preserved. It never redefines the deployment
+    operation's own history: ``lifecycle``, ``failure``, the stages of the
+    initial path and the reconciliation history all keep exactly the meaning
+    they had (ADR-0016 §9, §18, §20).
+    """
+
+    restart_id: str
+    sequence: int
+    outcome: str
+    requested_at: str
+    completed_at: str = ""
+    reason: str = ""
+    #: The identity/version/artifact state the attempt re-executed: the pinned
+    #: Platform Instance and, per component, the version, artifact digest and
+    #: bound execution content. A restart that preserved identity shows it here
+    #: instead of asserting it.
+    identity: Mapping[str, Any] = field(default_factory=dict)
+    phases: tuple[RestartPhaseRecord, ...] = ()
+    #: The phase that failed and why, or ``None`` for a completed attempt.
+    failure_phase: str | None = None
+    failure_reason: str | None = None
+    errors: tuple[str, ...] = ()
+
+    @property
+    def completed(self) -> bool:
+        """True when the attempt re-executed the same runtime and verified it."""
+        return self.outcome == RESTART_COMPLETED
+
+    @property
+    def failed(self) -> bool:
+        """True when the attempt stopped fail-closed in one of its phases."""
+        return self.outcome == RESTART_FAILED
+
+    def phase(self, name: str) -> RestartPhaseRecord | None:
+        for entry in self.phases:
+            if entry.name == name:
+                return entry
+        return None
+
+    def phase_order(self) -> tuple[str, ...]:
+        """The names of the phases that were reached, in execution order."""
+        return tuple(
+            entry.name for entry in self.phases if entry.status != STAGE_PENDING
+        )
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "restart_id": self.restart_id,
+            "sequence": self.sequence,
+            "outcome": self.outcome,
+            "requested_at": self.requested_at,
+            "completed_at": self.completed_at,
+            "reason": self.reason,
+            "identity": dict(self.identity),
+            "phases": [entry.document() for entry in self.phases],
+            "failure_phase": self.failure_phase,
+            "failure_reason": self.failure_reason,
+            "errors": list(self.errors),
+        }
+
+
+@dataclass(frozen=True)
 class DeploymentRecord:
     """Deployment state of exactly one deployment operation."""
 
@@ -336,6 +468,11 @@ class DeploymentRecord:
     #: Append-only history of independent reconciliation observations (§9, §18).
     #: Never a lifecycle position, never a repair: it says what was observed.
     reconciliations: tuple[ReconciliationRecord, ...] = ()
+    #: Append-only history of restart attempts — the runtime-management record
+    #: of ongoing operational control (ADR-0016 §18). One entry per admitted
+    #: attempt, in order, with its phase evidence; a restart never creates a new
+    #: deployment operation and never overwrites an earlier attempt.
+    restarts: tuple[RestartRecord, ...] = ()
     created_at: str = ""
     updated_at: str = ""
 
@@ -402,6 +539,22 @@ class DeploymentRecord:
     def last_reconciliation(self) -> ReconciliationRecord | None:
         """The latest reconciliation observation, or ``None`` if never reconciled."""
         return self.reconciliations[-1] if self.reconciliations else None
+
+    @property
+    def last_restart(self) -> RestartRecord | None:
+        """The latest restart attempt, or ``None`` if the runtime was never restarted."""
+        return self.restarts[-1] if self.restarts else None
+
+    @property
+    def restarted(self) -> bool:
+        """True when the latest restart attempt completed and was verified.
+
+        This is a fact about the runtime-management operation, not a second
+        ``deployed`` claim: whether the platform may be claimed ``deployed``
+        keeps depending on the conditions alone — ``realized``, ``running``,
+        ``ready`` and ``identity_verified`` together (ADR-0016 §10).
+        """
+        return self.last_restart is not None and self.last_restart.completed
 
     @property
     def in_correspondence(self) -> bool | None:
@@ -522,6 +675,27 @@ class DeploymentRecord:
             return self
         stopped = replace(self, running=False, ready=False, updated_at=at)
         return stopped.with_operational_action("platform_stopped", at=at)
+
+    def withdraw_ready(self, *, at: str, reason: str) -> DeploymentRecord:
+        """Withdraw ``ready`` without claiming a stop that did not happen (§18, §20).
+
+        ``mark_stopped`` states that the platform's runtime elements are down;
+        an operational action that could not complete — a stop one element
+        refused, a start that never happened, a health/readiness verification
+        that failed — leaves the platform in a state that is *not* a verified
+        ready one, while some element may still be up. Claiming ``stopped``
+        there would be as false as keeping ``ready``: this transition therefore
+        withdraws only the verified operational condition, records why, and
+        leaves ``running`` exactly as it was. No lifecycle position changes, no
+        ``platform_stopped`` action is invented, and ``identity_verified`` keeps
+        stating what the deployment operation verified (§9).
+        """
+        if not self.ready:
+            return self
+        withdrawn = replace(self, ready=False, updated_at=at)
+        return withdrawn.with_operational_action(
+            "readiness_withdrawn", at=at, detail={"reason": reason}
+        )
 
     def mark_ready(self, *, at: str) -> DeploymentRecord:
         """Record ``ready`` — a verified operational condition (ADR-0017 §33).
@@ -678,6 +852,51 @@ class DeploymentRecord:
             updated_at=at,
         )
 
+    def with_restart(self, attempt: RestartRecord, *, at: str) -> DeploymentRecord:
+        """Append one completed restart attempt (§9, §18).
+
+        One admitted attempt appends exactly one record, numbered by the
+        attempt's position in this record's history, so a controlled retry
+        after a failed restart is a *new*, separately identified attempt rather
+        than an overwrite of the previous one (ADR-0016 §9, §20).
+
+        The transition changes no lifecycle position and re-defines no
+        operational condition: what a restart did to ``running``/``ready`` is
+        recorded by the transitions that establish those facts, and the
+        reconciliation history is left exactly as it was — a restart neither
+        repairs nor hides a proven divergence (ADR-0016 §18).
+        """
+        if attempt.outcome not in RESTART_OUTCOMES:
+            message = (
+                f"restart outcome {attempt.outcome!r} is not one of "
+                f"{', '.join(RESTART_OUTCOMES)}"
+            )
+            raise DeploymentStateError(message)
+        unknown = [
+            entry.name for entry in attempt.phases if entry.name not in RESTART_PHASES
+        ]
+        if unknown:
+            message = (
+                f"restart phases {', '.join(sorted(unknown))} are not phases of "
+                "the restart operation"
+            )
+            raise DeploymentStateError(message)
+        sequenced = replace(
+            attempt,
+            sequence=len(self.restarts) + 1,
+            identity=_plain_value(attempt.identity),
+            phases=tuple(
+                replace(
+                    entry,
+                    detail=_plain_value(entry.detail),
+                    errors=tuple(str(error) for error in entry.errors),
+                )
+                for entry in attempt.phases
+            ),
+            errors=tuple(str(error) for error in attempt.errors),
+        )
+        return replace(self, restarts=(*self.restarts, sequenced), updated_at=at)
+
     # -- serialization -----------------------------------------------------
     def document(self) -> dict[str, Any]:
         return {
@@ -714,6 +933,17 @@ class DeploymentRecord:
                 ),
                 "in_correspondence": self.in_correspondence,
                 "drifted": self.drifted,
+            },
+            # Runtime-management history (ADR-0016 §18): every admitted restart
+            # attempt with its ordered phase evidence. Operational metadata only
+            # — identity, order and outcome, never business data.
+            "restarts": {
+                "attempts": [entry.document() for entry in self.restarts],
+                "attempt_count": len(self.restarts),
+                "outcome": (
+                    self.last_restart.outcome if self.last_restart is not None else None
+                ),
+                "restarted": self.restarted,
             },
             "failure": self.failure.document() if self.failure else None,
             "created_at": self.created_at,
@@ -798,6 +1028,27 @@ def _string_tuple(value: Any) -> tuple[str, ...]:
     return tuple(str(item) for item in value)
 
 
+def _restart_phases(value: Any) -> tuple[RestartPhaseRecord, ...]:
+    """Read the phase evidence of one persisted restart attempt."""
+    if not isinstance(value, list):
+        return ()
+    phases: list[RestartPhaseRecord] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        detail = item.get("detail")
+        phases.append(
+            RestartPhaseRecord(
+                name=str(item.get("name", "")),
+                status=str(item.get("status", STAGE_PENDING)),
+                occurred_at=str(item.get("occurred_at", "")),
+                detail=detail if isinstance(detail, Mapping) else {},
+                errors=_string_tuple(item.get("errors")),
+            )
+        )
+    return tuple(phases)
+
+
 def _plain_value(value: Any) -> Any:
     """Normalize a value to the shape one JSON round trip preserves.
 
@@ -830,6 +1081,9 @@ def record_from_document(document: Mapping[str, Any]) -> DeploymentRecord:
         reconciliation if isinstance(reconciliation, Mapping) else {}
     )
     observations = block.get("observations")
+    restarts = document.get("restarts")
+    restart_block: Mapping[str, Any] = restarts if isinstance(restarts, Mapping) else {}
+    attempts = restart_block.get("attempts")
 
     return DeploymentRecord(
         deployment_id=str(document.get("deployment_id", "")),
@@ -965,6 +1219,31 @@ def record_from_document(document: Mapping[str, Any]) -> DeploymentRecord:
             if isinstance(observations, list)
             else ()
         ),
+        restarts=(
+            tuple(
+                RestartRecord(
+                    restart_id=str(item.get("restart_id", "")),
+                    sequence=int(item.get("sequence", 0)),
+                    outcome=str(item.get("outcome", "")),
+                    requested_at=str(item.get("requested_at", "")),
+                    completed_at=str(item.get("completed_at", "")),
+                    reason=str(item.get("reason", "")),
+                    identity=(
+                        item.get("identity")
+                        if isinstance(item.get("identity"), Mapping)
+                        else {}
+                    ),
+                    phases=_restart_phases(item.get("phases")),
+                    failure_phase=item.get("failure_phase"),
+                    failure_reason=item.get("failure_reason"),
+                    errors=_string_tuple(item.get("errors")),
+                )
+                for item in attempts
+                if isinstance(item, Mapping)
+            )
+            if isinstance(attempts, list)
+            else ()
+        ),
         failure=(
             FailureRecord(
                 stage=str(failure.get("stage", "")),
@@ -995,6 +1274,10 @@ __all__ = [
     "RECONCILIATION_IN_CORRESPONDENCE",
     "RECONCILIATION_OUTCOMES",
     "RECONCILIATION_UNVERIFIABLE",
+    "RESTART_COMPLETED",
+    "RESTART_FAILED",
+    "RESTART_OUTCOMES",
+    "RESTART_PHASES",
     "STAGES",
     "STAGE_COMPLETED",
     "STAGE_FAILED",
@@ -1007,6 +1290,8 @@ __all__ = [
     "MigrationRecord",
     "OperationalAction",
     "ReconciliationRecord",
+    "RestartPhaseRecord",
+    "RestartRecord",
     "StageRecord",
     "derive_deployment_id",
     "load_record",

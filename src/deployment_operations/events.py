@@ -12,6 +12,14 @@ instance identity/version/digest, the observed actual digest when one was
 established, the outcome and the fields that provably diverged. A drift signal
 is never a repair signal — nothing here restarts, redeploys or substitutes.
 
+Ongoing runtime management publishes into the same journal (ADR-0016 §18, §19):
+one restart attempt is one ordered sequence of signals — requested, stopped,
+execution/content verified, started, health/readiness checked, and exactly one
+terminal outcome — every one of them carrying the restart identity, its attempt
+number and the pinned Platform Instance identity/version/digest it acted on. A
+restart signal is never a desired-state signal: nothing here re-pins, re-selects
+or re-composes anything.
+
 The journal is append-only JSON lines: one event per line, in the order the
 deployment path produced it, so a failure is diagnosable from the recorded
 sequence alone. Events are operational metadata — never business data, never
@@ -60,6 +68,18 @@ EVENT_ROLLBACK_FAILED = "rollback_failed"
 EVENT_RECONCILIATION_IN_CORRESPONDENCE = "reconciliation_in_correspondence"
 EVENT_RECONCILIATION_DRIFT_DETECTED = "reconciliation_drift_detected"
 EVENT_RECONCILIATION_UNVERIFIABLE = "reconciliation_unverifiable"
+
+#: One restart attempt publishes one signal per phase it reaches, in execution
+#: order, plus exactly one terminal signal (ADR-0016 §18, §19). The order of the
+#: operation is therefore readable from the journal alone: requested → stopped →
+#: execution verified → started → health checked → completed/failed.
+EVENT_RESTART_REQUESTED = "restart_requested"
+EVENT_RESTART_STOPPED = "restart_stopped"
+EVENT_RESTART_EXECUTION_VERIFIED = "restart_execution_verified"
+EVENT_RESTART_STARTED = "restart_started"
+EVENT_RESTART_HEALTH_CHECKED = "restart_health_checked"
+EVENT_RESTART_COMPLETED = "restart_completed"
+EVENT_RESTART_FAILED = "restart_failed"
 
 
 @dataclass(frozen=True)
@@ -228,6 +248,13 @@ __all__ = [
     "EVENT_RECONCILIATION_DRIFT_DETECTED",
     "EVENT_RECONCILIATION_IN_CORRESPONDENCE",
     "EVENT_RECONCILIATION_UNVERIFIABLE",
+    "EVENT_RESTART_COMPLETED",
+    "EVENT_RESTART_EXECUTION_VERIFIED",
+    "EVENT_RESTART_FAILED",
+    "EVENT_RESTART_HEALTH_CHECKED",
+    "EVENT_RESTART_REQUESTED",
+    "EVENT_RESTART_STARTED",
+    "EVENT_RESTART_STOPPED",
     "EVENT_ROLLBACK_COMPLETED",
     "EVENT_ROLLBACK_FAILED",
     "EVENT_ROLLBACK_REQUESTED",
