@@ -20,11 +20,12 @@ Three notions are kept apart, exactly as ADR-0017 §35 fixes them:
 
 * **operational condition** — ``ready`` (health/readiness verified) and
   ``running`` (the runtime elements are up);
-* **lifecycle position** — ``in_progress``, ``realized`` or ``failed``;
+* **lifecycle position** — ``in_progress``, ``realized``, ``failed``,
+  ``superseded`` or ``rolled_back``;
 * **the record** — this document, which is deployment state itself.
 
-``rolled_back`` remains deferred to a later slice; ``superseded`` is introduced
-here as the terminal state of the accepted replacement in the Upgrade Slice.
+``rolled_back`` is recorded only by the explicit Rollback Slice; ``superseded``
+continues to record an accepted replacement in the Upgrade Slice.
 """
 
 from __future__ import annotations
@@ -62,12 +63,13 @@ STAGE_IN_PROGRESS = "in_progress"
 STAGE_COMPLETED = "completed"
 STAGE_FAILED = "failed"
 
-#: Lifecycle positions of the deployment operation (ADR-0016 §9) that this
-#: slice implements. ``superseded`` and ``rolled_back`` are deferred (§39).
+#: Lifecycle positions of the deployment operation (ADR-0016 §9) implemented
+#: by deployment, upgrade and rollback orchestration.
 LIFECYCLE_IN_PROGRESS = "in_progress"
 LIFECYCLE_REALIZED = "realized"
 LIFECYCLE_FAILED = "failed"
 LIFECYCLE_SUPERSEDED = "superseded"
+LIFECYCLE_ROLLED_BACK = "rolled_back"
 
 Clock = Callable[[], str]
 
@@ -452,6 +454,19 @@ class DeploymentRecord:
             "platform_superseded", at=at, detail=detail
         )
 
+    def mark_rolled_back(
+        self, *, at: str, detail: Mapping[str, Any] | None = None
+    ) -> DeploymentRecord:
+        """Record an explicit rollback away from this honestly deployed instance."""
+        if not self.deployed:
+            raise InvalidDeploymentStateTransition(
+                "only an honest deployed record can be rolled back"
+            )
+        record = replace(self, lifecycle=LIFECYCLE_ROLLED_BACK, updated_at=at)
+        return record.with_operational_action(
+            "platform_rolled_back", at=at, detail=detail
+        )
+
     def mark_failed(
         self,
         *,
@@ -728,6 +743,7 @@ __all__ = [
     "LIFECYCLE_FAILED",
     "LIFECYCLE_IN_PROGRESS",
     "LIFECYCLE_REALIZED",
+    "LIFECYCLE_ROLLED_BACK",
     "LIFECYCLE_SUPERSEDED",
     "STAGES",
     "STAGE_COMPLETED",

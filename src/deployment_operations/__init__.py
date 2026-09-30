@@ -30,15 +30,18 @@ Two consequences of that path are deliberate and easy to get wrong:
   operation did and the verification it performed, and stops claiming a
   platform that is no longer running.
 
-What is deliberately absent: upgrade, rollback, ``superseded`` handling, drift
-reconciliation, fleet management, autoscaling, scheduling and any general
-deployment platform (ADR-0017 §38–§39). Nothing in this package owns business
+Upgrade and rollback are separate explicit orchestration slices. What is
+deliberately absent here: implicit recovery, drift reconciliation, fleet
+management, autoscaling, scheduling and any general deployment platform
+(ADR-0017 §38–§39). Nothing in this package owns business
 data, opens a component database, creates an SCS or a new component, or turns
 the Factory into a deployment engine (ADR-0016 §6, §21, §22; LAW-03, LAW-04).
 
 Public surface:
 
 * :func:`deploy` — realize one accepted Platform Instance in one environment;
+* :func:`rollback` — explicitly re-realize an exact previously verified instance;
+* :func:`upgrade` — realize a new accepted instance before superseding current;
 * :class:`DeploymentRequest` / :class:`InstanceReference` — the deployment input;
 * :class:`Deployment` — the completed operation, its record and its platform;
 * :class:`DeploymentEnvironment` / :func:`load_environment` — the operational
@@ -117,6 +120,11 @@ from deployment_operations.provisioning import (
     provision,
     resolve_artifact,
 )
+from deployment_operations.rollback import (
+    RollbackRequest,
+    derive_rollback_id,
+    rollback,
+)
 from deployment_operations.runtime import (
     LocalProcessRuntime,
     MaterializedComponent,
@@ -130,6 +138,7 @@ from deployment_operations.state import (
     LIFECYCLE_FAILED,
     LIFECYCLE_IN_PROGRESS,
     LIFECYCLE_REALIZED,
+    LIFECYCLE_ROLLED_BACK,
     LIFECYCLE_SUPERSEDED,
     STAGES,
     ComponentRecord,
@@ -159,6 +168,7 @@ __all__ = [
     "LIFECYCLE_FAILED",
     "LIFECYCLE_IN_PROGRESS",
     "LIFECYCLE_REALIZED",
+    "LIFECYCLE_ROLLED_BACK",
     "LIFECYCLE_SUPERSEDED",
     "STAGES",
     "ActualComponentIdentity",
@@ -206,6 +216,7 @@ __all__ = [
     "PresenceState",
     "ProvisionedEnvironment",
     "ProvisioningFailed",
+    "RollbackRequest",
     "RunningPlatformIdentitySource",
     "RuntimeAdapter",
     "RuntimeElement",
@@ -220,6 +231,7 @@ __all__ = [
     "default_source_paths",
     "deploy",
     "derive_deployment_id",
+    "derive_rollback_id",
     "derive_upgrade_id",
     "establish_identity_correspondence",
     "evaluate_health",
@@ -229,6 +241,7 @@ __all__ = [
     "provision",
     "render_environment",
     "resolve_artifact",
+    "rollback",
     "upgrade",
     "utc_now",
     "validate_actual_evidence",
