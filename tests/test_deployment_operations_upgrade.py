@@ -9,6 +9,7 @@ from deployment_operations.errors import (
     DeploymentInputRejected,
     InvalidDeploymentStateTransition,
 )
+from deployment_operations.events import EventJournal
 from deployment_operations.state import (
     LIFECYCLE_SUPERSEDED,
     DeploymentRecord,
@@ -219,10 +220,14 @@ def test_success_records_correlated_upgrade_events(tmp_path: Path, monkeypatch):
 
     upgrade(request)
 
-    old_events = current.events()
-    assert old_events[-2].event == "old_instance_superseded"
-    assert old_events[-2].detail["upgrade_id"] == request.upgrade_id
-    assert old_events[-2].detail["old_instance_digest"] if "old_instance_digest" in old_events[-2].detail else True
+    journal = EventJournal(
+        EventJournal.path_for(tmp_path, current.record.deployment_id)
+    )
+    old_events = journal.events()
+    superseded = old_events[-1]
+    assert superseded.event == "old_instance_superseded"
+    assert superseded.detail["upgrade_id"] == request.upgrade_id
+    assert superseded.detail["replacement_instance_digest"] == "c" * 64
 
 
 def test_success_supersedes_old_only_after_new_deployed(tmp_path: Path, monkeypatch):
