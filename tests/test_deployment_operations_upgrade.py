@@ -148,7 +148,9 @@ def test_failed_replacement_leaves_old_deployed(tmp_path: Path, monkeypatch):
 def test_success_supersedes_old_only_after_new_deployed(tmp_path: Path, monkeypatch):
     current = _current(tmp_path)
     replacement = _request(tmp_path)
-    request = UpgradeRequest(current, replacement, derive_upgrade_id(current, replacement))
+    request = UpgradeRequest(
+        current, replacement, derive_upgrade_id(current, replacement)
+    )
     new_record = _record(tmp_path, instance="c" * 64)
     candidate = SimpleNamespace(record=new_record, deployed=True)
     monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
