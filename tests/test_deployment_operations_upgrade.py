@@ -197,7 +197,9 @@ def test_upgrade_rejects_replacement_without_honest_deployed_claim(
     request = UpgradeRequest(
         current, replacement, derive_upgrade_id(current, replacement)
     )
-    candidate = SimpleNamespace(record=_record(tmp_path, instance="c" * 64), deployed=False)
+    candidate = SimpleNamespace(
+        record=_record(tmp_path, instance="c" * 64), deployed=False
+    )
     monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
 
     with pytest.raises(InvalidDeploymentStateTransition):
