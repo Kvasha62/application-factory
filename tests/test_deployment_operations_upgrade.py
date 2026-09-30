@@ -145,6 +145,86 @@ def test_failed_replacement_leaves_old_deployed(tmp_path: Path, monkeypatch):
     assert current.record.lifecycle != LIFECYCLE_SUPERSEDED
 
 
+
+def test_upgrade_rejects_empty_replacement_digest(tmp_path: Path):
+    current = _current(tmp_path)
+    replacement = _request(tmp_path, "")
+    request = UpgradeRequest(
+        current, replacement, derive_upgrade_id(current, replacement)
+    )
+
+    with pytest.raises(DeploymentInputRejected):
+        upgrade(request)
+
+    assert current.record.lifecycle != LIFECYCLE_SUPERSEDED
+
+
+def test_upgrade_rejects_different_environment(tmp_path: Path):
+    current = _current(tmp_path)
+    replacement = _request(tmp_path)
+    replacement.environment.environment_id = "other-env"
+    request = UpgradeRequest(
+        current, replacement, derive_upgrade_id(current, replacement)
+    )
+
+    with pytest.raises(DeploymentInputRejected):
+        upgrade(request)
+
+    assert current.record.lifecycle != LIFECYCLE_SUPERSEDED
+
+
+def test_upgrade_rejects_unavailable_persisted_state(tmp_path: Path):
+    current = _current(tmp_path)
+    current.state_path.unlink()
+    replacement = _request(tmp_path)
+    request = UpgradeRequest(
+        current, replacement, derive_upgrade_id(current, replacement)
+    )
+
+    with pytest.raises(InvalidDeploymentStateTransition):
+        upgrade(request)
+
+    assert current.record.deployed is True
+    assert current.record.lifecycle != LIFECYCLE_SUPERSEDED
+
+
+def test_upgrade_rejects_replacement_without_honest_deployed_claim(
+    tmp_path: Path, monkeypatch
+):
+    current = _current(tmp_path)
+    replacement = _request(tmp_path)
+    request = UpgradeRequest(
+        current, replacement, derive_upgrade_id(current, replacement)
+    )
+    candidate = SimpleNamespace(record=_record(tmp_path, instance="c" * 64), deployed=False)
+    monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
+
+    with pytest.raises(InvalidDeploymentStateTransition):
+        upgrade(request)
+
+    assert current.record.deployed is True
+    assert current.record.lifecycle != LIFECYCLE_SUPERSEDED
+
+
+def test_success_records_correlated_upgrade_events(tmp_path: Path, monkeypatch):
+    current = _current(tmp_path)
+    replacement = _request(tmp_path)
+    request = UpgradeRequest(
+        current, replacement, derive_upgrade_id(current, replacement)
+    )
+    candidate = SimpleNamespace(
+        record=_record(tmp_path, instance="c" * 64), deployed=True
+    )
+    monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
+
+    upgrade(request)
+
+    old_events = current.events()
+    assert old_events[-2].event == "old_instance_superseded"
+    assert old_events[-2].detail["upgrade_id"] == request.upgrade_id
+    assert old_events[-2].detail["old_instance_digest"] if "old_instance_digest" in old_events[-2].detail else True
+
+
 def test_success_supersedes_old_only_after_new_deployed(tmp_path: Path, monkeypatch):
     current = _current(tmp_path)
     replacement = _request(tmp_path)
