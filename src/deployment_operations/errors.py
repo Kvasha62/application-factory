@@ -17,6 +17,13 @@ initial path above: :class:`ReconciliationEvidenceUnavailable` and
 :class:`ReconciliationDriftDetected` carry ``stage = "reconciliation"``, and
 neither of them is ever a reason to deploy, upgrade, roll back or restart
 anything (ADR-0016 §18, §20).
+
+Ongoing runtime management is a separate operation with its own observable
+phases, so its failures carry ``stage = "restart"`` — :class:`RestartFailed`
+names the phase that failed, and :class:`RestartInProgress` refuses a second
+concurrent attempt of the same operation. Neither adds a stage to the initial
+deployment path of ADR-0017 §36, and neither is ever a reason to substitute a
+version, an artifact or a Platform Instance (ADR-0016 §7, §18, §20).
 """
 
 from __future__ import annotations
@@ -171,6 +178,52 @@ class ReconciliationDriftDetected(DeploymentOperationsError):
         self.actual_instance_digest = actual_instance_digest
 
 
+class RestartFailed(DeploymentOperationsError):
+    """A restart attempt did not complete (ADR-0016 §18, §20).
+
+    A restart is a controlled cycle — stop, re-verify the execution/content
+    binding, fresh start, fresh health/readiness verification — and any phase of
+    it that fails fails the whole attempt: nothing half-stopped, half-started or
+    unverified is ever reported as a restarted platform. ``phase`` names where
+    the attempt stopped and ``errors`` why, so the failure stays diagnosable
+    from the raised error, the restart record in deployment state and the
+    operational journal alike.
+    """
+
+    def __init__(
+        self,
+        errors: Sequence[str],
+        *,
+        phase: str,
+        reason: str = "",
+    ) -> None:
+        message = f"the restart attempt failed in its {phase} phase"
+        if reason:
+            message = f"{message}: {reason}"
+        super().__init__(message, errors=errors, stage="restart")
+        self.phase = phase
+        self.reason = reason
+
+
+class RestartInProgress(DeploymentOperationsError):
+    """Another restart attempt of this deployment operation is in flight (§18).
+
+    Parallel attempts are refused rather than queued or merged: two attempts
+    acting on the same runtime elements could leave several uncontrolled
+    elements behind, and a refusal is honest about the fact that nothing was
+    done. The caller re-reads deployment state and repeats the attempt under its
+    own, separately numbered restart identity once the in-flight one has
+    terminated.
+    """
+
+    def __init__(self, errors: Sequence[str] = ()) -> None:
+        message = (
+            "a restart attempt of this deployment operation is already in "
+            "flight; this attempt was refused and changed nothing"
+        )
+        super().__init__(message, errors=errors, stage="restart")
+
+
 class DeploymentStateError(DeploymentOperationsError):
     """Deployment state could not be read, written or trusted (§9).
 
@@ -221,6 +274,8 @@ __all__ = [
     "ProvisioningFailed",
     "ReconciliationDriftDetected",
     "ReconciliationEvidenceUnavailable",
+    "RestartFailed",
+    "RestartInProgress",
     "SecretLeakRefused",
     "StartupFailed",
 ]

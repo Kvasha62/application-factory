@@ -12,9 +12,13 @@ identity and version, the migrations that ran, and the operation's identity.
 
 Secrets are read from the process environment (``--secret KEY=ENVVAR``) so they
 never appear in a command line, a file or a record (ADR-0016 §12). The platform
-is stopped again after the operation unless ``--keep-running`` is passed:
-ongoing runtime management is a later stage (ADR-0017 §39), while the record of
-what was realized stays in deployment state (ADR-0016 §9).
+is stopped again after the operation unless ``--keep-running`` is passed, while
+the record of what was realized stays in deployment state (ADR-0016 §9). This
+command performs one deployment operation and nothing else: ongoing runtime
+management — an explicit restart of an already realized runtime under the
+stop/start policy — is the separate operation of
+:mod:`deployment_operations.restart` (ADR-0016 §18; ADR-0017 §39), and a plain
+stop here never starts anything again.
 """
 
 from __future__ import annotations

@@ -31,7 +31,9 @@ Two consequences of that path are deliberate and easy to get wrong:
   platform that is no longer running.
 
 Upgrade and rollback are separate explicit orchestration slices; reconciliation
-of actual state against the exact desired state is a separate observational one.
+of actual state against the exact desired state is a separate observational one;
+ongoing runtime management — the explicit restart of an already realized runtime
+under an explicit stop/start policy — is a separate operational one.
 What is deliberately absent here: implicit recovery, automatic remediation or
 drift repair, fleet management, autoscaling, scheduling and any general
 deployment platform (ADR-0017 §38–§39). Nothing in this package owns business
@@ -45,6 +47,9 @@ Public surface:
 * :func:`upgrade` — realize a new accepted instance before superseding current;
 * :func:`reconcile` — observe the Running Platform and compare it with the exact
   desired state, recording drift honestly and repairing nothing (ADR-0016 §18);
+* :func:`restart` — re-execute the runtime of one realized operation: stop,
+  re-verify the execution/content binding, fresh start, fresh health/readiness
+  and identity verification, under :class:`StopStartPolicy` (ADR-0016 §18);
 * :class:`DeploymentRequest` / :class:`InstanceReference` — the deployment input;
 * :class:`Deployment` — the completed operation, its record and its platform;
 * :class:`DeploymentEnvironment` / :func:`load_environment` — the operational
@@ -52,6 +57,7 @@ Public surface:
 * :func:`verify_instance` — the exact identity/version/digest verification;
 * :class:`DeploymentRecord` / :class:`DeploymentStateStore` — deployment state;
 * :class:`ReconciliationRecord` — the append-only reconciliation history;
+* :class:`RestartRecord` — the append-only runtime-management history;
 * :class:`DeploymentEvent` / :class:`EventJournal` — the operational signals;
 * :class:`LocalProcessRuntime` — the replaceable runtime adapter of this slice.
 """
@@ -86,6 +92,8 @@ from deployment_operations.errors import (
     ProvisioningFailed,
     ReconciliationDriftDetected,
     ReconciliationEvidenceUnavailable,
+    RestartFailed,
+    RestartInProgress,
     SecretLeakRefused,
     StartupFailed,
 )
@@ -132,6 +140,15 @@ from deployment_operations.reconciliation import (
     derive_reconciliation_id,
     reconcile,
 )
+from deployment_operations.restart import (
+    STRICT_STOP_START_POLICY,
+    Restart,
+    RestartRequest,
+    StopStartPolicy,
+    derive_restart_id,
+    restart,
+    validate_stop_start_policy,
+)
 from deployment_operations.rollback import (
     RollbackRequest,
     derive_rollback_id,
@@ -156,6 +173,10 @@ from deployment_operations.state import (
     RECONCILIATION_IN_CORRESPONDENCE,
     RECONCILIATION_OUTCOMES,
     RECONCILIATION_UNVERIFIABLE,
+    RESTART_COMPLETED,
+    RESTART_FAILED,
+    RESTART_OUTCOMES,
+    RESTART_PHASES,
     STAGES,
     ComponentRecord,
     DeploymentRecord,
@@ -164,6 +185,8 @@ from deployment_operations.state import (
     MigrationRecord,
     OperationalAction,
     ReconciliationRecord,
+    RestartPhaseRecord,
+    RestartRecord,
     derive_deployment_id,
     load_record,
     utc_now,
@@ -191,7 +214,12 @@ __all__ = [
     "RECONCILIATION_IN_CORRESPONDENCE",
     "RECONCILIATION_OUTCOMES",
     "RECONCILIATION_UNVERIFIABLE",
+    "RESTART_COMPLETED",
+    "RESTART_FAILED",
+    "RESTART_OUTCOMES",
+    "RESTART_PHASES",
     "STAGES",
+    "STRICT_STOP_START_POLICY",
     "ActualComponentIdentity",
     "ActualEvidence",
     "ActualIdentityUnavailable",
@@ -242,6 +270,12 @@ __all__ = [
     "ReconciliationEvidenceUnavailable",
     "ReconciliationRecord",
     "ReconciliationRequest",
+    "Restart",
+    "RestartFailed",
+    "RestartInProgress",
+    "RestartPhaseRecord",
+    "RestartRecord",
+    "RestartRequest",
     "RollbackRequest",
     "RunningPlatformIdentitySource",
     "RuntimeAdapter",
@@ -250,6 +284,7 @@ __all__ = [
     "RuntimeProcessError",
     "SecretLeakRefused",
     "StartupFailed",
+    "StopStartPolicy",
     "UpgradeRequest",
     "build_elements",
     "canonical_digest",
@@ -258,6 +293,7 @@ __all__ = [
     "deploy",
     "derive_deployment_id",
     "derive_reconciliation_id",
+    "derive_restart_id",
     "derive_rollback_id",
     "derive_upgrade_id",
     "establish_identity_correspondence",
@@ -269,12 +305,14 @@ __all__ = [
     "reconcile",
     "render_environment",
     "resolve_artifact",
+    "restart",
     "rollback",
     "upgrade",
     "utc_now",
     "validate_actual_evidence",
     "validate_actual_surface",
     "validate_environment",
+    "validate_stop_start_policy",
     "verify_artifact_digest",
     "verify_identity",
     "verify_input_unchanged",

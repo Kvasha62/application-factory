@@ -3,9 +3,15 @@
 Runtime management in the first slice is deliberately minimal (ADR-0017 §11):
 start the runtime elements of the instance, execute their component-owned
 migrations in order, and evaluate the health/readiness their published
-surfaces report. There is no reconciliation loop, no scheduling, no restart
-policy, no autoscaling and no fleet management here — those are later stages
-(ADR-0017 §39).
+surfaces report. There is no reconciliation loop, no scheduling, no
+autoscaling and no fleet management here.
+
+Ongoing runtime management is a separate stage of its own (ADR-0017 §39, §44):
+the explicit restart of an already realized runtime, and the stop/start policy
+it runs under, live in :mod:`deployment_operations.restart`. That operation
+drives this same adapter seam and adds no execution semantics of its own — and
+nothing in this module ever starts, stops or re-executes a runtime element on
+its own initiative: what happens here is what an operation asked for.
 
 The capability talks to its environment through one narrow seam,
 :class:`RuntimeAdapter`. The only implementation shipped with this slice is

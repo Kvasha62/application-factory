@@ -1751,6 +1751,11 @@ class TestOwnershipBoundary:
                 # (ADR-0016 §9) and are still operational metadata: the exact
                 # identity/version/digest compared, never business data.
                 "reconciliation",
+                # Runtime-management history is deployment state too
+                # (ADR-0016 §9, §18): the restart attempts of this operation,
+                # their phase order and the identity they re-executed — again
+                # operational metadata and never business data.
+                "restarts",
                 "stages",
                 "updated_at",
             }
