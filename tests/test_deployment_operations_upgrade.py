@@ -38,9 +38,11 @@ def _record(tmp_path: Path, *, instance: str = "a" * 64) -> DeploymentRecord:
 
 def _current(tmp_path: Path):
     record = _record(tmp_path)
+    state_path = tmp_path / "old.json"
+    DeploymentStateStore(state_path).write(record)
     return SimpleNamespace(
         record=record,
-        state_path=tmp_path / "old.json",
+        state_path=state_path,
         deployed=record.deployed,
     )
 
@@ -63,7 +65,11 @@ def test_derive_upgrade_id_is_correlated_to_old_and_new_identity(tmp_path: Path)
 def test_upgrade_rejects_non_deployed_current_platform(tmp_path: Path):
     current = _current(tmp_path)
     current.deployed = False
-    request = UpgradeRequest(current, _request(tmp_path), "upgrade-1")
+    request = UpgradeRequest(
+        current,
+        _request(tmp_path),
+        derive_upgrade_id(current, _request(tmp_path)),
+    )
 
     with pytest.raises(InvalidDeploymentStateTransition):
         upgrade(request)
@@ -77,7 +83,40 @@ def test_upgrade_rejects_same_instance(tmp_path: Path):
         upgrade(request)
 
 
-def test_failed_replacement_leaves_old_deployed(tmp_path: Path, monkeypatch):
+
+
+def test_upgrade_rejects_tampered_persisted_old_state(tmp_path: Path):
+    current = _current(tmp_path)
+    tampered = _record(tmp_path, instance="d" * 64)
+    DeploymentStateStore(current.state_path).write(tampered)
+    replacement = _request(tmp_path)
+    request = UpgradeRequest(current, replacement, derive_upgrade_id(current, replacement))
+
+    with pytest.raises(InvalidDeploymentStateTransition):
+        upgrade(request)
+
+
+def test_upgrade_rejects_wrong_upgrade_correlation(tmp_path: Path):
+    current = _current(tmp_path)
+    replacement = _request(tmp_path)
+    request = UpgradeRequest(current, replacement, "forged-upgrade-id")
+
+    with pytest.raises(DeploymentInputRejected):
+        upgrade(request)
+
+
+def test_upgrade_rejects_replacement_digest_drift(tmp_path: Path, monkeypatch):
+    current = _current(tmp_path)
+    replacement = _request(tmp_path)
+    request = UpgradeRequest(current, replacement, derive_upgrade_id(current, replacement))
+    candidate = SimpleNamespace(record=_record(tmp_path, instance="e" * 64), deployed=True)
+    monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
+
+    with pytest.raises(InvalidDeploymentStateTransition):
+        upgrade(request)
+
+    assert current.record.lifecycle != LIFECYCLE_SUPERSEDED
+\ndef test_failed_replacement_leaves_old_deployed(tmp_path: Path, monkeypatch):
     current = _current(tmp_path)
     request = UpgradeRequest(current, _request(tmp_path), "upgrade-1")
 
