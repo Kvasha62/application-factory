@@ -432,3 +432,74 @@ def test_current_stop_failure_preserves_authoritative_state_and_cleans_candidate
     assert sum(event.event == "rollback_failed" for event in current_events) == 1
     assert not any(event.event == "rollback_completed" for event in current_events)
     assert not any(event.event == "rollback_completed" for event in candidate.events())
+
+
+def test_final_state_write_failure_restores_stopped_state_without_success_claim(
+    tmp_path: Path, monkeypatch
+):
+    request = _request(tmp_path)
+    monkeypatch.setattr(rollback_module, "verify_instance", _verified_target)
+    cleanup_calls = []
+
+    class CandidateRuntime:
+        def stop(self, handle):
+            cleanup_calls.append(handle)
+            return {"status": "stopped"}
+
+    candidate_holder = {}
+
+    def deploy_target(deployment_request, **_kwargs):
+        candidate = _candidate_for_request(tmp_path, deployment_request)
+        candidate._runtime = CandidateRuntime()
+        candidate._handles = ("candidate-handle",)
+        candidate_holder["candidate"] = candidate
+        return candidate
+
+    monkeypatch.setattr(rollback_module, "deploy", deploy_target)
+    initial = request.current.record
+    original_write = DeploymentStateStore.write
+    final_write_attempts = []
+
+    def fail_rolled_back_commit(store, record, *, secrets=()):
+        if (
+            store.path == request.current.state_path
+            and record.lifecycle == LIFECYCLE_ROLLED_BACK
+        ):
+            final_write_attempts.append(record)
+            raise OSError("injected final rollback state write failure")
+        return original_write(store, record, secrets=secrets)
+
+    monkeypatch.setattr(DeploymentStateStore, "write", fail_rolled_back_commit)
+
+    with pytest.raises(OSError, match="injected final rollback state write failure"):
+        rollback(request)
+
+    candidate = candidate_holder["candidate"]
+    persisted = DeploymentStateStore(request.current.state_path).read()
+    assert len(final_write_attempts) == 1
+    assert cleanup_calls == ["candidate-handle"]
+    assert not candidate.deployed
+    assert persisted.lifecycle == initial.lifecycle == LIFECYCLE_REALIZED
+    assert persisted.platform_id == initial.platform_id
+    assert persisted.instance_digest == initial.instance_digest
+    assert persisted.identity_verified is True
+    # The old runtime was stopped successfully, so preserve the stopped actual
+    # conditions rather than restoring a stale `deployed` claim.
+    assert persisted.running is False
+    assert persisted.ready is False
+    assert persisted.deployed is False
+    assert any(
+        action.name == "platform_stopped" for action in persisted.operational_actions
+    )
+    names = [action.name for action in persisted.operational_actions]
+    assert names.count("rollback_failed") == 1
+    assert "rollback_completed" not in names
+    assert "platform_rolled_back" not in names
+    assert request.current.record == persisted
+
+    current_events = request.current.events()
+    assert sum(event.event == "rollback_failed" for event in current_events) == 1
+    assert not any(event.event == "rollback_completed" for event in current_events)
+    candidate_actions = [action.name for action in candidate.record.operational_actions]
+    assert "rollback_completed" not in candidate_actions
+    assert not any(event.event == "rollback_completed" for event in candidate.events())
