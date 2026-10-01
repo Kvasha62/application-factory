@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import json
 import shutil
+import subprocess
 import urllib.error
 from pathlib import Path
 from typing import Any
@@ -16,13 +18,17 @@ import pytest
 
 from component_registry import (
     REGISTRY_PATH,
+    load_registry,
     load_registry_document,
     validate_document,
 )
 from factory_artifact import canonical_manifest_reference
 from scripts.build_component_artifacts import (
     APPROVED_COMPONENT_IDS,
+    CANONICAL_MANIFEST_MEDIA_TYPE,
     COMPONENT_ROOTS,
+    COMPONENT_VERSION_DIGESTS,
+    WORKFLOW_PATH,
     DependencyClosureError,
     GHCRHTTPTransport,
     InMemoryOCIRegistry,
@@ -32,12 +38,16 @@ from scripts.build_component_artifacts import (
     build_all,
     declaration_for,
     dependency_closure_violations,
+    extract_workflow_trigger_paths,
     main,
     publication_violations,
     publish_artifacts_to_oci,
+    publish_item_to_ghcr,
     reconcile_registry,
     redact_secrets,
     validate_dependency_closure,
+    validate_workflow_trigger_coverage,
+    verify_immutable_version_digest,
 )
 
 EXPECTED_COMPONENTS = {
@@ -119,8 +129,11 @@ def test_build_all_creates_content_addressed_manifests(tmp_path: Path) -> None:
 
     assert {item["component_id"] for item in results} == EXPECTED_COMPONENTS
     for item in results:
+        cid = item["component_id"]
+        version = item["component_version"]
         digest = item["artifact"]["digest"]
         assert digest.startswith("sha256:")
+        assert digest == COMPONENT_VERSION_DIGESTS[(cid, version)]
         manifest = output / digest / "canonical.json"
         assert manifest.is_file()
         assert manifest.read_bytes()
@@ -975,3 +988,334 @@ def test_publication_violations_reporting_is_deterministic(
     assert first
     assert first == second
     assert first == sorted(set(first))
+
+
+# ---------------------------------------------------------------------------
+# Workflow trigger coverage & immutable version->digest lock (recovered slice)
+# ---------------------------------------------------------------------------
+
+
+def _write_workflow_with_triggers(
+    path: Path, pr_paths: list[str], push_paths: list[str]
+) -> Path:
+    pr_lines = "\n".join(f'      - "{p}"' for p in pr_paths)
+    push_lines = "\n".join(f'      - "{p}"' for p in push_paths)
+    path.write_text(
+        "name: Publish component artifacts\n\n"
+        "on:\n"
+        "  pull_request:\n"
+        "    branches: [main]\n"
+        f"    paths:\n{pr_lines}\n"
+        "  push:\n"
+        "    branches: [main]\n"
+        f"    paths:\n{push_lines}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_workflow_trigger_coverage_is_complete_for_all_nine_components(
+    tmp_path: Path,
+) -> None:
+    validate_workflow_trigger_coverage(
+        WORKFLOW_PATH, COMPONENT_ROOTS, events=("pull_request",)
+    )
+
+    triggers = extract_workflow_trigger_paths(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    assert "src/tenant_authority/**" in triggers["pull_request"]
+    assert "src/saga/**" in triggers["pull_request"]
+    assert "src/idempotency/**" in triggers["pull_request"]
+    assert "src/*_service/**" in triggers["pull_request"]
+
+    complete_workflow = _write_workflow_with_triggers(
+        tmp_path / "publish-component-artifacts.yml",
+        triggers["pull_request"],
+        triggers["pull_request"],
+    )
+    validate_workflow_trigger_coverage(complete_workflow, COMPONENT_ROOTS)
+
+    if "src/tenant_authority/**" in triggers.get(
+        "push", []
+    ) and "src/saga/**" in triggers.get("push", []):
+        validate_workflow_trigger_coverage(WORKFLOW_PATH, COMPONENT_ROOTS)
+    else:
+        with pytest.raises(
+            ValueError,
+            match=r"on\.push\.paths does not cover component 'tenant_authority'",
+        ):
+            validate_workflow_trigger_coverage(WORKFLOW_PATH, COMPONENT_ROOTS)
+
+
+@pytest.mark.parametrize(
+    ("event", "omitted_pattern", "expected_component"),
+    [
+        ("push", "src/tenant_authority/**", "tenant_authority"),
+        ("push", "src/saga/**", "saga"),
+        ("push", "src/idempotency/**", "idempotency"),
+        ("push", "src/*_service/**", "authorization"),
+        ("pull_request", "src/tenant_authority/**", "tenant_authority"),
+        ("pull_request", "src/saga/**", "saga"),
+        ("pull_request", "src/idempotency/**", "idempotency"),
+        ("pull_request", "src/*_service/**", "booking"),
+    ],
+)
+def test_workflow_trigger_validation_fails_closed_when_source_root_omitted(
+    tmp_path: Path,
+    event: str,
+    omitted_pattern: str,
+    expected_component: str,
+) -> None:
+    base_triggers = extract_workflow_trigger_paths(
+        WORKFLOW_PATH.read_text(encoding="utf-8")
+    )
+    full_paths = list(base_triggers["pull_request"])
+    triggers = {
+        "pull_request": list(full_paths),
+        "push": list(full_paths),
+    }
+    triggers[event] = [p for p in triggers[event] if p != omitted_pattern]
+
+    workflow_copy = _write_workflow_with_triggers(
+        tmp_path / "publish-component-artifacts.yml",
+        triggers["pull_request"],
+        triggers["push"],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=rf"on\.{event}\.paths does not cover component '{expected_component}'",
+    ):
+        validate_workflow_trigger_coverage(workflow_copy, COMPONENT_ROOTS)
+
+
+def test_workflow_trigger_validation_fails_closed_on_new_or_changed_component_root() -> (
+    None
+):
+    drifted_roots = dict(COMPONENT_ROOTS)
+    drifted_roots["tenant_authority"] = Path("src/tenant_authority_v2")
+
+    with pytest.raises(
+        ValueError,
+        match=r"on\.pull_request\.paths does not cover component 'tenant_authority'",
+    ):
+        validate_workflow_trigger_coverage(WORKFLOW_PATH, drifted_roots)
+
+
+def test_workflow_trigger_validation_rejects_non_recursive_or_overbroad_globs(
+    tmp_path: Path,
+) -> None:
+    workflow_copy = _write_workflow_with_triggers(
+        tmp_path / "publish-component-artifacts.yml",
+        ["src/**"],
+        ["src/tenant_authority/*"],
+    )
+
+    with pytest.raises(ValueError, match="workflow trigger coverage violation"):
+        validate_workflow_trigger_coverage(workflow_copy, COMPONENT_ROOTS)
+
+
+def test_locked_version_digests_cover_exact_registered_inventory(
+    repo_root: Path,
+) -> None:
+    registry = load_registry(root=repo_root)
+    expected_keys = {(cid, registry.version(cid)) for cid in registry.component_ids}
+    assert set(COMPONENT_VERSION_DIGESTS) == expected_keys
+
+
+def test_same_component_and_version_cannot_silently_point_to_different_content(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    repo_copy = tmp_path / "repo"
+    repo_copy.mkdir()
+    shutil.copytree(repo_root / "factory", repo_copy / "factory")
+    shutil.copytree(repo_root / "components", repo_copy / "components")
+    for root in COMPONENT_ROOTS.values():
+        shutil.copytree(repo_root / root, repo_copy / root)
+
+    target_file = repo_copy / "src" / "tenant_authority" / "__init__.py"
+    target_file.write_text(
+        target_file.read_text(encoding="utf-8") + "\n# mutated content\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"immutable publication violation: tenant_authority@0\.1\.0 "
+            r"resolved to digest 'sha256:[0-9a-f]{64}', expected locked digest"
+        ),
+    ):
+        build_all(repo_copy, tmp_path / "out")
+
+
+def test_unpinned_component_version_is_rejected_fail_closed() -> None:
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"immutable publication violation: tenant_authority@9\.9\.9 "
+            r"has no locked canonical digest"
+        ),
+    ):
+        verify_immutable_version_digest(
+            "tenant_authority",
+            "9.9.9",
+            "sha256:" + "a" * 64,
+        )
+
+
+def test_existing_publication_manifest_conflict_fails_closed(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    output = tmp_path / "artifacts"
+    results = build_all(repo_root, output)
+
+    tampered = list(results)
+    tampered[0] = dict(tampered[0])
+    tampered[0]["artifact"] = dict(tampered[0]["artifact"])
+    tampered[0]["artifact"]["digest"] = "sha256:" + "0" * 64
+    (output / "publication-manifest.json").write_text(
+        json.dumps(tampered), encoding="utf-8"
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"immutable publication violation: existing manifest binds",
+    ):
+        build_all(repo_root, output)
+
+
+def test_bytecode_cache_in_source_root_does_not_change_canonical_digest(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    repo_copy = tmp_path / "repo"
+    repo_copy.mkdir()
+    shutil.copytree(repo_root / "factory", repo_copy / "factory")
+    shutil.copytree(repo_root / "components", repo_copy / "components")
+    for root in COMPONENT_ROOTS.values():
+        shutil.copytree(repo_root / root, repo_copy / root)
+
+    pycache = repo_copy / "src" / "tenant_authority" / "__pycache__"
+    pycache.mkdir(parents=True, exist_ok=True)
+    (pycache / "__init__.cpython-313.pyc").write_bytes(b"\x00\x01\x02\x03")
+
+    results = build_all(repo_copy, tmp_path / "out")
+    by_id = {item["component_id"]: item for item in results}
+    assert (
+        by_id["tenant_authority"]["artifact"]["digest"]
+        == COMPONENT_VERSION_DIGESTS[("tenant_authority", "0.1.0")]
+    )
+
+
+def test_publish_item_to_ghcr_pushes_when_tag_not_yet_present(
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+) -> None:
+    artifacts_dir, results, _ = built_suite
+    item = results[0]
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        cmd: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(list(cmd))
+        if cmd[:3] == ["oras", "manifest", "fetch"]:
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout="", stderr="Error: not found"
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    outcome = publish_item_to_ghcr(
+        item, artifacts_root=artifacts_dir, runner=fake_runner
+    )
+    assert outcome == "published"
+    assert len(calls) == 2
+    assert calls[0][:3] == ["oras", "manifest", "fetch"]
+    assert calls[1][:2] == ["oras", "push"]
+
+
+def test_publish_item_to_ghcr_is_idempotent_when_same_digest_already_published(
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+) -> None:
+    artifacts_dir, results, _ = built_suite
+    item = results[0]
+    digest = item["artifact"]["digest"]
+    calls: list[list[str]] = []
+
+    remote_manifest = json.dumps(
+        {
+            "schemaVersion": 2,
+            "layers": [
+                {
+                    "mediaType": CANONICAL_MANIFEST_MEDIA_TYPE,
+                    "digest": digest,
+                }
+            ],
+        }
+    )
+
+    def fake_runner(
+        cmd: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout=remote_manifest, stderr="")
+
+    outcome = publish_item_to_ghcr(
+        item, artifacts_root=artifacts_dir, runner=fake_runner
+    )
+    assert outcome == "already_published"
+    assert len(calls) == 1
+    assert calls[0][:3] == ["oras", "manifest", "fetch"]
+
+
+def test_publish_item_to_ghcr_refuses_to_overwrite_existing_tag_with_different_digest(
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+) -> None:
+    artifacts_dir, results, _ = built_suite
+    item = results[0]
+    calls: list[list[str]] = []
+
+    remote_manifest = json.dumps(
+        {
+            "schemaVersion": 2,
+            "layers": [
+                {
+                    "mediaType": CANONICAL_MANIFEST_MEDIA_TYPE,
+                    "digest": "sha256:" + "f" * 64,
+                }
+            ],
+        }
+    )
+
+    def fake_runner(
+        cmd: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout=remote_manifest, stderr="")
+
+    with pytest.raises(
+        ValueError,
+        match=r"immutable publication violation .* refusing to overwrite",
+    ):
+        publish_item_to_ghcr(item, artifacts_root=artifacts_dir, runner=fake_runner)
+
+    assert len(calls) == 1
+    assert calls[0][:3] == ["oras", "manifest", "fetch"]
+
+
+def test_publish_item_to_ghcr_fails_closed_on_registry_inspection_error(
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+) -> None:
+    artifacts_dir, results, _ = built_suite
+    item = results[0]
+
+    def fake_runner(
+        cmd: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            cmd, 1, stdout="", stderr="response status code 403: Forbidden"
+        )
+
+    with pytest.raises(RuntimeError, match="failed to inspect existing GHCR tag"):
+        publish_item_to_ghcr(item, artifacts_root=artifacts_dir, runner=fake_runner)

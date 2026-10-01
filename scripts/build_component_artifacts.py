@@ -28,13 +28,15 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 import tarfile
 import tempfile
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from fnmatch import fnmatchcase
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from component_registry import (
@@ -78,6 +80,52 @@ COMPONENT_ROOTS: dict[str, Path] = {
 }
 
 APPROVED_COMPONENT_IDS: frozenset[str] = frozenset(COMPONENT_ROOTS)
+
+WORKFLOW_PATH = Path(".github/workflows/publish-component-artifacts.yml")
+
+#: Immutable content-addressed digest lock for each registered
+#: ``(component_id, component_version)`` source-package artifact. A given
+#: ``(component_id, component_version)`` cannot silently point to different
+#: artifact content: changing component source requires an explicit
+#: ``component_version`` bump and corresponding digest lock update.
+COMPONENT_VERSION_DIGESTS: dict[tuple[str, str], str] = {
+    ("authorization", "0.1.0"): (
+        "sha256:98463d8d1e7eadbd843a457f8fc11818b425bc6237802ff0aa031b49f07bf211"
+    ),
+    ("booking", "0.1.0"): (
+        "sha256:03ac4b88cacb311c5447385c039abc41ee11ac19db482b6b3711c2d482384d6e"
+    ),
+    ("commerce", "0.2.0"): (
+        "sha256:bf2d23fabcce4a755b465f597d9f35ee437724331347ea6a11b8c730e0e8ff35"
+    ),
+    ("idempotency", "0.1.0"): (
+        "sha256:7980398597cd4cbab1052c09c8c1efc05424c637ac1c3fb819aae5c6bd308988"
+    ),
+    ("identity", "0.3.0"): (
+        "sha256:e0d77dbeefff0a07dd0605555334dfed81714b7b6b5154d5d29c667f3817c40c"
+    ),
+    ("learning", "0.3.0"): (
+        "sha256:e7c28a27d50ef5a99110aa9e02a68126e2316cc1a3687ae44b7fd3c8502bc82c"
+    ),
+    ("records", "0.1.0"): (
+        "sha256:0912156cf1b124b0b49feccc37a047427ca5b62a8877f59c47714d2a45e721f1"
+    ),
+    ("saga", "0.1.0"): (
+        "sha256:cdd548b073ec8e1db790624ab036cde003cb79f424491290dc21430f2221d2ed"
+    ),
+    ("tenant_authority", "0.1.0"): (
+        "sha256:60d817d9febf648aee54e43c6f6c2ea8d040039a06ad9d601efd4b0de7e7f80c"
+    ),
+}
+
+_SHARED_INFRA_SRC_PATTERNS = frozenset(
+    {
+        "src/factory_artifact/**",
+        "src/component_registry/**",
+    }
+)
+_REQUIRED_TRIGGER_EVENTS = ("pull_request", "push")
+_NOT_FOUND_MARKERS = ("not found", "404", "manifest unknown", "name unknown")
 
 DEFAULT_OCI_REGISTRY = "ghcr.io"
 DEFAULT_OCI_NAMESPACE = "kvasha62/application-factory"
@@ -413,6 +461,190 @@ def validate_dependency_closure(
         raise DependencyClosureError(violations)
 
 
+def extract_workflow_trigger_paths(workflow_text: str) -> dict[str, list[str]]:
+    """Extract ``on.<event>.paths`` lists from the publication workflow YAML."""
+    triggers: dict[str, list[str]] = {}
+    in_on = False
+    current_event: str | None = None
+    in_paths = False
+
+    for raw_line in workflow_text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+
+        if indent == 0:
+            in_on = stripped == "on:"
+            current_event = None
+            in_paths = False
+            continue
+
+        if not in_on:
+            continue
+
+        if indent == 2 and stripped.endswith(":"):
+            current_event = stripped[:-1].strip()
+            triggers.setdefault(current_event, [])
+            in_paths = False
+            continue
+
+        if current_event is None:
+            continue
+
+        if indent == 4 and stripped.endswith(":"):
+            in_paths = stripped == "paths:"
+            continue
+
+        if in_paths and indent >= 6 and stripped.startswith("- "):
+            item = stripped[2:].strip()
+            if len(item) >= 2 and item[0] == item[-1] and item[0] in {'"', "'"}:
+                item = item[1:-1]
+            triggers[current_event].append(item)
+
+    return triggers
+
+
+def _pattern_covers_component_root(pattern: str, root: Path) -> bool:
+    """Return True when ``pattern`` is a recursive glob covering ``root``."""
+    if not pattern.endswith("/**"):
+        return False
+    prefix = pattern[:-3]
+    root_posix = root.as_posix()
+    prefix_parts = PurePosixPath(prefix).parts
+    root_parts = PurePosixPath(root_posix).parts
+    if len(prefix_parts) != len(root_parts):
+        return False
+    return all(
+        fnmatchcase(root_part, pat_part)
+        for root_part, pat_part in zip(root_parts, prefix_parts, strict=True)
+    )
+
+
+def validate_workflow_trigger_coverage(
+    workflow_path: Path,
+    component_roots: Mapping[str, Path] = COMPONENT_ROOTS,
+    *,
+    events: Sequence[str] = _REQUIRED_TRIGGER_EVENTS,
+) -> None:
+    """Fail closed when any component source root is missing from workflow triggers."""
+    workflow_path = Path(workflow_path)
+    if not workflow_path.is_file():
+        raise ValueError(f"publication workflow is missing: {workflow_path}")
+
+    triggers = extract_workflow_trigger_paths(workflow_path.read_text(encoding="utf-8"))
+    violations: list[str] = []
+
+    for event in events:
+        paths = triggers.get(event)
+        if not paths:
+            violations.append(f"on.{event}.paths is missing or empty")
+            continue
+
+        for component_id, root in sorted(component_roots.items()):
+            if not any(_pattern_covers_component_root(p, root) for p in paths):
+                violations.append(
+                    f"on.{event}.paths does not cover component {component_id!r} "
+                    f"source root {root.as_posix()!r}"
+                )
+
+        for pattern in paths:
+            if not pattern.startswith("src/") or pattern in _SHARED_INFRA_SRC_PATTERNS:
+                continue
+            if not any(
+                _pattern_covers_component_root(pattern, root)
+                for root in component_roots.values()
+            ):
+                violations.append(
+                    f"on.{event}.paths contains unmatched component pattern {pattern!r}"
+                )
+
+    if "pull_request" in events and "push" in events:
+        pr_src = {
+            p
+            for p in triggers.get("pull_request", [])
+            if p.startswith("src/") and p not in _SHARED_INFRA_SRC_PATTERNS
+        }
+        push_src = {
+            p
+            for p in triggers.get("push", [])
+            if p.startswith("src/") and p not in _SHARED_INFRA_SRC_PATTERNS
+        }
+        if pr_src != push_src:
+            violations.append(
+                "component source-root path patterns differ between "
+                f"pull_request ({sorted(pr_src)!r}) and push ({sorted(push_src)!r})"
+            )
+
+    if violations:
+        joined = "; ".join(violations)
+        raise ValueError(f"workflow trigger coverage violation: {joined}")
+
+
+def verify_immutable_version_digest(
+    component_id: str,
+    component_version: str,
+    digest: str,
+    *,
+    expected_version_digests: Mapping[tuple[str, str], str] = COMPONENT_VERSION_DIGESTS,
+) -> None:
+    """Fail closed if ``(component_id, component_version)`` points to unexpected content."""
+    key = (component_id, component_version)
+    expected = expected_version_digests.get(key)
+    if expected is None:
+        raise ValueError(
+            f"immutable publication violation: {component_id}@{component_version} "
+            "has no locked canonical digest in COMPONENT_VERSION_DIGESTS"
+        )
+    if digest != expected:
+        raise ValueError(
+            f"immutable publication violation: {component_id}@{component_version} "
+            f"resolved to digest {digest!r}, expected locked digest {expected!r}; "
+            "same (component_id, component_version) cannot point to different "
+            "artifact content"
+        )
+
+
+def _check_existing_manifest_immutability(
+    manifest_path: Path,
+    component_id: str,
+    component_version: str,
+    digest: str,
+) -> None:
+    """Refuse to overwrite an existing publication-manifest entry with different content."""
+    if not manifest_path.is_file():
+        return
+    try:
+        existing_items = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"existing publication manifest is unreadable: {manifest_path}"
+        ) from exc
+
+    if not isinstance(existing_items, list):
+        raise TypeError(
+            f"existing publication manifest must be a JSON list: {manifest_path}"
+        )
+
+    for item in existing_items:
+        if not isinstance(item, Mapping):
+            continue
+        if (
+            item.get("component_id") == component_id
+            and item.get("component_version") == component_version
+        ):
+            artifact = item.get("artifact")
+            existing_digest = (
+                artifact.get("digest") if isinstance(artifact, Mapping) else None
+            )
+            if existing_digest != digest:
+                raise ValueError(
+                    f"immutable publication violation: existing manifest binds "
+                    f"{component_id}@{component_version} to {existing_digest!r}, "
+                    f"refusing to reassign to {digest!r}"
+                )
+
+
 def _physical_executable(path: Path) -> bool:
     mode = path.stat().st_mode
     if mode & stat.S_IXUSR:
@@ -712,6 +944,9 @@ def build_all(
     artifact_type: str = "source_package",
     oci_registry: str = DEFAULT_OCI_REGISTRY,
     oci_namespace: str = DEFAULT_OCI_NAMESPACE,
+    expected_version_digests: (
+        Mapping[tuple[str, str], str] | None
+    ) = COMPONENT_VERSION_DIGESTS,
 ) -> list[dict[str, Any]]:
     """Build canonical manifests and deterministic OCI layouts for all 9 components."""
     repository_root = Path(repository_root)
@@ -731,6 +966,7 @@ def build_all(
         component_roots=COMPONENT_ROOTS,
     )
 
+    manifest_path = output_root / "publication-manifest.json"
     results: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory() as staging_base:
         staging_root = Path(staging_base)
@@ -777,6 +1013,24 @@ def build_all(
                 canonical_manifest_bytes=canonical_bytes,
             )
 
+            version = registry.version(component_id)
+            if (
+                artifact_type == "source_package"
+                and expected_version_digests is not None
+            ):
+                verify_immutable_version_digest(
+                    component_id,
+                    version,
+                    descriptor.digest,
+                    expected_version_digests=expected_version_digests,
+                )
+            _check_existing_manifest_immutability(
+                manifest_path,
+                component_id,
+                version,
+                descriptor.digest,
+            )
+
             metadata = registry_metadata(descriptor)
             canonical_file = output_root / descriptor.digest / "canonical.json"
             canonical_file.parent.mkdir(parents=True, exist_ok=True)
@@ -784,7 +1038,7 @@ def build_all(
 
             oci_info = build_oci_artifact_layout(
                 component_id=component_id,
-                component_version=registry.version(component_id),
+                component_version=version,
                 descriptor=descriptor,
                 canonical_bytes=canonical_bytes,
                 package_tar_bytes=tar_bytes,
@@ -797,7 +1051,7 @@ def build_all(
             results.append(
                 {
                     "component_id": component_id,
-                    "component_version": registry.version(component_id),
+                    "component_version": version,
                     "artifact": metadata,
                     "source_root": COMPONENT_ROOTS[component_id].as_posix(),
                     "canonical": canonical,
@@ -805,7 +1059,6 @@ def build_all(
                 }
             )
 
-    manifest_path = output_root / "publication-manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
         json.dumps(results, sort_keys=True, indent=2, ensure_ascii=False) + "\n",
@@ -1104,6 +1357,117 @@ def publish_artifacts_to_oci(
         )
 
     return records
+
+
+def publish_item_to_ghcr(
+    item: Mapping[str, Any],
+    *,
+    artifacts_root: Path = Path("factory/artifacts"),
+    expected_version_digests: Mapping[tuple[str, str], str] = COMPONENT_VERSION_DIGESTS,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> str:
+    """Publish one built component artifact to GHCR with fail-closed immutability."""
+    component = str(item["component_id"])
+    version = str(item["component_version"])
+    artifact = item["artifact"]
+    if not isinstance(artifact, Mapping):
+        raise TypeError(f"{component}: artifact metadata must be a mapping")
+    digest = str(artifact["digest"])
+    root = str(item["source_root"])
+
+    if component not in COMPONENT_ROOTS:
+        raise ValueError(f"unknown component {component!r}")
+    if root != COMPONENT_ROOTS[component].as_posix():
+        raise ValueError(
+            f"{component}: source_root {root!r} does not match "
+            f"{COMPONENT_ROOTS[component].as_posix()!r}"
+        )
+
+    verify_immutable_version_digest(
+        component,
+        version,
+        digest,
+        expected_version_digests=expected_version_digests,
+    )
+
+    canonical_path = Path(artifacts_root) / digest / "canonical.json"
+    if not canonical_path.is_file():
+        raise ValueError(
+            f"{component}: canonical manifest is missing: {canonical_path}"
+        )
+    actual_digest = _sha256_digest(canonical_path.read_bytes())
+    if actual_digest != digest:
+        raise ValueError(
+            f"{component}: canonical manifest digest mismatch: "
+            f"expected {digest!r}, got {actual_digest!r}"
+        )
+
+    target = f"{DEFAULT_OCI_REGISTRY}/{DEFAULT_OCI_NAMESPACE}/{component}"
+    reference = f"{target}:{version}"
+
+    fetch_proc = runner(
+        ["oras", "manifest", "fetch", reference],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if fetch_proc.returncode == 0:
+        try:
+            remote_manifest = json.loads(fetch_proc.stdout)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"{reference}: remote OCI manifest is not valid JSON"
+            ) from exc
+
+        layers = (
+            remote_manifest.get("layers")
+            if isinstance(remote_manifest, Mapping)
+            else None
+        )
+        if not isinstance(layers, list):
+            raise ValueError(f"{reference}: remote OCI manifest has no layers list")
+
+        canonical_layers = [
+            layer
+            for layer in layers
+            if isinstance(layer, Mapping)
+            and layer.get("mediaType") == CANONICAL_MANIFEST_MEDIA_TYPE
+        ]
+        if len(canonical_layers) != 1:
+            raise ValueError(
+                f"{reference}: expected exactly 1 canonical manifest layer, "
+                f"found {len(canonical_layers)}"
+            )
+        remote_digest = canonical_layers[0].get("digest")
+        if remote_digest != digest:
+            raise ValueError(
+                f"immutable publication violation for {reference}: remote tag "
+                f"already points to canonical digest {remote_digest!r}, refusing "
+                f"to overwrite with {digest!r}"
+            )
+        return "already_published"
+
+    stderr_lower = (fetch_proc.stderr or "").lower()
+    if not any(marker in stderr_lower for marker in _NOT_FOUND_MARKERS):
+        raise RuntimeError(
+            f"failed to inspect existing GHCR tag {reference}: "
+            f"{(fetch_proc.stderr or '').strip()}"
+        )
+
+    manifest_arg = f"factory/artifacts/{digest}/canonical.json"
+    runner(
+        [
+            "oras",
+            "push",
+            reference,
+            "--artifact-type",
+            SOURCE_PACKAGE_OCI_ARTIFACT_TYPE,
+            f"{manifest_arg}:{CANONICAL_MANIFEST_MEDIA_TYPE}",
+            f"{root}:{SOURCE_PACKAGE_LAYER_MEDIA_TYPE}",
+        ],
+        check=True,
+    )
+    return "published"
 
 
 def _component_has_migrations(repository_root: Path, component_id: str) -> bool:
