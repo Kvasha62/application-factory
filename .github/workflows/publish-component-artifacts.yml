@@ -10,6 +10,8 @@ on:
       - "tests/test_component_artifact_publication.py"
       - "components/**"
       - "src/*_service/**"
+      - "src/tenant_authority/**"
+      - "src/saga/**"
       - "src/idempotency/**"
       - "factory/registry/**"
       - ".github/workflows/publish-component-artifacts.yml"
