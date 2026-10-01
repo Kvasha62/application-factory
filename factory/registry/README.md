@@ -679,6 +679,15 @@ D&O:
 - VEB как source of truth
 - runtime auto-add / first-object-only verification
 
+### 9.1.15 Production component artifact publication pipeline (Issue #127)
+
+`scripts/build_component_artifacts.py` реализует детерминированный конвейер сборки, OCI-упаковки, публикации в GHCR и fail-closed сверки реестра для явно выбранного набора из всех девяти зарегистрированных компонентов (`authorization`, `booking`, `commerce`, `idempotency`, `identity`, `learning`, `records`, `saga`, `tenant_authority`):
+
+1. **Замыкание зависимостей (Dependency closure):** перед сборкой и перед сверкой реестра проверяется, что выбранный набор совпадает с 9 зарегистрированными компонентами, каждая объявленная зависимость существует в реестре и входит в публикуемое замыкание, а её `version_range` допускает зарегистрированную SemVer-версию целевого компонента без floating selectors.
+2. **Единый источник канонизации:** каноническое представление (`source_package/v1`, `container_image/v1`), `sha256:<64 lowercase hex>` дайджест и `ArtifactDescriptor` формируются и верифицируются исключительно через `factory_artifact` (`build_source_package_canonical`, `build_container_image_canonical`, `describe_source_package`, `describe_container_image`, `verify_artifact`). Временные байткод-кэши (`__pycache__`, `.pyc`, `.pyo`) исключаются при формировании изолированного sealed root.
+3. **Детерминированные OCI-артефакты и публикация в GHCR:** для каждого компонента формируется детерминированный OCI Image Layout v1.0.0 (`oci/<component_id>/`) и digest-addressed ссылка `ghcr.io/kvasha62/application-factory/<component_id>@sha256:<hex>`. Мутабельные теги и floating selectors никогда не являются авторитетным идентификатором.
+4. **Правдивая сверка реестра (Registry reconciliation):** обновление `artifact` и `lifecycle` через `reconcile_registry` допускается только после успешной публикации и проверки дайджестов всех 9 компонентов. При успешной проверке снимается блокер `deployment_artifact_absent` и выставляется `deployable: true`, однако отсутствие миграций (`migrations_absent`) не фабрикуется и сохраняется явно (`publishable: false`). Если учётные данные или доступ к GHCR отсутствуют, внешняя публикация не имитируется, а записи в `factory/registry/component_registry.json` сохраняют честное состояние `artifact_type: none`, `deployable: false`, `publishable: false`.
+
 ---
 
 ## 10. Lifecycle
