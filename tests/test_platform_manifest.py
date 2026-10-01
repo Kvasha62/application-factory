@@ -27,6 +27,7 @@ from component_registry import REGISTRY_PATH, load_registry
 from component_registry.errors import RegistryValidationError
 from component_registry.registry import Registry
 from component_registry.schema import SCHEMA_PATH as REGISTRY_SCHEMA_PATH
+from factory_artifact import canonical_manifest_reference
 from platform_manifest import (
     LIFECYCLE_ORDER,
     LIFECYCLE_STATES,
@@ -756,7 +757,15 @@ def _registry_variant_with_artifact(
 
 @pytest.fixture
 def published_artifact_registry(registry) -> Registry:
-    """Registry where ``tenant_authority`` publishes a pinned artifact."""
+    """Registry where ``tenant_authority`` publishes a pinned artifact.
+
+    A published artifact must also carry the content-addressed canonical
+    manifest reference the registry contract requires
+    (``factory/registry/README.md`` §9.1.6). It is derived from the digest so
+    the fixture cannot drift from the identity it declares; the manifest still
+    inherits only ``artifact_type``, ``digest`` and ``canonical_form``
+    (§9.1.9), so this adds nothing to the manifest contract.
+    """
     return _registry_variant_with_artifact(
         registry,
         "tenant_authority",
@@ -764,6 +773,7 @@ def published_artifact_registry(registry) -> Registry:
         digest=PUBLISHED_DIGEST,
         pinned=True,
         canonical_form="container_image/v1",
+        canonical_manifest=canonical_manifest_reference(PUBLISHED_DIGEST),
     )
 
 
