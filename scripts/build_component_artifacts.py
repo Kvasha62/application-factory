@@ -87,7 +87,9 @@ def build_all(repository_root: Path, output_root: Path) -> list[dict[str, Any]]:
     if registered != expected:
         missing = sorted(expected - registered)
         extra = sorted(registered - expected)
-        raise ValueError(\n            f"component set mismatch: missing={missing!r}, extra={extra!r}"\n        )
+        raise ValueError(
+            f"component set mismatch: missing={missing!r}, extra={extra!r}"
+        )
 
     results: list[dict[str, Any]] = []
     for component_id in sorted(COMPONENT_ROOTS):
