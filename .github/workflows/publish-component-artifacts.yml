@@ -23,6 +23,8 @@ on:
       - "scripts/build_component_artifacts.py"
       - "components/**"
       - "src/*_service/**"
+      - "src/tenant_authority/**"
+      - "src/saga/**"
       - "src/idempotency/**"
       - "factory/registry/**"
       - ".github/workflows/publish-component-artifacts.yml"
@@ -62,25 +64,11 @@ jobs:
 
           python - <<'PY'
           import json
-          import subprocess
           from pathlib import Path
+
+          from scripts.build_component_artifacts import publish_item_to_ghcr
 
           items = json.loads(Path("factory/artifacts/publication-manifest.json").read_text())
           for item in items:
-              component = item["component_id"]
-              version = item["component_version"]
-              digest = item["artifact"]["digest"]
-              root = item["source_root"]
-              manifest = f"factory/artifacts/{digest}/canonical.json"
-              target = f"ghcr.io/kvasha62/application-factory/{component}"
-              subprocess.run(
-                  [
-                      "oras", "push", f"{target}:{version}",
-                      "--artifact-type",
-                      "application/vnd.application-factory.component.source-package.v1",
-                      manifest + ":application/vnd.application-factory.canonical-manifest.v1+json",
-                      root + ":application/vnd.application-factory.source-package.v1+tar",
-                  ],
-                  check=True,
-              )
+              publish_item_to_ghcr(item)
           PY
