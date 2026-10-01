@@ -34,7 +34,7 @@ def test_component_source_root_exists(component_id: str) -> None:
 
 
 @pytest.mark.parametrize("component_id", sorted(EXPECTED_COMPONENTS))
-def test_component_declaration_covers_every_physical_entry(component_id: str) -> None:
+def test_component_declaration_covers_every_physical_entry(\n    component_id: str,\n) -> None:
     root = COMPONENT_ROOTS[component_id]
     declaration = declaration_for(root)
 
@@ -91,7 +91,7 @@ def test_publication_manifest_contains_no_lifecycle_claims(tmp_path: Path) -> No
         assert "publishability_blockers" not in item["artifact"]
 
 
-def test_unknown_component_set_is_not_silently_accepted(monkeypatch, tmp_path: Path) -> None:
+def test_unknown_component_set_is_not_silently_accepted(\n    monkeypatch, tmp_path: Path\n) -> None:
     monkeypatch.setitem(COMPONENT_ROOTS, "unexpected", Path("src"))
     with pytest.raises(ValueError, match="component set mismatch"):
         build_all(Path.cwd(), tmp_path / "artifacts")
