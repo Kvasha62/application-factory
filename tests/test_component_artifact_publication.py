@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -68,7 +67,7 @@ def test_build_all_creates_content_addressed_manifests(tmp_path: Path) -> None:
 
 
 def test_build_all_is_deterministic(tmp_path: Path) -> None:
-    repository_root = Path(".").resolve()
+    repository_root = Path.cwd()
     first = tmp_path / "first"
     second = tmp_path / "second"
 
