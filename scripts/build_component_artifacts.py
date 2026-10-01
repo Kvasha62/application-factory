@@ -1,9 +1,4 @@
-"""Build deterministic source-package artifacts for the nine registered components.
-
-The script is intentionally a build/publish preparation boundary:
-component selection is explicit, the source roots are explicit, canonicalization
-is delegated to factory_artifact, and no registry lifecycle claim is made here.
-"""
+"""Build deterministic source-package artifacts for the nine registered components."""
 
 from __future__ import annotations
 
@@ -14,8 +9,9 @@ import stat
 from pathlib import Path
 from typing import Any
 
-from factory_artifact import describe_source_package, registry_metadata
 from component_registry import load_registry
+from factory_artifact import describe_source_package, registry_metadata
+from factory_artifact.source_package import build_source_package_canonical
 
 COMPONENT_ROOTS = {
     "authorization": Path("src/authorization_service"),
@@ -29,8 +25,21 @@ COMPONENT_ROOTS = {
     "booking": Path("src/booking_service"),
 }
 
-_EXECUTABLE_SUFFIXES = {".py", ".pyc", ".pyo", ".pyd", ".so", ".dll", ".dylib", ".exe"}
-_MACH_O_MAGICS = {bytes.fromhex("feedfacf"), bytes.fromhex("feedface"), bytes.fromhex("cafebabe")}
+_EXECUTABLE_SUFFIXES = {
+    ".py",
+    ".pyc",
+    ".pyo",
+    ".pyd",
+    ".so",
+    ".dll",
+    ".dylib",
+    ".exe",
+}
+_MACH_O_MAGICS = {
+    bytes.fromhex("feedfacf"),
+    bytes.fromhex("feedface"),
+    bytes.fromhex("cafebabe"),
+}
 
 
 def _physical_executable(path: Path) -> bool:
@@ -46,12 +55,7 @@ def _physical_executable(path: Path) -> bool:
 
 
 def declaration_for(root: Path) -> dict[str, dict[str, bool]]:
-    """Derive a complete Factory declaration for one sealed source root.
-
-    The sealed root contains only the component-owned source package, so every
-    entry is owned by that component. Executability is measured from the
-    physical entry using the same conservative signals as source canonicalization.
-    """
+    """Derive the complete Factory declaration for one sealed source root."""
     root = Path(root)
     if not root.is_dir():
         raise ValueError(f"component source root is missing: {root}")
@@ -62,10 +66,7 @@ def declaration_for(root: Path) -> dict[str, dict[str, bool]]:
         for name in sorted(dirnames):
             path = directory_path / name
             relative = path.relative_to(root).as_posix()
-            if path.is_symlink():
-                declaration[relative] = {"owned": True, "executable": False}
-            else:
-                declaration[relative] = {"owned": True, "executable": False}
+            declaration[relative] = {"owned": True, "executable": False}
         for name in sorted(filenames):
             path = directory_path / name
             relative = path.relative_to(root).as_posix()
@@ -94,15 +95,8 @@ def build_all(repository_root: Path, output_root: Path) -> list[dict[str, Any]]:
         declaration = declaration_for(root)
         descriptor = describe_source_package(root, declaration)
         metadata = registry_metadata(descriptor)
-        manifest = json.loads(
-            (root / "__init__.py").read_text(encoding="utf-8")
-        ) if False else None
         canonical_dir = output_root / descriptor.digest / "canonical.json"
         canonical_dir.parent.mkdir(parents=True, exist_ok=True)
-
-        # Rebuild the canonical representation once so the stored bytes are
-        # exactly the bytes whose SHA-256 produced descriptor.digest.
-        from factory_artifact.source_package import build_source_package_canonical
 
         canonical, canonical_bytes, recomputed = build_source_package_canonical(
             root, declaration
@@ -133,11 +127,7 @@ def build_all(repository_root: Path, output_root: Path) -> list[dict[str, Any]]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path("."))
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("factory/artifacts"),
-    )
+    parser.add_argument("--output", type=Path, default=Path("factory/artifacts"))
     args = parser.parse_args()
     build_all(args.root, args.root / args.output)
     return 0

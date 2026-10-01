@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.build_component_artifacts import COMPONENT_ROOTS, build_all, declaration_for
+from scripts.build_component_artifacts import (\n    COMPONENT_ROOTS,\n    build_all,\n    declaration_for,\n)
 
 
 EXPECTED_COMPONENTS = {
@@ -44,7 +44,7 @@ def test_component_declaration_covers_every_physical_entry(component_id: str) ->
 
 
 def test_build_all_creates_content_addressed_manifests(tmp_path: Path) -> None:
-    repository_root = Path(".").resolve()
+    repository_root = Path.cwd()
     output = tmp_path / "artifacts"
 
     results = build_all(repository_root, output)
