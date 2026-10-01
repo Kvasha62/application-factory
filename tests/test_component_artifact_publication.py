@@ -10,7 +10,6 @@ from scripts.build_component_artifacts import (
     declaration_for,
 )
 
-
 EXPECTED_COMPONENTS = {
     "authorization",
     "identity",
@@ -85,7 +84,7 @@ def test_build_all_is_deterministic(tmp_path: Path) -> None:
 
 
 def test_publication_manifest_contains_no_lifecycle_claims(tmp_path: Path) -> None:
-    results = build_all(Path(".").resolve(), tmp_path / "artifacts")
+    results = build_all(Path.cwd(), tmp_path / "artifacts")
     for item in results:
         assert "deployable" not in item["artifact"]
         assert "publishable" not in item["artifact"]
