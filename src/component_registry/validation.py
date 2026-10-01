@@ -83,6 +83,34 @@ COMPATIBILITY_POINTER = "/compatibility_policy"
 _CLAUSE_RE = re.compile(r"^(==|>=|<=|>|<)(?P<version>.+)$")
 _DIGEST_RE = re.compile(r"^(sha256:)?[0-9a-f]{64}$")
 
+#: Content-addressed canonical manifest reference
+#: (``factory/registry/README.md`` §9.1.4). The form without the ``sha256:``
+#: prefix is forbidden, so it is not expressible here.
+#:
+#: The Factory owns this form — :mod:`factory_artifact.descriptor` is the
+#: normative definition and derives every reference from the digest. Slice A
+#: keeps the registry implementation free of first-party imports, so the form
+#: is restated here, and
+#: ``tests/test_component_registry_artifact_identity.py`` pins the two
+#: definitions together so they cannot drift apart.
+_CANONICAL_MANIFEST_TEMPLATE = "factory/artifacts/{digest}/canonical.json"
+_CANONICAL_MANIFEST_RE = re.compile(
+    r"^factory/artifacts/sha256:[0-9a-f]{64}/canonical\.json$"
+)
+
+
+def _canonical_manifest_reference(digest: str) -> str:
+    """Derive the content-addressed canonical manifest reference for a digest.
+
+    Mirrors :func:`factory_artifact.descriptor.canonical_manifest_reference`:
+    the reference is a function of the digest, so a published artifact has
+    exactly one legal spelling.
+    """
+    return _CANONICAL_MANIFEST_TEMPLATE.format(
+        digest=f"sha256:{digest.removeprefix('sha256:')}"
+    )
+
+
 #: A URL-ish scheme prefix: ``https:``, ``file:``, ``C:`` — never a repository
 #: relative path.
 _SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
@@ -715,6 +743,7 @@ def _artifact_errors(entry: Mapping, path: str) -> list[str]:
         )
     pinned = artifact.get("pinned")
     canonical_form = artifact.get("canonical_form")
+    canonical_manifest = artifact.get("canonical_manifest")
 
     if artifact_type == "none":
         if digest is not None:
@@ -728,6 +757,10 @@ def _artifact_errors(entry: Mapping, path: str) -> list[str]:
         if canonical_form is not None:
             errors.append(
                 f"{path}.artifact.canonical_form: artifact_type 'none' must not declare a canonical form"
+            )
+        if canonical_manifest is not None:
+            errors.append(
+                f"{path}.artifact.canonical_manifest: artifact_type 'none' must not declare a canonical manifest reference"
             )
     elif artifact_type == "source_package":
         if not isinstance(digest, str) or _DIGEST_RE.fullmatch(digest) is None:
@@ -754,6 +787,58 @@ def _artifact_errors(entry: Mapping, path: str) -> list[str]:
         if canonical_form != "container_image/v1":
             errors.append(
                 f"{path}.artifact.canonical_form: container_image requires 'container_image/v1'"
+            )
+
+    if artifact_type in {"source_package", "container_image"}:
+        errors.extend(_canonical_manifest_errors(path, digest, canonical_manifest))
+
+    return errors
+
+
+def _canonical_manifest_errors(
+    path: str,
+    digest: object,
+    canonical_manifest: object,
+) -> list[str]:
+    """Validate the content-addressed canonical manifest reference.
+
+    The reference is *derived* from the digest
+    (``factory/registry/README.md`` §9.1.4, §9.1.6), so a published artifact
+    has exactly one legal spelling. A reference that is missing, floating,
+    malformed, or bound to a different digest is metadata that does not
+    describe an immutable artifact — and the registry must not record it.
+
+    The reference form is owned by the Factory
+    (``factory_artifact.descriptor``). Slice A keeps this package free of
+    first-party imports, so the form is restated above and
+    ``tests/test_component_registry_artifact_identity.py`` pins the two
+    definitions together.
+    """
+    where = f"{path}.artifact.canonical_manifest"
+
+    if canonical_manifest is None:
+        return [
+            f"{where}: a published artifact requires the immutable content-addressed canonical manifest reference (factory/registry/README.md §9.1.6)"
+        ]
+
+    errors: list[str] = []
+    if is_floating_selector(canonical_manifest):
+        errors.append(f"{where}: {canonical_manifest!r} is a floating selector")
+
+    if (
+        not isinstance(canonical_manifest, str)
+        or _CANONICAL_MANIFEST_RE.fullmatch(canonical_manifest) is None
+    ):
+        errors.append(
+            f"{where}: {canonical_manifest!r} is not an immutable content-addressed reference of the form 'factory/artifacts/sha256:<64 lowercase hex>/canonical.json'"
+        )
+        return errors
+
+    if isinstance(digest, str) and _DIGEST_RE.fullmatch(digest) is not None:
+        expected = _canonical_manifest_reference(digest)
+        if canonical_manifest != expected:
+            errors.append(
+                f"{where}: {canonical_manifest!r} is not bound to the declared digest {digest!r}; expected {expected!r}"
             )
     return errors
 
