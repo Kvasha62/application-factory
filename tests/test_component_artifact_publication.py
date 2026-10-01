@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from scripts.build_component_artifacts import (\n    COMPONENT_ROOTS,\n    build_all,\n    declaration_for,\n)
+from scripts.build_component_artifacts import (
+    COMPONENT_ROOTS,
+    build_all,
+    declaration_for,
+)
 
 
 EXPECTED_COMPONENTS = {
