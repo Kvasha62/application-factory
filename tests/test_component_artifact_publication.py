@@ -94,4 +94,4 @@ def test_publication_manifest_contains_no_lifecycle_claims(tmp_path: Path) -> No
 def test_unknown_component_set_is_not_silently_accepted(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setitem(COMPONENT_ROOTS, "unexpected", Path("src"))
     with pytest.raises(ValueError, match="component set mismatch"):
-        build_all(Path(".").resolve(), tmp_path / "artifacts")
+        build_all(Path.cwd(), tmp_path / "artifacts")
