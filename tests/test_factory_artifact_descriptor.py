@@ -796,3 +796,157 @@ def test_a_container_image_descriptor_carries_its_layer_digests(
     assert image.layer_digests == tuple(layer_digests)
     assert len(image.layer_digests) == 2
     assert all(item.startswith("sha256:") for item in image.layer_digests)
+
+
+# ---------------------------------------------------------------------------
+# Corrective: complete reporting, unhashable input, malformed declaration
+#
+# These three groups defend the fail-closed contract of the metadata and
+# verification boundaries themselves — the code that decides whether an
+# artifact is accepted must report every defect it can see and must never let
+# an unexpected exception from malformed external input decide the outcome.
+# ---------------------------------------------------------------------------
+
+
+def test_an_unknown_artifact_type_reports_every_violated_field() -> None:
+    """An unsupported type does not excuse the other broken identity fields.
+
+    ``_identity_violations`` promises *every* violation of the block, so a
+    metadata block that is wrong in five ways must report five violations —
+    not stop at the first one.
+    """
+    violations = registry_metadata_violations(
+        {
+            "artifact_type": "unknown",
+            "digest": None,
+            "pinned": False,
+            "canonical_form": "wrong",
+            "canonical_manifest": None,
+        }
+    )
+
+    reported = "\n".join(violations)
+    for field in (
+        "artifact_type",
+        "digest",
+        "pinned",
+        "canonical_form",
+        "canonical_manifest",
+    ):
+        assert (
+            f"artifact.{field}:" in reported
+        ), f"{field} was not reported; got:\n{reported}"
+    assert len(violations) >= 5
+
+
+def test_an_unknown_artifact_type_with_a_valid_digest_still_reports_it_all() -> None:
+    """A well-formed digest must not mask the unpinned/inconsistent fields."""
+    digest = "sha256:" + "1" * 64
+    violations = registry_metadata_violations(
+        {
+            "artifact_type": "tarball",
+            "digest": digest,
+            "pinned": False,
+            "canonical_form": "source_package/v1",
+            "canonical_manifest": canonical_manifest_reference(digest),
+        }
+    )
+
+    reported = "\n".join(violations)
+    assert "artifact.artifact_type:" in reported
+    assert "artifact.pinned:" in reported
+    assert "artifact.canonical_form:" in reported
+    # The reference *is* correctly bound, so it must not be reported as broken.
+    assert "artifact.canonical_manifest:" not in reported
+
+
+@pytest.mark.parametrize("unhashable", [[], {}, {"unexpected": "mapping"}])
+def test_an_unhashable_artifact_type_fails_closed(unhashable: object) -> None:
+    """``[]``/``{}`` must yield an identity violation, not a ``TypeError``."""
+    block = {
+        "artifact_type": unhashable,
+        "digest": None,
+        "pinned": False,
+        "canonical_form": None,
+        "canonical_manifest": None,
+    }
+
+    violations = registry_metadata_violations(block)
+    assert any("artifact.artifact_type:" in item for item in violations)
+
+    with pytest.raises(ArtifactMetadataError):
+        descriptor_from_registry_metadata(block)
+
+    with pytest.raises(ArtifactMetadataError):
+        ArtifactDescriptor(
+            artifact_type=unhashable,  # type: ignore[arg-type]
+            canonical_form="source_package/v1",
+            digest="sha256:" + "a" * 64,
+            canonical_manifest=canonical_manifest_reference("sha256:" + "a" * 64),
+        )
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [None, 5, object()],
+    ids=["None", "int", "bare-object"],
+)
+def test_a_malformed_source_declaration_fails_closed(
+    package_root: Path, package, declaration: object
+) -> None:
+    """The verifier is a trust boundary: no structural error may escape it."""
+    violations = artifact_violations(package_root, package, declaration)  # type: ignore[arg-type]
+
+    assert violations, "a malformed declaration must not verify"
+    assert any("Factory declaration is malformed" in item for item in violations)
+    assert any("could not be derived" in item for item in violations)
+    with pytest.raises(ArtifactVerificationError):
+        verify_artifact(package_root, package, declaration)  # type: ignore[arg-type]
+
+
+def test_a_declaration_list_shadowing_the_physical_paths_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """A sequence whose items equal the physical paths reaches ``.items()``.
+
+    ``build_source_package_canonical`` compares ``set(declaration)`` first, so
+    a list only survives to ``declaration.items()`` when it enumerates exactly
+    the physical entries — the shape that raises ``AttributeError`` rather than
+    the builder's own mismatch error.
+    """
+    root = tmp_path / "shadow"
+    root.mkdir()
+    (root / "app.txt").write_bytes(b"app")
+    declaration = {"app.txt": {"owned": True, "executable": False}}
+    descriptor = describe_source_package(root, declaration)
+
+    violations = artifact_violations(root, descriptor, ["app.txt"])  # type: ignore[arg-type]
+
+    assert violations
+    assert any("Factory declaration is malformed" in item for item in violations)
+    assert any("AttributeError" in item for item in violations)
+    with pytest.raises(ArtifactVerificationError):
+        verify_artifact(root, descriptor, ["app.txt"])  # type: ignore[arg-type]
+
+
+def test_a_malformed_image_declaration_fails_closed(image_root: Path, image) -> None:
+    """The image builder guards its own declaration; that path stays intact."""
+    violations = artifact_violations(image_root, image, None)  # type: ignore[arg-type]
+
+    assert violations
+    assert any("factory declaration must be a mapping" in item for item in violations)
+    with pytest.raises(ArtifactVerificationError):
+        verify_artifact(image_root, image, None)  # type: ignore[arg-type]
+
+
+def test_a_valid_declaration_still_verifies_after_the_boundary_hardening(
+    package_root: Path, package_declaration: dict[str, dict[str, bool]], package
+) -> None:
+    """Fail-closed hardening must not turn honest artifacts into rejections."""
+    assert violations_for(package_root, package, package_declaration) == []
+    assert verify_artifact(package_root, package, package_declaration) is package
+
+
+def test_a_valid_image_declaration_still_verifies(image_root: Path, image) -> None:
+    assert violations_for(image_root, image, image_declaration()) == []
+    assert verify_artifact(image_root, image, image_declaration()) is image

@@ -174,20 +174,28 @@ def _identity_violations(
 ) -> list[str]:
     """Return every violation of one published-artifact identity block.
 
-    The checks are ordered so that a report reads from the most basic defect
-    (there is no published artifact at all) to the most specific (the
-    canonical manifest reference is not bound to the declared digest).
+    Every field is checked independently, so a block that is wrong in several
+    ways reports all of them rather than only the first: an unsupported
+    ``artifact_type`` does not excuse a missing digest, an unpinned artifact or
+    a malformed canonical manifest reference.
+
+    ``artifact_type`` is external input, so it is type-checked before it is
+    used as a mapping key: an unhashable value such as ``[]`` or ``{}`` yields
+    an ordinary identity violation instead of a ``TypeError``.
     """
     errors: list[str] = []
 
-    if artifact_type not in CANONICAL_FORMS:
+    if not isinstance(artifact_type, str) or artifact_type not in CANONICAL_FORMS:
         errors.append(
             f"{where}.artifact_type: {artifact_type!r} is not a published "
             "artifact type; 'none' publishes no artifact and has no descriptor"
         )
-        return errors
 
-    expected_form = CANONICAL_FORMS[artifact_type]
+    # ``.get`` needs a hashable key, and an unhashable artifact_type has no
+    # canonical form to look up.
+    expected_form = (
+        CANONICAL_FORMS.get(artifact_type) if isinstance(artifact_type, str) else None
+    )
 
     if digest is None:
         errors.append(
@@ -207,7 +215,13 @@ def _identity_violations(
             "selectable only by its immutable digest"
         )
 
-    if canonical_form != expected_form:
+    if expected_form is None:
+        errors.append(
+            f"{where}.canonical_form: {canonical_form!r} cannot correspond to "
+            f"artifact_type {artifact_type!r}, which is not a published "
+            "artifact type"
+        )
+    elif canonical_form != expected_form:
         errors.append(
             f"{where}.canonical_form: {canonical_form!r} does not match "
             f"artifact_type {artifact_type!r}, which requires {expected_form!r}"
@@ -523,6 +537,19 @@ def artifact_violations(
             errors.append(
                 "artifact: the canonical representation could not be derived: "
                 f"{error}"
+            )
+        except (TypeError, KeyError, AttributeError) as error:
+            # ``build_source_package_canonical`` accepts only a mapping
+            # declaration and has no structural guard of its own, so malformed
+            # external input (``None``, a list, a bare object) surfaces here as
+            # an ordinary structural error. The verifier is a fail-closed trust
+            # boundary: it converts that into a violation instead of letting an
+            # unexpected exception decide the outcome. ``build_container_image_canonical``
+            # guards its own declaration and never reaches this branch.
+            errors.append(
+                "artifact: the Factory declaration is malformed, so the "
+                f"canonical representation could not be derived: "
+                f"{type(error).__name__}: {error}"
             )
         except OSError as error:
             errors.append(f"artifact: the sealed artifact is unreadable: {error}")
