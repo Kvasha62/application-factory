@@ -5,14 +5,19 @@ and fail-closed registry reconciliation (Issue #127).
 
 from __future__ import annotations
 
+import base64
 import copy
 import dataclasses
+import hashlib
+import io
 import json
 import shutil
-import subprocess
 import urllib.error
+import urllib.request
+from email.message import Message
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -35,14 +40,15 @@ from scripts.build_component_artifacts import (
     PublicationBlockedError,
     PublicationRecord,
     PublicationVerificationError,
+    _RefuseRedirects,
     build_all,
     declaration_for,
     dependency_closure_violations,
     extract_workflow_trigger_paths,
+    load_publication_layout,
     main,
     publication_violations,
     publish_artifacts_to_oci,
-    publish_item_to_ghcr,
     reconcile_registry,
     redact_secrets,
     validate_dependency_closure,
@@ -1209,113 +1215,798 @@ def test_bytecode_cache_in_source_root_does_not_change_canonical_digest(
     )
 
 
-def test_publish_item_to_ghcr_pushes_when_tag_not_yet_present(
-    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
-) -> None:
-    artifacts_dir, results, _ = built_suite
-    item = results[0]
-    calls: list[list[str]] = []
+# ---------------------------------------------------------------------------
+# S1: deterministic digest-addressed publication (GHCRHTTPTransport, records)
+# ---------------------------------------------------------------------------
 
-    def fake_runner(
-        cmd: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        calls.append(list(cmd))
-        if cmd[:3] == ["oras", "manifest", "fetch"]:
-            return subprocess.CompletedProcess(
-                cmd, 1, stdout="", stderr="Error: not found"
+
+class _FakeResponse:
+    """Minimal urllib response double for transport tests."""
+
+    def __init__(self, status: int, headers: dict[str, str], body: bytes = b"") -> None:
+        self.status = status
+        self.headers = headers
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        return False
+
+
+def _http_error(
+    url: str, code: int, headers: dict[str, str] | None = None, body: bytes = b""
+) -> urllib.error.HTTPError:
+    msg = Message()
+    for key, value in (headers or {}).items():
+        msg[key] = value
+    return urllib.error.HTTPError(
+        url, code, f"HTTP Error {code}", msg, io.BytesIO(body)
+    )
+
+
+def test_transport_follows_401_challenge_with_scoped_token_exchange() -> None:
+    """OCI token authentication: 401 challenge -> one scoped exchange -> retry."""
+    calls: list[str] = []
+    challenge = 'Bearer realm="https://ghcr.io/token",service="ghcr.io"'
+
+    def opener(req, timeout=None):
+        url = req.full_url
+        calls.append(url)
+        auth = req.get_header("Authorization")
+        if "ghcr.io/token" in url:
+            assert auth is not None and auth.startswith("Basic ")
+            username, _, token = (
+                base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8").partition(":")
             )
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            assert username == "publisher"
+            assert token == "raw-workflow-token"
+            query = parse_qs(urlparse(url).query)
+            assert query["service"] == ["ghcr.io"]
+            assert query["scope"] == [
+                "repository:kvasha62/application-factory/authorization:pull,push"
+            ]
+            return _FakeResponse(
+                200, {}, json.dumps({"token": "scoped-registry-token"}).encode()
+            )
+        if auth == "Bearer raw-workflow-token":
+            raise _http_error(url, 401, {"WWW-Authenticate": challenge})
+        assert auth == "Bearer scoped-registry-token"
+        return _FakeResponse(200, {}, b"remote-manifest-bytes")
 
-    outcome = publish_item_to_ghcr(
-        item, artifacts_root=artifacts_dir, runner=fake_runner
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token",
+        username="publisher",
+        opener=opener,
     )
-    assert outcome == "published"
-    assert len(calls) == 2
-    assert calls[0][:3] == ["oras", "manifest", "fetch"]
-    assert calls[1][:2] == ["oras", "push"]
-
-
-def test_publish_item_to_ghcr_is_idempotent_when_same_digest_already_published(
-    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
-) -> None:
-    artifacts_dir, results, _ = built_suite
-    item = results[0]
-    digest = item["artifact"]["digest"]
-    calls: list[list[str]] = []
-
-    remote_manifest = json.dumps(
-        {
-            "schemaVersion": 2,
-            "layers": [
-                {
-                    "mediaType": CANONICAL_MANIFEST_MEDIA_TYPE,
-                    "digest": digest,
-                }
-            ],
-        }
+    digest = "sha256:" + "0" * 64
+    body = transport.fetch_manifest(
+        "ghcr.io/kvasha62/application-factory/authorization", digest
     )
+    assert body == b"remote-manifest-bytes"
+    assert calls[0].endswith(f"/manifests/{digest}")
+    assert "ghcr.io/token" in calls[1]
+    assert calls[2].endswith(f"/manifests/{digest}")
 
-    def fake_runner(
-        cmd: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        calls.append(list(cmd))
-        return subprocess.CompletedProcess(cmd, 0, stdout=remote_manifest, stderr="")
 
-    outcome = publish_item_to_ghcr(
-        item, artifacts_root=artifacts_dir, runner=fake_runner
+def test_transport_never_retries_without_challenge_or_after_failed_exchange() -> None:
+    """401 without a usable challenge must block; no silent retry loops."""
+    digest = "sha256:" + "1" * 64
+
+    def bare_401_opener(req, timeout=None):
+        raise _http_error(req.full_url, 401, {})
+
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token", username="u", opener=bare_401_opener
     )
-    assert outcome == "already_published"
-    assert len(calls) == 1
-    assert calls[0][:3] == ["oras", "manifest", "fetch"]
+    with pytest.raises(PublicationBlockedError, match=r"failed \(401\): unauthorized"):
+        transport.fetch_blob("ghcr.io/kvasha62/application-factory/saga", digest)
 
-
-def test_publish_item_to_ghcr_refuses_to_overwrite_existing_tag_with_different_digest(
-    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
-) -> None:
-    artifacts_dir, results, _ = built_suite
-    item = results[0]
-    calls: list[list[str]] = []
-
-    remote_manifest = json.dumps(
-        {
-            "schemaVersion": 2,
-            "layers": [
-                {
-                    "mediaType": CANONICAL_MANIFEST_MEDIA_TYPE,
-                    "digest": "sha256:" + "f" * 64,
-                }
-            ],
-        }
-    )
-
-    def fake_runner(
-        cmd: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        calls.append(list(cmd))
-        return subprocess.CompletedProcess(cmd, 0, stdout=remote_manifest, stderr="")
-
-    with pytest.raises(
-        ValueError,
-        match=r"immutable publication violation .* refusing to overwrite",
-    ):
-        publish_item_to_ghcr(item, artifacts_root=artifacts_dir, runner=fake_runner)
-
-    assert len(calls) == 1
-    assert calls[0][:3] == ["oras", "manifest", "fetch"]
-
-
-def test_publish_item_to_ghcr_fails_closed_on_registry_inspection_error(
-    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
-) -> None:
-    artifacts_dir, results, _ = built_suite
-    item = results[0]
-
-    def fake_runner(
-        cmd: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(
-            cmd, 1, stdout="", stderr="response status code 403: Forbidden"
+    def challenge_without_realm(req, timeout=None):
+        if "ghcr.io/token" in req.full_url:
+            raise _http_error(req.full_url, 401, {}, b"nope")
+        raise _http_error(
+            req.full_url,
+            401,
+            {"WWW-Authenticate": 'Bearer service="ghcr.io"'},
         )
 
-    with pytest.raises(RuntimeError, match="failed to inspect existing GHCR tag"):
-        publish_item_to_ghcr(item, artifacts_root=artifacts_dir, runner=fake_runner)
+    transport2 = GHCRHTTPTransport(
+        token="raw-workflow-token", username="u", opener=challenge_without_realm
+    )
+    with pytest.raises(PublicationBlockedError, match="carries no realm"):
+        transport2.fetch_blob("ghcr.io/kvasha62/application-factory/saga", digest)
+
+
+def test_exchange_failure_redacts_credentials(tmp_path: Path) -> None:
+    secret = "ghp_LEAKTESTVALUE0123456789abcdefABCDEF"
+
+    def opener(req, timeout=None):
+        raise _http_error(
+            req.full_url,
+            500,
+            {},
+            f"upstream saw Authorization: Bearer {secret}".encode(),
+        )
+
+    transport = GHCRHTTPTransport(token=secret, username="u", opener=opener)
+    with pytest.raises(PublicationBlockedError) as excinfo:
+        transport.fetch_blob(
+            "ghcr.io/kvasha62/application-factory/saga", "sha256:" + "2" * 64
+        )
+    assert secret not in str(excinfo.value)
+
+
+def test_remote_manifest_bytes_hash_to_recorded_identity_fields(
+    repo_root: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """InMemory parity: sha256(pushed manifest bytes) == oci_manifest_digest and
+    the canonical layer digest == artifact digest; every descriptor size matches."""
+    import hashlib
+
+    artifacts_dir = tmp_path_factory.mktemp("s1_registry")
+    results = build_all(repo_root, artifacts_dir)
+    oci = InMemoryOCIRegistry()
+    records = publish_artifacts_to_oci(
+        results, artifacts_root=artifacts_dir, transport=oci
+    )
+    assert len(records) == 9
+    for record in records:
+        manifest_bytes = oci.manifests[
+            (record.registry_repository, record.oci_manifest_digest)
+        ]
+        assert "sha256:" + hashlib.sha256(manifest_bytes).hexdigest() == (
+            record.oci_manifest_digest
+        )
+        document = json.loads(manifest_bytes)
+        canonical_layers = [
+            layer
+            for layer in document["layers"]
+            if layer["mediaType"] == CANONICAL_MANIFEST_MEDIA_TYPE
+        ]
+        assert len(canonical_layers) == 1
+        assert canonical_layers[0]["digest"] == record.artifact["digest"]
+        for descriptor in [document["config"], *document["layers"]]:
+            blob = oci.blobs[(record.registry_repository, descriptor["digest"])]
+            assert descriptor["size"] == len(blob)
+        expected = f"{record.registry_repository}@{record.artifact['digest']}"
+        assert record.digest_reference == expected
+        assert record.oci_digest_reference == (
+            f"{record.registry_repository}@{record.oci_manifest_digest}"
+        )
+        assert record.oci_digest_reference != record.digest_reference
+
+
+def test_swapped_digest_and_oci_references_are_rejected(
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+    registry_doc: dict[str, Any],
+    repo_root: Path,
+) -> None:
+    """digest_reference and oci_digest_reference are distinct identities."""
+    artifacts_dir, _, records = built_suite
+    broken = [dataclasses.asdict(record) for record in records]
+    broken[0]["digest_reference"], broken[0]["oci_digest_reference"] = (
+        broken[0]["oci_digest_reference"],
+        broken[0]["digest_reference"],
+    )
+    violations = publication_violations(
+        registry_doc,
+        broken,
+        repository_root=repo_root,
+        artifacts_root=artifacts_dir,
+    )
+    assert any("digest_reference" in violation for violation in violations)
+    assert any("oci_digest_reference" in violation for violation in violations)
+
+
+def test_build_all_oci_layout_is_reproducible_across_runs(
+    repo_root: Path, tmp_path: Path
+) -> None:
+    """S1 relies on identical manifest digests from independent builds."""
+    first = build_all(repo_root, tmp_path / "a")
+    second = build_all(repo_root, tmp_path / "b")
+    identity = lambda item: (
+        item["component_id"],
+        item["component_version"],
+        item["artifact"],
+        item["oci"],
+    )
+    assert [identity(item) for item in first] == [identity(item) for item in second]
+    for item in first:
+        layout_a = tmp_path / "a" / item["oci"]["layout_path"] / "blobs" / "sha256"
+        layout_b = tmp_path / "b" / item["oci"]["layout_path"] / "blobs" / "sha256"
+        assert sorted(p.name for p in layout_a.iterdir()) == sorted(
+            p.name for p in layout_b.iterdir()
+        )
+        for blob in layout_a.iterdir():
+            assert blob.read_bytes() == (layout_b / blob.name).read_bytes()
+
+
+def test_write_records_round_trip_is_accepted_by_publication_violations(
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+    registry_doc: dict[str, Any],
+    repo_root: Path,
+    tmp_path: Path,
+) -> None:
+    """publication-records.json is canonical JSON and reconcilable as mappings."""
+    artifacts_dir, _, records = built_suite
+    payload = [dataclasses.asdict(record) for record in records]
+    text = json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+    (tmp_path / "publication-records.json").write_text(text, encoding="utf-8")
+    loaded = json.loads((tmp_path / "publication-records.json").read_text())
+    assert len(loaded) == 9
+    assert all(entry["authority_tag"] is None for entry in loaded)
+    assert all(
+        entry["published"] is True and entry["verified"] is True for entry in loaded
+    )
+    violations = publication_violations(
+        registry_doc,
+        loaded,
+        repository_root=repo_root,
+        artifacts_root=artifacts_dir,
+    )
+    assert violations == []
+
+
+def test_publish_workflow_uses_deterministic_digest_addressed_path() -> None:
+    """T1 workflow lint: Path B only. No ORAS client, no tags, no tag publish."""
+    text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "--publish-ghcr" in text
+    assert "--write-records factory/artifacts/publication-records.json" in text
+    assert "github.event_name == 'push' && github.ref == 'refs/heads/main'" in text
+    assert "packages: write" in text
+    assert "packages: read" not in text  # write scope is on the publish leg only
+    # The publish step itself speaks only the deterministic digest path.
+    publish_step = text.split(
+        "- name: Publish deterministic OCI artifacts to GHCR by digest", 1
+    )[1]
+    publish_step = publish_step.split("- name: Archive generated artifacts", 1)[0]
+    low = publish_step.lower()
+    for forbidden in (
+        "oras",
+        "publish_item_to_ghcr",
+        "login",
+        "docker",
+        "tag",
+        "latest",
+        "reconcile",
+    ):
+        assert forbidden not in low, f"publish step must not reference {forbidden!r}"
+
+
+def test_publish_workflow_splits_write_scope_into_dedicated_job() -> None:
+    """T1b permission split: only the publication job may hold packages: write."""
+    text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    workflow_permissions, jobs = text.split("jobs:", 1)
+    # Workflow default: read-only; no registry scope anywhere near it.
+    assert "permissions:\n  contents: read" in workflow_permissions
+    assert "packages" not in workflow_permissions.split("permissions:", 1)[1]
+    build_job, publish_job = jobs.split("\n  publish-by-digest:", 1)
+    # The build/verify job (also the PR leg) is strictly read-only: it must
+    # never hold a packages scope nor see the registry token nor publish.
+    assert "packages: write" not in build_job
+    assert (
+        "packages:" not in build_job.split("permissions:", 1)[1].split("steps:", 1)[0]
+    )
+    assert "GHCR_TOKEN" not in build_job
+    assert "--publish-ghcr" not in build_job
+    # The publication job must consume the transferred exact bytes: the
+    # --from-layout seam (no rebuild, no overwrite) is on its publish command
+    # and on that command only.
+    assert "--from-layout" in publish_job
+    assert "from-layout" not in build_job
+    # The publication job: explicit minimal scope, gated to main, and chained
+    # behind the verified build through the workflow artifact transfer only.
+    assert "needs: build-and-verify" in publish_job
+    assert "contents: read" in publish_job
+    assert "packages: write" in publish_job
+    assert (
+        "if: github.event_name == 'push' && github.ref == 'refs/heads/main'"
+        in publish_job
+    )
+    assert "actions/upload-artifact@v4" in build_job
+    assert "actions/download-artifact@v4" in publish_job
+    assert build_job.count("name: deterministic-oci-layout") == 1
+    assert publish_job.count("name: deterministic-oci-layout") == 1
+    # Evidence archive naming/retention preserved on both legs; exactly one
+    # evidence upload per event type (pull request: build job; push: publish).
+    evidence = "component-artifacts-${{ github.sha }}"
+    assert build_job.count(evidence) == 1 and publish_job.count(evidence) == 1
+    assert "retention-days: 90" in build_job and "retention-days: 90" in publish_job
+    assert "retention-days: 1" in build_job  # transfer artifact is ephemeral
+
+
+def test_cli_write_records_requires_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(SystemExit):
+        main(["--output", "/tmp/s1-unused", "--write-records", "/tmp/s1-rec.json"])
+
+
+def test_cli_write_records_not_created_when_blocked(
+    monkeypatch: pytest.MonkeyPatch, repo_root: Path, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("GHCR_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    records_path = tmp_path / "publication-records.json"
+    with pytest.raises(PublicationBlockedError, match="ghcr_credentials_unavailable"):
+        main(
+            [
+                "--root",
+                str(repo_root),
+                "--output",
+                str(tmp_path / "artifacts"),
+                "--publish-ghcr",
+                "--write-records",
+                str(records_path),
+            ]
+        )
+    assert not records_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Follow-up mutation 5949538008: exact-bytes layout seam (T8), auth trust
+# boundary (T9), and full-token redaction on generic error paths (T10).
+# ---------------------------------------------------------------------------
+
+
+def _dir_fingerprint(root: Path) -> dict[str, str]:
+    return {
+        str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def test_from_layout_loader_reproduces_publish_inputs(
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+) -> None:
+    """T8a: loaded entries == build_all data; publishing them replays records."""
+    artifacts_dir, results, records = built_suite
+    loaded = load_publication_layout(artifacts_dir)
+    assert len(loaded) == 9
+    by_id = {item["component_id"]: item for item in results}
+    for entry in loaded:
+        original = by_id[str(entry["component_id"])]
+        assert entry["component_version"] == original["component_version"]
+        assert entry["artifact"] == original["artifact"]
+        assert entry["oci"] == original["oci"]
+    replayed = publish_artifacts_to_oci(
+        loaded, artifacts_root=artifacts_dir, transport=InMemoryOCIRegistry()
+    )
+    assert [dataclasses.asdict(rec) for rec in replayed] == [
+        dataclasses.asdict(rec) for rec in records
+    ]
+
+
+def test_from_layout_loader_is_read_only(
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+) -> None:
+    artifacts_dir, _, _ = built_suite
+    before = _dir_fingerprint(artifacts_dir)
+    load_publication_layout(artifacts_dir)
+    assert _dir_fingerprint(artifacts_dir) == before
+
+
+def test_from_layout_cli_publishes_bytes_without_touching_layout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+) -> None:
+    """T8b: a blocked --from-layout run writes nothing at all (no rebuild)."""
+    artifacts_dir, _, _ = built_suite
+    downloaded = tmp_path / "downloaded"
+    shutil.copytree(artifacts_dir, downloaded)
+    before = _dir_fingerprint(downloaded)
+    records_path = tmp_path / "records.json"
+    monkeypatch.delenv("GHCR_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    with pytest.raises(PublicationBlockedError, match="ghcr_credentials_unavailable"):
+        main(
+            [
+                "--output",
+                str(downloaded),
+                "--from-layout",
+                "--publish-ghcr",
+                "--write-records",
+                str(records_path),
+            ]
+        )
+    assert _dir_fingerprint(downloaded) == before
+    assert not records_path.exists()
+
+
+def test_from_layout_cli_still_requires_publication(
+    tmp_path: Path,
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+) -> None:
+    artifacts_dir, _, _ = built_suite
+    with pytest.raises(SystemExit):
+        main(["--output", str(artifacts_dir), "--from-layout"])
+
+
+def test_from_layout_loader_fails_closed_on_bad_transfers(
+    tmp_path: Path,
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+) -> None:
+    """Missing manifest, non-list, missing blobs, or wrong component set block."""
+    artifacts_dir, results, _ = built_suite
+    with pytest.raises(PublicationBlockedError, match="publication-manifest.json"):
+        load_publication_layout(tmp_path)
+
+    (tmp_path / "publication-manifest.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(PublicationBlockedError, match="not a list"):
+        load_publication_layout(tmp_path)
+
+    partial = tmp_path / "partial"
+    partial.mkdir()
+    subset = [item for item in results if item["component_id"] != "saga"]
+    (partial / "publication-manifest.json").write_text(
+        json.dumps(subset), encoding="utf-8"
+    )
+    with pytest.raises(PublicationBlockedError, match="layout blobs missing"):
+        load_publication_layout(partial)
+
+    complete_no_saga = tmp_path / "complete-no-saga"
+    shutil.copytree(artifacts_dir, complete_no_saga)
+    document = json.loads(
+        (complete_no_saga / "publication-manifest.json").read_text(encoding="utf-8")
+    )
+    (complete_no_saga / "publication-manifest.json").write_text(
+        json.dumps([e for e in document if e["component_id"] != "saga"]),
+        encoding="utf-8",
+    )
+    with pytest.raises(PublicationBlockedError, match="not the required nine"):
+        load_publication_layout(complete_no_saga)
+
+    removed = tmp_path / "removed-blob"
+    shutil.copytree(artifacts_dir, removed)
+    victim = next(item for item in results if item["component_id"] == "records")
+    blob = (
+        removed
+        / victim["oci"]["layout_path"]
+        / "blobs"
+        / "sha256"
+        / str(victim["artifact"]["digest"]).removeprefix("sha256:")
+    )
+    blob.unlink()
+    with pytest.raises(PublicationBlockedError, match="layout blobs missing"):
+        load_publication_layout(removed)
+
+
+def test_from_layout_publish_refuses_tampered_bytes_fail_closed(
+    tmp_path: Path,
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+) -> None:
+    """T8c: mutated transferred bytes fail the local integrity seam, not the
+    registry: publication raises before a single write is attempted."""
+    artifacts_dir, results, _ = built_suite
+    copied = tmp_path / "tampered"
+    shutil.copytree(artifacts_dir, copied)
+    victim = next(item for item in results if item["component_id"] == "saga")
+    blob = (
+        copied
+        / victim["oci"]["layout_path"]
+        / "blobs"
+        / "sha256"
+        / str(victim["artifact"]["digest"]).removeprefix("sha256:")
+    )
+    blob.write_bytes(b"tampered mid-transfer")
+    loaded = load_publication_layout(copied)
+    transport = _RecordingTransport()
+    entry = next(item for item in loaded if item["component_id"] == "saga")
+    with pytest.raises(PublicationVerificationError, match="integrity mismatch"):
+        publish_artifacts_to_oci([entry], artifacts_root=copied, transport=transport)
+    assert transport.calls == []
+
+
+@pytest.mark.parametrize(
+    ("challenge", "match"),
+    [
+        ('Basic realm="https://ghcr.io/token"', "not Bearer"),
+        ('Bearer realm="http://ghcr.io/token"', "untrusted realm"),
+        ('Bearer realm="https://token.attacker.example/token"', "untrusted realm"),
+        ('Bearer realm="https://ghcr.io:8443/token"', "untrusted realm"),
+        ('Bearer realm="https://ghcr.io@attacker.example/token"', "untrusted realm"),
+        ('Bearer realm="/token"', "untrusted realm"),
+    ],
+)
+def test_transport_refuses_untrusted_realms_without_network(
+    challenge: str, match: str
+) -> None:
+    """T9: attacker-controlled challenges block publication pre-network."""
+    attempted: list[str] = []
+
+    def opener(req, timeout=None):
+        if req.full_url.startswith("https://ghcr.io/v2/"):
+            raise _http_error(req.full_url, 401, {"WWW-Authenticate": challenge})
+        attempted.append(req.full_url)
+        raise AssertionError(f"credentials sent to untrusted realm: {req.full_url}")
+
+    transport = GHCRHTTPTransport(token="raw-workflow-token", opener=opener)
+    with pytest.raises(PublicationBlockedError, match=match) as excinfo:
+        transport.fetch_manifest(
+            "ghcr.io/kvasha62/application-factory/saga", "sha256:" + "1" * 64
+        )
+    assert attempted == []
+    assert "raw-workflow-token" not in str(excinfo.value)
+
+
+def test_transport_trusted_host_override_is_explicit_only() -> None:
+    """T9b: allowlist is per-transport; defaults refuse the override host."""
+    exchanged = "scoped-token-for-override"
+
+    def opener(req, timeout=None):
+        if "token.test/token" in req.full_url:
+            return _FakeResponse(200, {}, json.dumps({"token": exchanged}).encode())
+        assert req.full_url.startswith("https://token.test/v2/")
+        if req.get_header("Authorization") == f"Bearer {exchanged}":
+            return _FakeResponse(200, {}, b"manifest-after-overridden-trust")
+        raise _http_error(
+            req.full_url,
+            401,
+            {"WWW-Authenticate": 'Bearer realm="https://token.test/token"'},
+        )
+
+    trusted = GHCRHTTPTransport(
+        token="raw-workflow-token",
+        base_url="https://token.test",
+        opener=opener,
+        trusted_token_hosts=("token.test",),
+    )
+    body = trusted.fetch_manifest("token.test/o/r", "sha256:" + "2" * 64)
+    assert body == b"manifest-after-overridden-trust"
+
+    refused = GHCRHTTPTransport(
+        token="raw-workflow-token",
+        base_url="https://token.test",
+        opener=opener,
+    )
+    with pytest.raises(PublicationBlockedError, match="untrusted realm"):
+        refused.fetch_manifest("token.test/o/r", "sha256:" + "2" * 64)
+
+
+def test_unreachable_send_error_redacts_both_workflow_and_exchanged_tokens() -> None:
+    """T10a: generic transport errors scrub the workflow token AND the bearer."""
+    workflow_token = "wf-" + "s" * 24
+    exchanged = "ex-" + "t" * 24
+    state = {"calls": 0}
+
+    def opener(req, timeout=None):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise _http_error(
+                req.full_url,
+                401,
+                {"WWW-Authenticate": 'Bearer realm="https://ghcr.io/token"'},
+            )
+        if state["calls"] == 2:
+            return _FakeResponse(200, {}, json.dumps({"token": exchanged}).encode())
+        auth = req.get_header("Authorization")
+        raise urllib.error.URLError(
+            f"connection reset (echo auth={auth} raw={workflow_token})"
+        )
+
+    transport = GHCRHTTPTransport(token=workflow_token, opener=opener)
+    with pytest.raises(PublicationBlockedError) as excinfo:
+        transport.fetch_manifest("ghcr.io/o/r", "sha256:" + "3" * 64)
+    message = str(excinfo.value)
+    assert workflow_token not in message
+    assert exchanged not in message
+    assert "<REDACTED>" in message
+    assert "ghcr_unreachable" in message
+
+
+def test_http_error_after_exchange_redacts_exchanged_token() -> None:
+    """T10b: a registry 5xx echoing the bearer header must not leak it."""
+    workflow_token = "wf2-" + "u" * 24
+    exchanged = "ex2-" + "v" * 24
+    state = {"calls": 0}
+
+    def opener(req, timeout=None):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise _http_error(
+                req.full_url,
+                401,
+                {"WWW-Authenticate": 'Bearer realm="https://ghcr.io/token"'},
+            )
+        if state["calls"] == 2:
+            return _FakeResponse(200, {}, json.dumps({"token": exchanged}).encode())
+        raise _http_error(
+            f"{req.full_url}; bearer={exchanged}",
+            500,
+            {},
+            f"server saw Bearer {exchanged}".encode(),
+        )
+
+    transport = GHCRHTTPTransport(token=workflow_token, opener=opener)
+    with pytest.raises(PublicationBlockedError) as excinfo:
+        transport.push_blob("ghcr.io/o/r", "sha256:" + "4" * 64, b"payload")
+    message = str(excinfo.value)
+    assert exchanged not in message
+    assert workflow_token not in message
+
+
+def test_unreadable_exchange_body_is_never_echoed() -> None:
+    """T10c: malformed token responses are replaced by a static refusal."""
+    workflow_token = "ghp_" + "w" * 30
+    leaked = "gho_" + "b" * 30
+
+    def opener(req, timeout=None):
+        if req.full_url.startswith("https://ghcr.io/v2/"):
+            raise _http_error(
+                req.full_url,
+                401,
+                {"WWW-Authenticate": 'Bearer realm="https://ghcr.io/token"'},
+            )
+        body = (
+            b'{"broken ' + workflow_token.encode() + b" and " + leaked.encode() + b"}"
+        )
+        return _FakeResponse(200, {}, body)
+
+    transport = GHCRHTTPTransport(token=workflow_token, opener=opener)
+    with pytest.raises(PublicationBlockedError) as excinfo:
+        transport.fetch_blob("ghcr.io/o/r", "sha256:" + "5" * 64)
+    message = str(excinfo.value)
+    assert "unreadable" in message
+    assert workflow_token not in message
+    assert leaked not in message
+
+
+# ---------------------------------------------------------------------------
+# Follow-up mutation 5950433186: pre-write blob integrity (T11) and the
+# upload-Location / redirect credential boundary (T12).
+# ---------------------------------------------------------------------------
+
+
+class _RecordingTransport:
+    """OCI transport double: records every attempted call."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def push_blob(self, repository: str, digest: str, data: bytes) -> None:
+        self.calls.append(("blob", digest))
+
+    def push_manifest(
+        self, repository: str, digest: str, media_type: str, data: bytes
+    ) -> None:
+        self.calls.append(("manifest", digest))
+
+    def fetch_blob(self, repository: str, digest: str) -> bytes:
+        self.calls.append(("fetch-blob", digest))
+        return b""
+
+    def fetch_manifest(self, repository: str, digest: str) -> bytes:
+        self.calls.append(("fetch-manifest", digest))
+        return b""
+
+
+@pytest.mark.parametrize(
+    "blob_key",
+    ["manifest", "config", "package", "canonical"],
+)
+def test_integrity_mismatch_blocks_before_any_registry_write(
+    tmp_path: Path,
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+    blob_key: str,
+) -> None:
+    """T11: every transferred blob type is hash-verified before first write."""
+    artifacts_dir, results, _ = built_suite
+    copied = tmp_path / f"tamper-{blob_key}"
+    shutil.copytree(artifacts_dir, copied)
+    victim = next(item for item in results if item["component_id"] == "saga")
+    oci = victim["oci"]
+    digests = {
+        "manifest": str(oci["oci_manifest_digest"]),
+        "config": str(oci["config_digest"]),
+        "package": str(oci["package_layer_digest"]),
+        "canonical": str(victim["artifact"]["digest"]),
+    }
+    blob = (
+        copied
+        / oci["layout_path"]
+        / "blobs"
+        / "sha256"
+        / digests[blob_key].removeprefix("sha256:")
+    )
+    blob.write_bytes(blob.read_bytes() + b"!")
+    loaded = load_publication_layout(copied)
+    entry = next(item for item in loaded if item["component_id"] == "saga")
+    transport = _RecordingTransport()
+    with pytest.raises(
+        PublicationVerificationError, match="integrity mismatch before any"
+    ):
+        publish_artifacts_to_oci([entry], artifacts_root=copied, transport=transport)
+    assert transport.calls == []
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "http://ghcr.io/uploads/1",
+        "https://evil.example/uploads/1",
+        "https://ghcr.io:8443/uploads/1",
+        "https://user:pw@ghcr.io/uploads/1",
+    ],
+)
+def test_push_blob_refuses_credentials_to_untrusted_upload_location(
+    location: str,
+) -> None:
+    """T12a: a hostile registry-provided Location must not receive any PUT."""
+    attempts: list[tuple[str, str]] = []
+
+    def opener(req, timeout=None):
+        attempts.append((req.get_method(), req.full_url))
+        if req.get_method() == "POST":
+            return _FakeResponse(202, {"Location": location})
+        raise AssertionError(
+            f"follow-up request to hostile upload target: {req.full_url}"
+        )
+
+    transport = GHCRHTTPTransport(token="secret-token-xyz", opener=opener)
+    with pytest.raises(
+        PublicationBlockedError, match="outside the trusted registry endpoint"
+    ):
+        transport.push_blob("ghcr.io/o/r", "sha256:" + "b" * 64, b"payload")
+    # only the initial POST happened; no PUT to the hostile Location
+    assert [m for m, _u in attempts] == ["POST"]
+
+
+def test_push_blob_relative_location_stays_on_trusted_authority() -> None:
+    """T12b: Location is resolved against the endpoint authority only."""
+    attempts: list[str] = []
+
+    def opener(req, timeout=None):
+        url = req.full_url
+        attempts.append(url)
+        if req.get_method() == "POST":
+            return _FakeResponse(202, {"Location": "//evil.example/uploads/9"})
+        return _FakeResponse(200, {}, b"")
+
+    transport = GHCRHTTPTransport(token="tok", opener=opener)
+    transport.push_blob("ghcr.io/o/r", "sha256:" + "c" * 64, b"payload")
+    assert len(attempts) == 2
+    assert attempts[0].startswith("https://ghcr.io/v2/")
+    # protocol-relative Location stays pinned to ghcr.io authority
+    assert attempts[1].startswith("https://ghcr.io/")
+    assert "evil.example" not in attempts[1].split("/")[2]
+
+
+def test_transport_never_follows_redirects() -> None:
+    """T12c: 3xx surfaces as a blocked transport error; no replayed request."""
+    attempts: list[str] = []
+
+    def opener(req, timeout=None):
+        attempts.append(req.full_url)
+        raise _http_error(
+            req.full_url,
+            302,
+            {"Location": "https://evil.example/catch"},
+        )
+
+    transport = GHCRHTTPTransport(token="tok", opener=opener)
+    with pytest.raises(PublicationBlockedError, match=r"failed \(302\)"):
+        transport.fetch_manifest("ghcr.io/o/r", "sha256:" + "d" * 64)
+    assert len(attempts) == 1
+
+    # the production default opener actively refuses redirect following
+    default = GHCRHTTPTransport(token="tok2")
+    director = default._open.__self__
+    assert any(isinstance(h, _RefuseRedirects) for h in director.handlers)
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        _RefuseRedirects().redirect_request(
+            urllib.request.Request("https://ghcr.io/x"),
+            io.BytesIO(b""),
+            302,
+            "Found",
+            Message(),
+            "https://evil.example/y",
+        )
+    assert excinfo.value.code == 302
+    assert "redirects are never followed" in str(excinfo.value)

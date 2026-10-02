@@ -24,6 +24,21 @@ The verifier never pushes, tags, deletes or otherwise mutates registry state,
 never rebuilds local artifacts as a substitute for remote content, and never
 writes credentials into its evidence output. GitHub Packages metadata is not
 consulted: only remote OCI bytes count as evidence.
+
+Two expectation sources are supported:
+
+``--mode derived`` (default): the expected OCI manifest digest for each
+component is recomputed from THIS checkout by running the repository's own
+deterministic build (``build_all``), and the fetched remote manifest must in
+additionally carry exactly one canonical-manifest layer whose descriptor
+digest equals the source-package lock in ``COMPONENT_VERSION_DIGESTS``. This
+is what proves "the bytes in GHCR are the deterministic envelope of the
+current sources", not merely "some immutable bytes exist at a pinned digest".
+
+``--mode legacy``: validates the pinned 2026-10-01 ORAS-era envelope digests
+(mirrored in ``scripts/ghcr_legacy_envelopes.json``) for explicit forensic
+re-validation of historical evidence only. It is not the default gate and is
+never a publication authority.
 """
 
 from __future__ import annotations
@@ -32,6 +47,7 @@ import argparse
 import dataclasses
 import datetime as _dt
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -45,9 +61,12 @@ from typing import Any, Protocol
 REGISTRY = "ghcr.io"
 NAMESPACE = "kvasha62/application-factory"
 
-# Exact digest-addressed references under test. These are the only references
-# this verifier will ever touch; floating tags are never consulted.
-EXPECTED_MANIFEST_DIGESTS: dict[str, str] = {
+#: Historical ORAS-era envelope digests: the 2026-10-01 tag publication built
+#: from commit c76cd983 by the removed publish_item_to_ghcr step. They are
+#: retained ONLY as explicitly requested, non-default legacy evidence (immutable
+#: content gate run 36975841017) and are never a publication authority. Floating
+#: tags are never consulted in any mode.
+LEGACY_EXPECTED_MANIFEST_DIGESTS: dict[str, str] = {
     "authorization": (
         "sha256:d3c4796fb1887e7113780a103b7352f6e36d16bc6e4bb7a3b9ddd656d84a4a0b"
     ),
@@ -74,6 +93,17 @@ EXPECTED_MANIFEST_DIGESTS: dict[str, str] = {
         "sha256:b051749621e02f5ad01be08cc565c760cdb01a1756ebba0f1cf738e99876b1db"
     ),
 }
+
+#: Back-compat alias: the pinned legacy set, no longer the default gate.
+EXPECTED_MANIFEST_DIGESTS = LEGACY_EXPECTED_MANIFEST_DIGESTS
+
+#: Media type of the canonical source-package manifest layer inside the OCI
+#: envelope; in derived mode its descriptor digest must equal the lock.
+CANONICAL_LAYER_MEDIA_TYPE = (
+    "application/vnd.application-factory.canonical-manifest.v1+json"
+)
+
+_LEGACY_FILE = Path(__file__).with_name("ghcr_legacy_envelopes.json")
 
 PASS = "PASS"
 FAIL = "FAIL"
@@ -323,9 +353,18 @@ def _verify_descriptor(
 
 
 def verify_component(
-    reader: OCIReader, component: str, expected_digest: str
+    reader: OCIReader,
+    component: str,
+    expected_digest: str,
+    *,
+    expected_canonical_lock: str | None = None,
 ) -> ComponentResult:
-    """Verify one digest-addressed artifact. Pure function of remote bytes."""
+    """Verify one digest-addressed artifact. Pure function of remote bytes.
+
+    When ``expected_canonical_lock`` is provided, the fetched manifest must
+    additionally carry exactly one canonical-manifest layer whose descriptor
+    digest equals that source-package lock (derived mode's identity binding).
+    """
     repository = repository_for(component)
     remote_ref = f"{repository}@{expected_digest}"
     reasons: list[str] = []
@@ -414,6 +453,25 @@ def verify_component(
             _verify_descriptor(reader, repository, f"layer[{index}]", layer)
         )
 
+    if expected_canonical_lock is not None:
+        canonical_layers = [
+            layer
+            for layer in layers
+            if isinstance(layer, Mapping)
+            and layer.get("mediaType") == CANONICAL_LAYER_MEDIA_TYPE
+        ]
+        if len(canonical_layers) != 1:
+            reasons.append(
+                "expected exactly one canonical-manifest layer, found "
+                f"{len(canonical_layers)}"
+            )
+        elif canonical_layers[0].get("digest") != expected_canonical_lock:
+            reasons.append(
+                f"canonical layer digest {canonical_layers[0].get('digest')!r} "
+                "does not match the source-package lock "
+                f"{expected_canonical_lock!r}"
+            )
+
     unavailable = [d for d in descriptors if d.result == "unavailable"]
     failed = [d for d in descriptors if not d.verified and d.result != "unavailable"]
     for d in failed:
@@ -445,11 +503,21 @@ def verify_component(
 
 def verify_all(
     reader: OCIReader,
-    expected: Mapping[str, str] = EXPECTED_MANIFEST_DIGESTS,
+    expected: Mapping[str, str] | None = None,
+    *,
+    canonical_locks: Mapping[str, str] | None = None,
 ) -> list[ComponentResult]:
+    expected_map = EXPECTED_MANIFEST_DIGESTS if expected is None else expected
     return [
-        verify_component(reader, component, digest)
-        for component, digest in sorted(expected.items())
+        verify_component(
+            reader,
+            component,
+            digest,
+            expected_canonical_lock=(
+                None if canonical_locks is None else canonical_locks.get(component)
+            ),
+        )
+        for component, digest in sorted(expected_map.items())
     ]
 
 
@@ -465,12 +533,17 @@ def overall_status(results: Sequence[ComponentResult]) -> str:
     return ACCESS_BLOCKED
 
 
-def render_markdown(results: Sequence[ComponentResult]) -> str:
+def render_markdown(
+    results: Sequence[ComponentResult], *, mode: str | None = None
+) -> str:
     counts = {
         c: sum(1 for r in results if r.classification == c) for c in CLASSIFICATIONS
     }
+    title = "## GHCR immutable-content verification"
+    if mode:
+        title += f" (mode: {mode})"
     lines = [
-        "## GHCR immutable-content verification",
+        title,
         "",
         (
             f"**Overall: {overall_status(results)}** — "
@@ -527,10 +600,12 @@ def write_evidence(
     output_dir: Path,
     *,
     context: Mapping[str, Any] | None = None,
+    mode: str | None = None,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     document = {
         "schema": "ghcr-immutability-verification/1",
+        "mode": mode,
         "generated_at": _dt.datetime.now(_dt.UTC).isoformat(),
         "registry": REGISTRY,
         "namespace": NAMESPACE,
@@ -543,7 +618,7 @@ def write_evidence(
         redact_secrets(text) + "\n", encoding="utf-8"
     )
     (output_dir / "verification-matrix.md").write_text(
-        render_markdown(results), encoding="utf-8"
+        render_markdown(results, mode=mode), encoding="utf-8"
     )
     return document
 
@@ -564,6 +639,49 @@ def _context_from_env() -> dict[str, str]:
     return {k: os.environ[k] for k in keys if k in os.environ}
 
 
+def derive_expected_manifest_digests(
+    repository_root: Path,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Recompute the deterministic expected OCI manifest digests and locks.
+
+    Runs the repository's own deterministic ``build_all()`` into a temporary
+    directory; the registry and the remote are never written. The expected
+    remote reference for each component is the OCI manifest digest of the
+    layout built from the checked-out sources; the lock is the content-
+    addressed source-package digest pinned by ``COMPONENT_VERSION_DIGESTS``.
+    """
+    repository_root = Path(repository_root)
+    for candidate in (repository_root, repository_root / "src"):
+        if str(candidate) not in sys.path:
+            sys.path.insert(0, str(candidate))
+    build_module = importlib.import_module("scripts.build_component_artifacts")
+    with tempfile.TemporaryDirectory(prefix="ghcr-derive-") as tmp:
+        results = build_module.build_all(repository_root, Path(tmp))
+    expected = {
+        str(item["component_id"]): str(item["oci"]["oci_manifest_digest"])
+        for item in results
+    }
+    locks = {
+        str(item["component_id"]): str(item["artifact"]["digest"]) for item in results
+    }
+    return expected, locks
+
+
+def _load_legacy_expected() -> dict[str, str]:
+    """Return the pinned legacy set, cross-checked against its JSON contract."""
+    document = json.loads(_LEGACY_FILE.read_text(encoding="utf-8"))
+    components = document.get("components") if isinstance(document, Mapping) else None
+    if not isinstance(components, Mapping) or dict(components) != dict(
+        LEGACY_EXPECTED_MANIFEST_DIGESTS
+    ):
+        msg = (
+            "legacy envelope digests diverge from "
+            f"{_LEGACY_FILE.name}; refusing legacy mode"
+        )
+        raise ValueError(msg)
+    return dict(LEGACY_EXPECTED_MANIFEST_DIGESTS)
+
+
 def main(argv: Sequence[str] | None = None, *, reader: OCIReader | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -573,14 +691,37 @@ def main(argv: Sequence[str] | None = None, *, reader: OCIReader | None = None) 
         help="directory for verification-matrix.json / .md (credential-free)",
     )
     parser.add_argument("--oras", default="oras", help="oras binary to use")
+    parser.add_argument(
+        "--mode",
+        choices=("derived", "legacy"),
+        default="derived",
+        help=(
+            "derived (default): expected OCI manifest digests and canonical-"
+            "layer locks are recomputed from this checkout's deterministic "
+            "build; legacy: pinned 2026-10-01 ORAS-era envelope digests for "
+            "explicit historical re-validation only"
+        ),
+    )
     args = parser.parse_args(argv)
 
     active_reader: OCIReader = (
         reader if reader is not None else OrasReader(oras_binary=args.oras)
     )
-    results = verify_all(active_reader)
-    document = write_evidence(results, args.output, context=_context_from_env())
-    sys.stdout.write(render_markdown(results))
+    canonical_locks: Mapping[str, str] | None = None
+    if args.mode == "derived":
+        expected, canonical_locks = derive_expected_manifest_digests(
+            Path(__file__).resolve().parents[1]
+        )
+    else:
+        expected = _load_legacy_expected()
+    results = verify_all(active_reader, expected, canonical_locks=canonical_locks)
+    document = write_evidence(
+        results,
+        args.output,
+        context={**_context_from_env(), "expected_digests_mode": args.mode},
+        mode=args.mode,
+    )
+    sys.stdout.write(render_markdown(results, mode=args.mode))
     status = document["overall"]
     sys.stdout.write(f"\nOVERALL: {status}\n")
     return 0 if status == PASS else 1
