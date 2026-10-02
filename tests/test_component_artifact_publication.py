@@ -30,6 +30,9 @@ from component_registry import (
 )
 from factory_artifact import canonical_manifest_reference
 from scripts.build_component_artifacts import (
+    _ERROR_BODY_LIMIT,
+    _READ_SCOPE_ACTIONS,
+    _WRITE_SCOPE_ACTIONS,
     APPROVED_COMPONENT_IDS,
     CANONICAL_MANIFEST_MEDIA_TYPE,
     COMPONENT_ROOTS,
@@ -1268,13 +1271,17 @@ def test_transport_follows_401_challenge_with_scoped_token_exchange() -> None:
             assert token == "raw-workflow-token"
             query = parse_qs(urlparse(url).query)
             assert query["service"] == ["ghcr.io"]
+            # This challenge carries no scope, and the attempted operation is a
+            # read (manifest fetch), so the minimum scope is derived: pull only.
             assert query["scope"] == [
-                "repository:kvasha62/application-factory/authorization:pull,push"
+                "repository:kvasha62/application-factory/authorization:pull"
             ]
             return _FakeResponse(
                 200, {}, json.dumps({"token": "scoped-registry-token"}).encode()
             )
-        if auth == "Bearer raw-workflow-token":
+        # The workflow credential is never presented as a registry bearer: the
+        # first attempt is anonymous and only the exchanged token is a bearer.
+        if auth is None:
             raise _http_error(url, 401, {"WWW-Authenticate": challenge})
         assert auth == "Bearer scoped-registry-token"
         return _FakeResponse(200, {}, b"remote-manifest-bytes")
@@ -1340,6 +1347,404 @@ def test_exchange_failure_redacts_credentials(tmp_path: Path) -> None:
             "ghcr.io/kvasha62/application-factory/saga", "sha256:" + "2" * 64
         )
     assert secret not in str(excinfo.value)
+
+
+# --- T20: challenge-first registry authentication (fail-closed) --------------
+
+
+def _bearer_challenge(
+    *,
+    realm: str = "https://ghcr.io/token",
+    scope: str | None = (
+        "repository:kvasha62/application-factory/authorization:pull,push"
+    ),
+) -> str:
+    challenge = f'Bearer realm="{realm}",service="ghcr.io"'
+    if scope is not None:
+        challenge += f',scope="{scope}"'
+    return challenge
+
+
+def test_t20_first_request_is_anonymous_and_retry_uses_exchanged_bearer() -> None:
+    """The raw workflow credential is never presented as a registry bearer."""
+    digest = "sha256:" + "a" * 64
+    registry_url = (
+        "https://ghcr.io/v2/kvasha62/application-factory/authorization"
+        f"/manifests/{digest}"
+    )
+    seen: list[tuple[str, str | None]] = []
+
+    def opener(req, timeout=None):
+        url = req.full_url
+        auth = req.get_header("Authorization")
+        seen.append((url, auth))
+        if "ghcr.io/token" in url:
+            assert auth is not None and auth.startswith("Basic ")
+            decoded = base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8")
+            assert decoded == "publisher:raw-workflow-token"
+            return _FakeResponse(
+                200, {}, json.dumps({"token": "scoped-registry-token"}).encode()
+            )
+        if auth is None:
+            raise _http_error(url, 401, {"WWW-Authenticate": _bearer_challenge()})
+        assert auth == "Bearer scoped-registry-token"
+        return _FakeResponse(200, {}, b"remote-manifest-bytes")
+
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token", username="publisher", opener=opener
+    )
+    body = transport.fetch_manifest(
+        "ghcr.io/kvasha62/application-factory/authorization", digest
+    )
+    assert body == b"remote-manifest-bytes"
+    assert seen[0] == (registry_url, None)
+    assert seen[1][0].startswith("https://ghcr.io/token?")
+    assert seen[1][1] is not None and seen[1][1].startswith("Basic ")
+    assert seen[2] == (registry_url, "Bearer scoped-registry-token")
+    assert all(auth != "Bearer raw-workflow-token" for _, auth in seen)
+
+
+def test_t20_retry_is_authorized_only_by_the_exchanged_token() -> None:
+    """Proof of provenance: the registry accepts only the exchanged bearer."""
+    digest = "sha256:" + "b" * 64
+    issued = "registry-issued-token"
+    registry_auth: list[str | None] = []
+
+    def opener(req, timeout=None):
+        url = req.full_url
+        if "ghcr.io/token" in url:
+            query = parse_qs(urlparse(url).query)
+            assert query["service"] == ["ghcr.io"]
+            assert query["scope"] == [
+                "repository:kvasha62/application-factory/saga:pull"
+            ]
+            return _FakeResponse(200, {}, json.dumps({"token": issued}).encode())
+        auth = req.get_header("Authorization")
+        registry_auth.append(auth)
+        if auth == f"Bearer {issued}":
+            return _FakeResponse(200, {}, b"ok")
+        assert auth is None, f"raw credential presented to registry: {auth!r}"
+        raise _http_error(
+            url,
+            401,
+            {
+                "WWW-Authenticate": _bearer_challenge(
+                    scope="repository:kvasha62/application-factory/saga:pull"
+                )
+            },
+        )
+
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token", username="publisher", opener=opener
+    )
+    blob = transport.fetch_blob("ghcr.io/kvasha62/application-factory/saga", digest)
+    assert blob == b"ok"
+    assert registry_auth == [None, f"Bearer {issued}"]
+
+
+def test_t20_forbidden_is_terminal_and_never_exchanged() -> None:
+    """403 stays 403: no exchange, no retry, bounded safe diagnostics."""
+    digest = "sha256:" + "c" * 64
+    calls: list[str] = []
+
+    def opener(req, timeout=None):
+        calls.append(req.full_url)
+        assert req.get_header("Authorization") is None
+        raise _http_error(
+            req.full_url,
+            403,
+            {"X-GitHub-Request-Id": "ABCD:1234:5678:90AB:0123456789AB"},
+            b'{"errors":[{"code":"DENIED","message":"denied"}]}',
+        )
+
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token", username="publisher", opener=opener
+    )
+    with pytest.raises(PublicationBlockedError) as excinfo:
+        transport.push_blob(
+            "ghcr.io/kvasha62/application-factory/authorization", digest, b"x"
+        )
+    message = str(excinfo.value)
+    assert "failed (403)" in message
+    assert "registry error code=DENIED" in message
+    assert "request-id=ABCD:1234:5678:90AB:0123456789AB" in message
+    assert len(calls) == 1
+    assert not any("ghcr.io/token" in call for call in calls)
+    # Bounded: the raw response body is not reproduced in the error.
+    assert "denied" not in message
+    assert "raw-workflow-token" not in message
+
+
+class _RecordingHTTPErrorBody:
+    """Minimal HTTPError body double that records every read size it receives."""
+
+    def __init__(self, body: bytes, headers: dict[str, str] | None = None) -> None:
+        self._body = body
+        self.headers = dict(headers or {})
+        self.read_sizes: list[int] = []
+        self.bytes_returned = 0
+
+    def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
+        if size is None or size < 0:
+            msg = "unbounded read: diagnostics must pass an explicit size"
+            raise AssertionError(msg)
+        chunk = self._body[:size]
+        self.bytes_returned += len(chunk)
+        return chunk
+
+    def close(self) -> None:
+        """No-op: HTTPError wraps its fp and may close it during GC."""
+
+
+def test_t20_error_diagnostics_passes_body_limit_directly_to_read() -> None:
+    """The read itself is bounded: size == _ERROR_BODY_LIMIT, never unbounded."""
+    request_id = "ABCD:1234:5678:90AB:0123456789AB"
+    body = json.dumps(
+        {"errors": [{"code": "DENIED", "message": "raw-upstream-detail"}]}
+    ).encode()
+    fake = _RecordingHTTPErrorBody(body, {"X-GitHub-Request-Id": request_id})
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token", username="u", opener=lambda req, timeout=None: None
+    )
+
+    notes = transport._error_diagnostics(fake)
+
+    assert fake.read_sizes == [_ERROR_BODY_LIMIT]
+    assert "registry error code=DENIED" in notes
+    assert f"request-id={request_id}" in notes
+    # The response body is never reproduced, only the allow-listed fields.
+    assert "raw-upstream-detail" not in notes
+
+
+def test_t20_error_diagnostics_never_consumes_oversized_body() -> None:
+    """An oversized error body is not loaded in full: one read, capped at the limit."""
+    request_id = "WXYZ:0001:0002:0003:FFFFFFFFFF"
+    marker = "OVERSIZED-BODY-MARKER"
+    oversized = b"z" * (_ERROR_BODY_LIMIT * 4) + marker.encode()
+    headers = Message()
+    headers["X-GitHub-Request-Id"] = request_id
+    streams: list[_RecordingHTTPErrorBody] = []
+
+    def opener(req, timeout=None):
+        stream = _RecordingHTTPErrorBody(oversized)
+        streams.append(stream)
+        raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", headers, stream)
+
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token", username="u", opener=opener
+    )
+    with pytest.raises(PublicationBlockedError) as excinfo:
+        transport.fetch_blob(
+            "ghcr.io/kvasha62/application-factory/saga", "sha256:" + "7" * 64
+        )
+
+    message = str(excinfo.value)
+    assert len(oversized) > _ERROR_BODY_LIMIT
+    assert len(streams) == 1
+    stream = streams[0]
+    # Exactly one read, sized by the limit: the 4x oversized body is not loaded.
+    assert stream.read_sizes == [_ERROR_BODY_LIMIT]
+    assert stream.bytes_returned == _ERROR_BODY_LIMIT
+    assert stream.bytes_returned < len(oversized)
+    assert marker not in message
+    assert f"request-id={request_id}" in message
+    assert len(message) < 1024  # bounded diagnostics
+
+
+def test_t20_secrets_never_appear_when_transport_fails() -> None:
+    """Token rejections and transport failures stay redacted."""
+    secret = "ghp_LEAKTESTVALUE0123456789abcdefABCDEF"
+    digest = "sha256:" + "d" * 64
+
+    def forbidden_after_exchange(req, timeout=None):
+        if "ghcr.io/token" in req.full_url:
+            return _FakeResponse(200, {}, json.dumps({"token": secret}).encode())
+        auth = req.get_header("Authorization")
+        if auth is None:
+            raise _http_error(
+                req.full_url, 401, {"WWW-Authenticate": _bearer_challenge()}
+            )
+        raise _http_error(
+            req.full_url,
+            403,
+            {},
+            f"denied while presenting Authorization: Bearer {secret}".encode(),
+        )
+
+    transport = GHCRHTTPTransport(
+        token=secret, username="u", opener=forbidden_after_exchange
+    )
+    with pytest.raises(PublicationBlockedError) as excinfo:
+        transport.fetch_manifest(
+            "ghcr.io/kvasha62/application-factory/authorization", digest
+        )
+    assert secret not in str(excinfo.value)
+
+    def unreachable(req, timeout=None):
+        raise OSError(f"network down after sending {secret}")
+
+    transport2 = GHCRHTTPTransport(token=secret, username="u", opener=unreachable)
+    with pytest.raises(PublicationBlockedError) as excinfo2:
+        transport2.fetch_manifest(
+            "ghcr.io/kvasha62/application-factory/authorization", digest
+        )
+    assert secret not in str(excinfo2.value)
+
+
+def test_t20_malformed_challenge_fails_closed() -> None:
+    """A 401 whose challenge is missing or untrusted must never be retried."""
+    digest = "sha256:" + "e" * 64
+    calls: list[str] = []
+
+    def make_opener(challenge_header: str | None):
+        def opener(req, timeout=None):
+            calls.append(req.full_url)
+            if "ghcr.io/token" in req.full_url:
+                raise _http_error(req.full_url, 500, {}, b"no")
+            headers = (
+                {}
+                if challenge_header is None
+                else {"WWW-Authenticate": challenge_header}
+            )
+            raise _http_error(req.full_url, 401, headers)
+
+        return opener
+
+    # 401 without any challenge at all: blocked, no exchange attempt.
+    calls.clear()
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token", username="u", opener=make_opener(None)
+    )
+    with pytest.raises(PublicationBlockedError, match=r"failed \(401\)"):
+        transport.fetch_manifest("ghcr.io/kvasha62/application-factory/saga", digest)
+    assert len(calls) == 1
+
+    # Untrusted or malformed realm: blocked before any token endpoint is hit.
+    for realm in (
+        "http://ghcr.io/token",
+        "https://evil.example/token",
+        "https://ghcr.io.evil.example/token",
+        "https://user:pass@ghcr.io/token",
+        "/relative/token",
+    ):
+        calls.clear()
+        transport = GHCRHTTPTransport(
+            token="raw-workflow-token",
+            username="u",
+            opener=make_opener(_bearer_challenge(realm=realm)),
+        )
+        with pytest.raises(PublicationBlockedError):
+            transport.fetch_manifest(
+                "ghcr.io/kvasha62/application-factory/saga", digest
+            )
+        assert len(calls) == 1, realm
+
+    # Token endpoint failure: blocked without retrying the registry request.
+    registry_calls: list[str] = []
+    token_calls: list[str] = []
+
+    def failing_exchange(req, timeout=None):
+        if "ghcr.io/token" in req.full_url:
+            token_calls.append(req.full_url)
+            raise _http_error(req.full_url, 500, {}, b"boom")
+        registry_calls.append(req.full_url)
+        raise _http_error(req.full_url, 401, {"WWW-Authenticate": _bearer_challenge()})
+
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token", username="publisher", opener=failing_exchange
+    )
+    with pytest.raises(PublicationBlockedError, match="token exchange"):
+        transport.fetch_manifest("ghcr.io/kvasha62/application-factory/saga", digest)
+    assert len(token_calls) == 1
+    assert len(registry_calls) == 1
+
+
+def test_t20_challenge_scope_is_used_verbatim_without_widening() -> None:
+    """A challenge scope is requested verbatim; only scope-less ones get a floor."""
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token", username="u", opener=lambda req, timeout=None: None
+    )
+    read_scopes = transport._scopes_from_challenge(
+        _bearer_challenge(scope="repository:kvasha62/application-factory/saga:pull"),
+        "kvasha62/application-factory/saga",
+        _WRITE_SCOPE_ACTIONS,
+    )
+    assert read_scopes == ["repository:kvasha62/application-factory/saga:pull"]
+    assert transport._scopes_from_challenge(
+        _bearer_challenge(scope=None),
+        "kvasha62/application-factory/saga",
+        _READ_SCOPE_ACTIONS,
+    ) == ["repository:kvasha62/application-factory/saga:pull"]
+    assert transport._scopes_from_challenge(
+        _bearer_challenge(scope=None),
+        "kvasha62/application-factory/saga",
+        _WRITE_SCOPE_ACTIONS,
+    ) == ["repository:kvasha62/application-factory/saga:pull,push"]
+
+
+def test_t20_write_operation_requests_push_scope_from_scope_less_challenge() -> None:
+    """Scope-less challenge on a write derives pull,push; the retry then succeeds."""
+    digest = "sha256:" + "f" * 64
+    scopes: list[list[str]] = []
+
+    def opener(req, timeout=None):
+        url = req.full_url
+        if "ghcr.io/token" in url:
+            scopes.append(parse_qs(urlparse(url).query)["scope"])
+            return _FakeResponse(
+                200, {}, json.dumps({"token": "scoped-registry-token"}).encode()
+            )
+        auth = req.get_header("Authorization")
+        if auth is None:
+            raise _http_error(
+                url, 401, {"WWW-Authenticate": _bearer_challenge(scope=None)}
+            )
+        assert auth == "Bearer scoped-registry-token"
+        return _FakeResponse(201, {}, b"")
+
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token", username="publisher", opener=opener
+    )
+    transport.push_manifest(
+        "ghcr.io/kvasha62/application-factory/authorization",
+        digest,
+        "application/vnd.oci.image.manifest.v1+json",
+        b"{}",
+    )
+    assert scopes == [
+        ["repository:kvasha62/application-factory/authorization:pull,push"]
+    ]
+
+
+def test_t20_redirect_after_exchange_never_replays_credential() -> None:
+    """A redirect answer must block; the registry bearer is never replayed."""
+    digest = "sha256:" + "9" * 64
+    calls: list[str] = []
+
+    def opener(req, timeout=None):
+        url = req.full_url
+        calls.append(url)
+        if "ghcr.io/token" in url:
+            assert req.get_header("Authorization") is not None
+            return _FakeResponse(
+                200, {}, json.dumps({"token": "registry-issued-token"}).encode()
+            )
+        auth = req.get_header("Authorization")
+        if auth is None:
+            raise _http_error(url, 401, {"WWW-Authenticate": _bearer_challenge()})
+        assert auth == "Bearer registry-issued-token"
+        raise _http_error(url, 302, {"Location": "https://evil.example/capture"})
+
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token", username="publisher", opener=opener
+    )
+    with pytest.raises(PublicationBlockedError):
+        transport.fetch_manifest(
+            "ghcr.io/kvasha62/application-factory/authorization", digest
+        )
+    assert len(calls) == 3
+    assert all("evil.example" not in call for call in calls)
 
 
 def test_remote_manifest_bytes_hash_to_recorded_identity_fields(

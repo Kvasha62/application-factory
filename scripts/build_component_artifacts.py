@@ -1181,20 +1181,42 @@ class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
         )
 
 
+#: Minimum OCI token scopes per operation kind. Reads never request push;
+#: writes require pull,push. A challenge that carries its own ``scope`` is used
+#: verbatim instead (see ``_scopes_from_challenge``), so the issued registry
+#: bearer is limited to what the registry asked for.
+_READ_SCOPE_ACTIONS: tuple[str, ...] = ("pull",)
+_WRITE_SCOPE_ACTIONS: tuple[str, ...] = ("pull", "push")
+
+#: Bounded failure diagnostics. Both patterns accept only fixed, non-secret
+#: character sets, so the extracted values can be reported without ever
+#: reproducing response payloads (or anything credential-shaped) in an error.
+_REGISTRY_ERROR_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9.:_-]{1,128}$")
+_ERROR_BODY_LIMIT = 4096
+
+
 class GHCRHTTPTransport(OCIRegistryTransport):
     """OCI Distribution Spec v1.1 HTTP transport for GHCR (digest-addressed).
 
-    Authentication follows the documented OCI token-authentication protocol:
-    the workflow token is presented as a bearer credential; if (and only if)
-    the registry answers HTTP 401 with a ``WWW-Authenticate: Bearer realm=...``
-    challenge, the transport performs exactly one token exchange against the
-    challenge realm (Basic credentials, scope ``repository:<path>:pull,push``)
-    and retries the original request once with the obtained token. Mutable tag
-    references are never requested or written.
+    Authentication follows the documented OCI token-authentication protocol
+    without ever presenting the workflow credential as a registry bearer: the
+    first attempt for every registry request is sent anonymously (no
+    ``Authorization`` header), and only a valid HTTP 401 with a
+    ``WWW-Authenticate: Bearer realm=...`` challenge triggers exactly one token
+    exchange against the challenge realm. The exchange authenticates with Basic
+    credentials, requests the challenge scopes verbatim when the challenge
+    carries them (otherwise the minimum scope for the operation: ``pull`` for
+    reads, ``pull,push`` for writes), and the original request is retried
+    exactly once with the issued registry bearer. Any other status - including
+    403 - is terminal, is reported with bounded diagnostics, and is never
+    converted into a retry. Mutable tag references are never requested or
+    written.
     """
 
     _REALM_RE = re.compile(r'realm="([^"]+)"')
     _SERVICE_RE = re.compile(r'service="([^"]+)"')
+    _SCOPE_RE = re.compile(r'scope="([^"]*)"')
     TRUSTED_TOKEN_HOSTS: frozenset[str] = frozenset({"ghcr.io"})
 
     def __init__(
@@ -1263,14 +1285,19 @@ class GHCRHTTPTransport(OCIRegistryTransport):
         method: str,
         url: str,
         *,
-        token: str,
+        token: str | None,
         data: bytes | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> tuple[int, Mapping[str, str], bytes]:
-        req_headers = {
-            "Authorization": f"Bearer {token}",
-            "User-Agent": "application-factory-artifact-publisher/1.0",
-        }
+        """Send one request with an optional registry bearer token.
+
+        ``token=None`` means anonymous: no ``Authorization`` header is attached.
+        Only a token issued by the registry token endpoint is ever used as a
+        bearer, never the raw workflow credential.
+        """
+        req_headers = {"User-Agent": "application-factory-artifact-publisher/1.0"}
+        if token is not None:
+            req_headers["Authorization"] = f"Bearer {token}"
         if headers:
             req_headers.update(headers)
         req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
@@ -1287,6 +1314,7 @@ class GHCRHTTPTransport(OCIRegistryTransport):
             detail = (
                 f"ghcr_http_error: {method} {self._redact(url, token)} "
                 f"failed ({exc.code}): {safe_msg}"
+                f"{self._error_diagnostics(exc)}"
             )
             raise PublicationBlockedError([detail]) from exc
         except (urllib.error.URLError, OSError, ValueError, RuntimeError) as exc:
@@ -1296,6 +1324,46 @@ class GHCRHTTPTransport(OCIRegistryTransport):
                 f"failed: {safe_msg}"
             )
             raise PublicationBlockedError([detail]) from exc
+
+    def _error_diagnostics(self, exc: urllib.error.HTTPError) -> str:
+        """Return bounded, credential-free diagnostics for a failed call.
+
+        The evidence gap left by a bare status line made the production 403
+        unattributable, so the OCI error identifier and the request correlation
+        id are surfaced when they are present and well-formed. Only values that
+        match fixed, non-secret character sets are reported; response bodies are
+        parsed but never reproduced, and nothing here can carry a credential.
+
+        The body is read with ``_ERROR_BODY_LIMIT`` as the read size itself, so
+        an oversized error body is never loaded into memory: at most that many
+        bytes are consumed from the stream, regardless of how much the server
+        sent.
+        """
+        notes: list[str] = []
+        try:
+            raw = exc.read(_ERROR_BODY_LIMIT) or b""
+        except (OSError, ValueError, RuntimeError):
+            raw = b""
+        if raw:
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                payload = None
+            if isinstance(payload, Mapping):
+                errors = payload.get("errors")
+                if isinstance(errors, Sequence):
+                    for item in errors:
+                        code = item.get("code") if isinstance(item, Mapping) else None
+                        if isinstance(code, str) and _REGISTRY_ERROR_CODE_RE.match(
+                            code
+                        ):
+                            notes.append(f"registry error code={code}")
+                            break
+        headers = getattr(exc, "headers", None)
+        request_id = headers.get("X-GitHub-Request-Id") if headers is not None else None
+        if isinstance(request_id, str) and _REQUEST_ID_RE.match(request_id):
+            notes.append(f"request-id={request_id}")
+        return "".join(f"; {note}" for note in notes)
 
     def _trusted_realm(self, challenge: str) -> str:
         """Validate the 401 challenge before any credentials leave the runner.
@@ -1337,12 +1405,43 @@ class GHCRHTTPTransport(OCIRegistryTransport):
             raise PublicationBlockedError([msg])
         return realm
 
-    def _exchange_token(self, challenge: str, repository: str) -> str:
+    def _scopes_from_challenge(
+        self,
+        challenge: str,
+        repository: str,
+        required_actions: Sequence[str],
+    ) -> list[str]:
+        """Scope list for the token request.
+
+        A well-formed registry challenge names the scope for the attempted
+        action; it is used verbatim (every ``scope`` parameter, in order) so the
+        exchanged bearer is limited to what the registry asked for and is never
+        widened by this client. Only when the challenge omits a scope is the
+        minimum scope for the operation derived: ``pull`` for reads,
+        ``pull,push`` for writes.
+        """
+        scopes = [value.strip() for value in self._SCOPE_RE.findall(challenge)]
+        requested = [scope for scope in scopes if scope]
+        if requested:
+            return requested
+        return [f"repository:{repository}:{','.join(required_actions)}"]
+
+    def _exchange_token(
+        self,
+        challenge: str,
+        repository: str,
+        *,
+        required_actions: Sequence[str] = _READ_SCOPE_ACTIONS,
+    ) -> str:
         realm = self._trusted_realm(challenge)
-        params: dict[str, str] = {"scope": f"repository:{repository}:pull,push"}
+        params: list[tuple[str, str]] = []
         service_match = self._SERVICE_RE.search(challenge)
         if service_match is not None:
-            params["service"] = service_match.group(1)
+            params.append(("service", service_match.group(1)))
+        for scope in self._scopes_from_challenge(
+            challenge, repository, required_actions
+        ):
+            params.append(("scope", scope))
         exchange_url = f"{realm}?{urllib.parse.urlencode(params)}"
         credentials = base64.b64encode(
             f"{self._username}:{self._token}".encode()
@@ -1392,11 +1491,19 @@ class GHCRHTTPTransport(OCIRegistryTransport):
         data: bytes | None = None,
         headers: Mapping[str, str] | None = None,
         scope_repository: str | None = None,
+        required_actions: Sequence[str] = _READ_SCOPE_ACTIONS,
     ) -> tuple[int, Mapping[str, str], bytes]:
+        """Perform one registry request using the OCI token-authentication flow.
+
+        The workflow credential is never presented as a registry bearer: the
+        first attempt is anonymous. Only a valid 401 Bearer challenge triggers
+        exactly one scoped token exchange followed by exactly one retry with the
+        issued registry bearer. Every other status - in particular 403 - is
+        terminal and is reported as-is, never converted into an exchange or a
+        retry, so an authorization failure is never masked or replayed.
+        """
         try:
-            return self._send(
-                method, url, token=self._token, data=data, headers=headers
-            )
+            return self._send(method, url, token=None, data=data, headers=headers)
         except _Unauthorized401 as exc:
             challenge = exc.challenge
             if (
@@ -1409,7 +1516,11 @@ class GHCRHTTPTransport(OCIRegistryTransport):
                     "failed (401): unauthorized"
                 )
                 raise PublicationBlockedError([msg]) from None
-            exchanged = self._exchange_token(challenge, scope_repository)
+            exchanged = self._exchange_token(
+                challenge,
+                scope_repository,
+                required_actions=required_actions,
+            )
             try:
                 return self._send(
                     method, url, token=exchanged, data=data, headers=headers
@@ -1426,7 +1537,11 @@ class GHCRHTTPTransport(OCIRegistryTransport):
         repo_path = self._repo_path(repository)
         start_url = f"{self._base_url}/v2/{repo_path}/blobs/uploads/"
         _, headers, _ = self._request(
-            "POST", start_url, data=b"", scope_repository=repo_path
+            "POST",
+            start_url,
+            data=b"",
+            scope_repository=repo_path,
+            required_actions=_WRITE_SCOPE_ACTIONS,
         )
         location = headers.get("Location") or headers.get("location")
         if not location:
@@ -1450,6 +1565,7 @@ class GHCRHTTPTransport(OCIRegistryTransport):
             data=data,
             headers={"Content-Type": "application/octet-stream"},
             scope_repository=repo_path,
+            required_actions=_WRITE_SCOPE_ACTIONS,
         )
 
     def push_manifest(
@@ -1463,6 +1579,7 @@ class GHCRHTTPTransport(OCIRegistryTransport):
             data=data,
             headers={"Content-Type": media_type},
             scope_repository=repo_path,
+            required_actions=_WRITE_SCOPE_ACTIONS,
         )
 
     def fetch_blob(self, repository: str, digest: str) -> bytes:
