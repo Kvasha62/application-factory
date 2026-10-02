@@ -5,14 +5,17 @@ and fail-closed registry reconciliation (Issue #127).
 
 from __future__ import annotations
 
+import base64
 import copy
 import dataclasses
+import io
 import json
 import shutil
-import subprocess
 import urllib.error
+from email.message import Message
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -42,7 +45,6 @@ from scripts.build_component_artifacts import (
     main,
     publication_violations,
     publish_artifacts_to_oci,
-    publish_item_to_ghcr,
     reconcile_registry,
     redact_secrets,
     validate_dependency_closure,
@@ -1209,113 +1211,293 @@ def test_bytecode_cache_in_source_root_does_not_change_canonical_digest(
     )
 
 
-def test_publish_item_to_ghcr_pushes_when_tag_not_yet_present(
-    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
-) -> None:
-    artifacts_dir, results, _ = built_suite
-    item = results[0]
-    calls: list[list[str]] = []
+# ---------------------------------------------------------------------------
+# S1: deterministic digest-addressed publication (GHCRHTTPTransport, records)
+# ---------------------------------------------------------------------------
 
-    def fake_runner(
-        cmd: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        calls.append(list(cmd))
-        if cmd[:3] == ["oras", "manifest", "fetch"]:
-            return subprocess.CompletedProcess(
-                cmd, 1, stdout="", stderr="Error: not found"
+
+class _FakeResponse:
+    """Minimal urllib response double for transport tests."""
+
+    def __init__(self, status: int, headers: dict[str, str], body: bytes = b"") -> None:
+        self.status = status
+        self.headers = headers
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        return False
+
+
+def _http_error(
+    url: str, code: int, headers: dict[str, str] | None = None, body: bytes = b""
+) -> urllib.error.HTTPError:
+    msg = Message()
+    for key, value in (headers or {}).items():
+        msg[key] = value
+    return urllib.error.HTTPError(
+        url, code, f"HTTP Error {code}", msg, io.BytesIO(body)
+    )
+
+
+def test_transport_follows_401_challenge_with_scoped_token_exchange() -> None:
+    """OCI token authentication: 401 challenge -> one scoped exchange -> retry."""
+    calls: list[str] = []
+    challenge = 'Bearer realm="https://ghcr.io/token",service="ghcr.io"'
+
+    def opener(req, timeout=None):
+        url = req.full_url
+        calls.append(url)
+        auth = req.get_header("Authorization")
+        if "ghcr.io/token" in url:
+            assert auth is not None and auth.startswith("Basic ")
+            username, _, token = (
+                base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8").partition(":")
             )
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            assert username == "publisher"
+            assert token == "raw-workflow-token"
+            query = parse_qs(urlparse(url).query)
+            assert query["service"] == ["ghcr.io"]
+            assert query["scope"] == [
+                "repository:kvasha62/application-factory/authorization:pull,push"
+            ]
+            return _FakeResponse(
+                200, {}, json.dumps({"token": "scoped-registry-token"}).encode()
+            )
+        if auth == "Bearer raw-workflow-token":
+            raise _http_error(url, 401, {"WWW-Authenticate": challenge})
+        assert auth == "Bearer scoped-registry-token"
+        return _FakeResponse(200, {}, b"remote-manifest-bytes")
 
-    outcome = publish_item_to_ghcr(
-        item, artifacts_root=artifacts_dir, runner=fake_runner
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token",
+        username="publisher",
+        opener=opener,
     )
-    assert outcome == "published"
-    assert len(calls) == 2
-    assert calls[0][:3] == ["oras", "manifest", "fetch"]
-    assert calls[1][:2] == ["oras", "push"]
-
-
-def test_publish_item_to_ghcr_is_idempotent_when_same_digest_already_published(
-    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
-) -> None:
-    artifacts_dir, results, _ = built_suite
-    item = results[0]
-    digest = item["artifact"]["digest"]
-    calls: list[list[str]] = []
-
-    remote_manifest = json.dumps(
-        {
-            "schemaVersion": 2,
-            "layers": [
-                {
-                    "mediaType": CANONICAL_MANIFEST_MEDIA_TYPE,
-                    "digest": digest,
-                }
-            ],
-        }
+    digest = "sha256:" + "0" * 64
+    body = transport.fetch_manifest(
+        "ghcr.io/kvasha62/application-factory/authorization", digest
     )
+    assert body == b"remote-manifest-bytes"
+    assert calls[0].endswith(f"/manifests/{digest}")
+    assert "ghcr.io/token" in calls[1]
+    assert calls[2].endswith(f"/manifests/{digest}")
 
-    def fake_runner(
-        cmd: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        calls.append(list(cmd))
-        return subprocess.CompletedProcess(cmd, 0, stdout=remote_manifest, stderr="")
 
-    outcome = publish_item_to_ghcr(
-        item, artifacts_root=artifacts_dir, runner=fake_runner
+def test_transport_never_retries_without_challenge_or_after_failed_exchange() -> None:
+    """401 without a usable challenge must block; no silent retry loops."""
+    digest = "sha256:" + "1" * 64
+
+    def bare_401_opener(req, timeout=None):
+        raise _http_error(req.full_url, 401, {})
+
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token", username="u", opener=bare_401_opener
     )
-    assert outcome == "already_published"
-    assert len(calls) == 1
-    assert calls[0][:3] == ["oras", "manifest", "fetch"]
+    with pytest.raises(PublicationBlockedError, match=r"failed \(401\): unauthorized"):
+        transport.fetch_blob("ghcr.io/kvasha62/application-factory/saga", digest)
 
-
-def test_publish_item_to_ghcr_refuses_to_overwrite_existing_tag_with_different_digest(
-    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
-) -> None:
-    artifacts_dir, results, _ = built_suite
-    item = results[0]
-    calls: list[list[str]] = []
-
-    remote_manifest = json.dumps(
-        {
-            "schemaVersion": 2,
-            "layers": [
-                {
-                    "mediaType": CANONICAL_MANIFEST_MEDIA_TYPE,
-                    "digest": "sha256:" + "f" * 64,
-                }
-            ],
-        }
-    )
-
-    def fake_runner(
-        cmd: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        calls.append(list(cmd))
-        return subprocess.CompletedProcess(cmd, 0, stdout=remote_manifest, stderr="")
-
-    with pytest.raises(
-        ValueError,
-        match=r"immutable publication violation .* refusing to overwrite",
-    ):
-        publish_item_to_ghcr(item, artifacts_root=artifacts_dir, runner=fake_runner)
-
-    assert len(calls) == 1
-    assert calls[0][:3] == ["oras", "manifest", "fetch"]
-
-
-def test_publish_item_to_ghcr_fails_closed_on_registry_inspection_error(
-    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
-) -> None:
-    artifacts_dir, results, _ = built_suite
-    item = results[0]
-
-    def fake_runner(
-        cmd: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(
-            cmd, 1, stdout="", stderr="response status code 403: Forbidden"
+    def challenge_without_realm(req, timeout=None):
+        if "ghcr.io/token" in req.full_url:
+            raise _http_error(req.full_url, 401, {}, b"nope")
+        raise _http_error(
+            req.full_url,
+            401,
+            {"WWW-Authenticate": 'Bearer service="ghcr.io"'},
         )
 
-    with pytest.raises(RuntimeError, match="failed to inspect existing GHCR tag"):
-        publish_item_to_ghcr(item, artifacts_root=artifacts_dir, runner=fake_runner)
+    transport2 = GHCRHTTPTransport(
+        token="raw-workflow-token", username="u", opener=challenge_without_realm
+    )
+    with pytest.raises(PublicationBlockedError, match="carries no realm"):
+        transport2.fetch_blob("ghcr.io/kvasha62/application-factory/saga", digest)
+
+
+def test_exchange_failure_redacts_credentials(tmp_path: Path) -> None:
+    secret = "ghp_LEAKTESTVALUE0123456789abcdefABCDEF"
+
+    def opener(req, timeout=None):
+        raise _http_error(
+            req.full_url,
+            500,
+            {},
+            f"upstream saw Authorization: Bearer {secret}".encode(),
+        )
+
+    transport = GHCRHTTPTransport(token=secret, username="u", opener=opener)
+    with pytest.raises(PublicationBlockedError) as excinfo:
+        transport.fetch_blob(
+            "ghcr.io/kvasha62/application-factory/saga", "sha256:" + "2" * 64
+        )
+    assert secret not in str(excinfo.value)
+
+
+def test_remote_manifest_bytes_hash_to_recorded_identity_fields(
+    repo_root: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """InMemory parity: sha256(pushed manifest bytes) == oci_manifest_digest and
+    the canonical layer digest == artifact digest; every descriptor size matches."""
+    import hashlib
+
+    artifacts_dir = tmp_path_factory.mktemp("s1_registry")
+    results = build_all(repo_root, artifacts_dir)
+    oci = InMemoryOCIRegistry()
+    records = publish_artifacts_to_oci(
+        results, artifacts_root=artifacts_dir, transport=oci
+    )
+    assert len(records) == 9
+    for record in records:
+        manifest_bytes = oci.manifests[
+            (record.registry_repository, record.oci_manifest_digest)
+        ]
+        assert "sha256:" + hashlib.sha256(manifest_bytes).hexdigest() == (
+            record.oci_manifest_digest
+        )
+        document = json.loads(manifest_bytes)
+        canonical_layers = [
+            layer
+            for layer in document["layers"]
+            if layer["mediaType"] == CANONICAL_MANIFEST_MEDIA_TYPE
+        ]
+        assert len(canonical_layers) == 1
+        assert canonical_layers[0]["digest"] == record.artifact["digest"]
+        for descriptor in [document["config"], *document["layers"]]:
+            blob = oci.blobs[(record.registry_repository, descriptor["digest"])]
+            assert descriptor["size"] == len(blob)
+        expected = f"{record.registry_repository}@{record.artifact['digest']}"
+        assert record.digest_reference == expected
+        assert record.oci_digest_reference == (
+            f"{record.registry_repository}@{record.oci_manifest_digest}"
+        )
+        assert record.oci_digest_reference != record.digest_reference
+
+
+def test_swapped_digest_and_oci_references_are_rejected(
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+    registry_doc: dict[str, Any],
+    repo_root: Path,
+) -> None:
+    """digest_reference and oci_digest_reference are distinct identities."""
+    artifacts_dir, _, records = built_suite
+    broken = [dataclasses.asdict(record) for record in records]
+    broken[0]["digest_reference"], broken[0]["oci_digest_reference"] = (
+        broken[0]["oci_digest_reference"],
+        broken[0]["digest_reference"],
+    )
+    violations = publication_violations(
+        registry_doc,
+        broken,
+        repository_root=repo_root,
+        artifacts_root=artifacts_dir,
+    )
+    assert any("digest_reference" in violation for violation in violations)
+    assert any("oci_digest_reference" in violation for violation in violations)
+
+
+def test_build_all_oci_layout_is_reproducible_across_runs(
+    repo_root: Path, tmp_path: Path
+) -> None:
+    """S1 relies on identical manifest digests from independent builds."""
+    first = build_all(repo_root, tmp_path / "a")
+    second = build_all(repo_root, tmp_path / "b")
+    identity = lambda item: (
+        item["component_id"],
+        item["component_version"],
+        item["artifact"],
+        item["oci"],
+    )
+    assert [identity(item) for item in first] == [identity(item) for item in second]
+    for item in first:
+        layout_a = tmp_path / "a" / item["oci"]["layout_path"] / "blobs" / "sha256"
+        layout_b = tmp_path / "b" / item["oci"]["layout_path"] / "blobs" / "sha256"
+        assert sorted(p.name for p in layout_a.iterdir()) == sorted(
+            p.name for p in layout_b.iterdir()
+        )
+        for blob in layout_a.iterdir():
+            assert blob.read_bytes() == (layout_b / blob.name).read_bytes()
+
+
+def test_write_records_round_trip_is_accepted_by_publication_violations(
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+    registry_doc: dict[str, Any],
+    repo_root: Path,
+    tmp_path: Path,
+) -> None:
+    """publication-records.json is canonical JSON and reconcilable as mappings."""
+    artifacts_dir, _, records = built_suite
+    payload = [dataclasses.asdict(record) for record in records]
+    text = json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+    (tmp_path / "publication-records.json").write_text(text, encoding="utf-8")
+    loaded = json.loads((tmp_path / "publication-records.json").read_text())
+    assert len(loaded) == 9
+    assert all(entry["authority_tag"] is None for entry in loaded)
+    assert all(
+        entry["published"] is True and entry["verified"] is True for entry in loaded
+    )
+    violations = publication_violations(
+        registry_doc,
+        loaded,
+        repository_root=repo_root,
+        artifacts_root=artifacts_dir,
+    )
+    assert violations == []
+
+
+def test_publish_workflow_uses_deterministic_digest_addressed_path() -> None:
+    """T1 workflow lint: Path B only. No ORAS client, no tags, no tag publish."""
+    text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "--publish-ghcr" in text
+    assert "--write-records factory/artifacts/publication-records.json" in text
+    assert "github.event_name == 'push' && github.ref == 'refs/heads/main'" in text
+    assert "packages: write" in text
+    assert "packages: read" not in text  # write scope is on the publish leg only
+    # The publish step itself speaks only the deterministic digest path; the
+    # registry-API reconcile step (app registry, not GHCR) is a separate step.
+    publish_step = text.split(
+        "Publish deterministic OCI artifacts to GHCR by digest", 1
+    )[1]
+    publish_step = publish_step.split("Package the deterministic", 1)[0]
+    low = publish_step.lower()
+    for forbidden in (
+        "oras",
+        "publish_item_to_ghcr",
+        "login",
+        "docker",
+        "tag",
+        "latest",
+        "reconcile",
+    ):
+        assert forbidden not in low, f"publish step must not reference {forbidden!r}"
+
+
+def test_cli_write_records_requires_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(SystemExit):
+        main(["--output", "/tmp/s1-unused", "--write-records", "/tmp/s1-rec.json"])
+
+
+def test_cli_write_records_not_created_when_blocked(
+    monkeypatch: pytest.MonkeyPatch, repo_root: Path, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("GHCR_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    records_path = tmp_path / "publication-records.json"
+    with pytest.raises(PublicationBlockedError, match="ghcr_credentials_unavailable"):
+        main(
+            [
+                "--root",
+                str(repo_root),
+                "--output",
+                str(tmp_path / "artifacts"),
+                "--publish-ghcr",
+                "--write-records",
+                str(records_path),
+            ]
+        )
+    assert not records_path.exists()

@@ -1,0 +1,16 @@
+{
+  "schema": "ghcr-legacy-envelopes/1",
+  "status": "non-default legacy evidence only (scripts/verify_ghcr_immutability.py --mode legacy); never a publication authority",
+  "description": "Manifest digests of the ORAS-era tag publication created 2026-10-01T15:23Z from commit c76cd983 by the former publish_item_to_ghcr step of .github/workflows/publish-component-artifacts.yml. Immutable-content gate evidence: Actions run 36975841017 / job 110739371346 (9/9 PASS at main@7d99aad8). These digests identify historical envelope bytes only; the authoritative deterministic identity is recorded per publication in factory/artifacts/publication-records.json.",
+  "components": {
+    "authorization": "sha256:d3c4796fb1887e7113780a103b7352f6e36d16bc6e4bb7a3b9ddd656d84a4a0b",
+    "booking": "sha256:7394dbe2e94f336f9c2c9f27f6a06ac8cb33d9e427b2d8c7cea828bac80a5d67",
+    "commerce": "sha256:ecbff623cc06fa6174c87d5d79e1613de3125a6507fb065708c3e577aaadd981",
+    "idempotency": "sha256:de7a802961096cb81bde6197786d12f22f68e0e1f5607a0eb5c3fd16b5770a49",
+    "identity": "sha256:380c790df96f78d0ea53b0971af2e692d2341b46d34be42768b24d307d729351",
+    "learning": "sha256:b106c15d445cbe63c460648d5e4bbfa495482e4f2561f7df7bb2b6c41d96341b",
+    "records": "sha256:d494d49ee9e7a890995fb4a8bd7e644ab7b4ce8adc9c0e26b4df14493e5e5ed3",
+    "saga": "sha256:d8e093fc877ad1ab777ccae5ddabd8bbdceecea75d53d6d91193352a95b623ee",
+    "tenant_authority": "sha256:b051749621e02f5ad01be08cc565c760cdb01a1756ebba0f1cf738e99876b1db"
+  }
+}

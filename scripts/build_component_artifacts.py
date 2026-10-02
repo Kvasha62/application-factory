@@ -20,6 +20,7 @@ physical-to-canonical verification.
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import hashlib
 import io
@@ -28,13 +29,13 @@ import os
 import re
 import shutil
 import stat
-import subprocess
 import tarfile
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -125,7 +126,6 @@ _SHARED_INFRA_SRC_PATTERNS = frozenset(
     }
 )
 _REQUIRED_TRIGGER_EVENTS = ("pull_request", "push")
-_NOT_FOUND_MARKERS = ("not found", "404", "manifest unknown", "name unknown")
 
 DEFAULT_OCI_REGISTRY = "ghcr.io"
 DEFAULT_OCI_NAMESPACE = "kvasha62/application-factory"
@@ -1147,8 +1147,28 @@ class InMemoryOCIRegistry(OCIRegistryTransport):
         return self.manifests[key]
 
 
+class _Unauthorized401(Exception):
+    """Internal marker: the registry answered HTTP 401 with an auth challenge."""
+
+    def __init__(self, challenge: str | None) -> None:
+        super().__init__("unauthorized")
+        self.challenge = challenge
+
+
 class GHCRHTTPTransport(OCIRegistryTransport):
-    """OCI Distribution Spec v1.1 HTTP transport for GHCR (digest-addressed)."""
+    """OCI Distribution Spec v1.1 HTTP transport for GHCR (digest-addressed).
+
+    Authentication follows the documented OCI token-authentication protocol:
+    the workflow token is presented as a bearer credential; if (and only if)
+    the registry answers HTTP 401 with a ``WWW-Authenticate: Bearer realm=...``
+    challenge, the transport performs exactly one token exchange against the
+    challenge realm (Basic credentials, scope ``repository:<path>:pull,push``)
+    and retries the original request once with the obtained token. Mutable tag
+    references are never requested or written.
+    """
+
+    _REALM_RE = re.compile(r'realm="([^"]+)"')
+    _SERVICE_RE = re.compile(r'service="([^"]+)"')
 
     def __init__(
         self,
@@ -1177,16 +1197,17 @@ class GHCRHTTPTransport(OCIRegistryTransport):
             else repository
         )
 
-    def _request(
+    def _send(
         self,
         method: str,
         url: str,
         *,
+        token: str,
         data: bytes | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> tuple[int, Mapping[str, str], bytes]:
         req_headers = {
-            "Authorization": f"Bearer {self._token}",
+            "Authorization": f"Bearer {token}",
             "User-Agent": "application-factory-artifact-publisher/1.0",
         }
         if headers:
@@ -1199,20 +1220,101 @@ class GHCRHTTPTransport(OCIRegistryTransport):
                 body = response.read()
                 return status, resp_headers, body
         except urllib.error.HTTPError as exc:
-            safe_msg = redact_secrets(str(exc), [self._token])
+            if exc.code == 401:
+                raise _Unauthorized401(exc.headers.get("WWW-Authenticate")) from None
+            safe_msg = redact_secrets(str(exc), [self._token, token])
             raise PublicationBlockedError(
                 [f"ghcr_http_error: {method} {url} failed ({exc.code}): {safe_msg}"]
             ) from exc
         except (urllib.error.URLError, OSError, ValueError, RuntimeError) as exc:
-            safe_msg = redact_secrets(str(exc), [self._token])
+            safe_msg = redact_secrets(str(exc))
             raise PublicationBlockedError(
                 [f"ghcr_unreachable: {method} {url} failed: {safe_msg}"]
             ) from exc
 
+    def _exchange_token(self, challenge: str, repository: str) -> str:
+        realm_match = self._REALM_RE.search(challenge)
+        if realm_match is None:
+            msg = (
+                "ghcr_auth_error: HTTP 401 challenge carries no realm; "
+                "cannot exchange a registry token"
+            )
+            raise PublicationBlockedError([msg])
+        params: dict[str, str] = {"scope": f"repository:{repository}:pull,push"}
+        service_match = self._SERVICE_RE.search(challenge)
+        if service_match is not None:
+            params["service"] = service_match.group(1)
+        exchange_url = f"{realm_match.group(1)}?{urllib.parse.urlencode(params)}"
+        credentials = base64.b64encode(
+            f"{self._username}:{self._token}".encode()
+        ).decode("ascii")
+        req = urllib.request.Request(
+            exchange_url,
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "User-Agent": "application-factory-artifact-publisher/1.0",
+            },
+        )
+        try:
+            with self._open(req, timeout=30) as response:
+                payload = json.loads(response.read())
+        except (urllib.error.URLError, OSError, ValueError, RuntimeError) as exc:
+            safe_msg = redact_secrets(str(exc), [self._token, credentials])
+            msg = f"ghcr_auth_error: token exchange for {repository} failed: {safe_msg}"
+            raise PublicationBlockedError([msg]) from exc
+        exchanged: str | None = None
+        if isinstance(payload, Mapping):
+            candidate = payload.get("token") or payload.get("access_token")
+            if isinstance(candidate, str) and candidate:
+                exchanged = candidate
+        if exchanged is None:
+            msg = (
+                "ghcr_auth_error: token exchange response for "
+                f"{repository} carries no usable token"
+            )
+            raise PublicationBlockedError([msg])
+        return exchanged
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        data: bytes | None = None,
+        headers: Mapping[str, str] | None = None,
+        scope_repository: str | None = None,
+    ) -> tuple[int, Mapping[str, str], bytes]:
+        try:
+            return self._send(
+                method, url, token=self._token, data=data, headers=headers
+            )
+        except _Unauthorized401 as exc:
+            challenge = exc.challenge
+            if (
+                scope_repository is None
+                or not isinstance(challenge, str)
+                or not challenge
+            ):
+                msg = f"ghcr_http_error: {method} {url} failed (401): unauthorized"
+                raise PublicationBlockedError([msg]) from None
+            exchanged = self._exchange_token(challenge, scope_repository)
+            try:
+                return self._send(
+                    method, url, token=exchanged, data=data, headers=headers
+                )
+            except _Unauthorized401 as retry_exc:
+                msg = (
+                    "ghcr_auth_error: "
+                    f"{method} {url} was rejected (401) even after token exchange"
+                )
+                raise PublicationBlockedError([msg]) from retry_exc
+
     def push_blob(self, repository: str, digest: str, data: bytes) -> None:
         repo_path = self._repo_path(repository)
         start_url = f"{self._base_url}/v2/{repo_path}/blobs/uploads/"
-        _, headers, _ = self._request("POST", start_url, data=b"")
+        _, headers, _ = self._request(
+            "POST", start_url, data=b"", scope_repository=repo_path
+        )
         location = headers.get("Location") or headers.get("location")
         if not location:
             raise PublicationBlockedError(
@@ -1227,6 +1329,7 @@ class GHCRHTTPTransport(OCIRegistryTransport):
             put_url,
             data=data,
             headers={"Content-Type": "application/octet-stream"},
+            scope_repository=repo_path,
         )
 
     def push_manifest(
@@ -1234,19 +1337,28 @@ class GHCRHTTPTransport(OCIRegistryTransport):
     ) -> None:
         repo_path = self._repo_path(repository)
         url = f"{self._base_url}/v2/{repo_path}/manifests/{digest}"
-        self._request("PUT", url, data=data, headers={"Content-Type": media_type})
+        self._request(
+            "PUT",
+            url,
+            data=data,
+            headers={"Content-Type": media_type},
+            scope_repository=repo_path,
+        )
 
     def fetch_blob(self, repository: str, digest: str) -> bytes:
         repo_path = self._repo_path(repository)
         url = f"{self._base_url}/v2/{repo_path}/blobs/{digest}"
-        _, _, body = self._request("GET", url)
+        _, _, body = self._request("GET", url, scope_repository=repo_path)
         return body
 
     def fetch_manifest(self, repository: str, digest: str) -> bytes:
         repo_path = self._repo_path(repository)
         url = f"{self._base_url}/v2/{repo_path}/manifests/{digest}"
         _, _, body = self._request(
-            "GET", url, headers={"Accept": OCI_IMAGE_MANIFEST_MEDIA_TYPE}
+            "GET",
+            url,
+            headers={"Accept": OCI_IMAGE_MANIFEST_MEDIA_TYPE},
+            scope_repository=repo_path,
         )
         return body
 
@@ -1357,117 +1469,6 @@ def publish_artifacts_to_oci(
         )
 
     return records
-
-
-def publish_item_to_ghcr(
-    item: Mapping[str, Any],
-    *,
-    artifacts_root: Path = Path("factory/artifacts"),
-    expected_version_digests: Mapping[tuple[str, str], str] = COMPONENT_VERSION_DIGESTS,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
-) -> str:
-    """Publish one built component artifact to GHCR with fail-closed immutability."""
-    component = str(item["component_id"])
-    version = str(item["component_version"])
-    artifact = item["artifact"]
-    if not isinstance(artifact, Mapping):
-        raise TypeError(f"{component}: artifact metadata must be a mapping")
-    digest = str(artifact["digest"])
-    root = str(item["source_root"])
-
-    if component not in COMPONENT_ROOTS:
-        raise ValueError(f"unknown component {component!r}")
-    if root != COMPONENT_ROOTS[component].as_posix():
-        raise ValueError(
-            f"{component}: source_root {root!r} does not match "
-            f"{COMPONENT_ROOTS[component].as_posix()!r}"
-        )
-
-    verify_immutable_version_digest(
-        component,
-        version,
-        digest,
-        expected_version_digests=expected_version_digests,
-    )
-
-    canonical_path = Path(artifacts_root) / digest / "canonical.json"
-    if not canonical_path.is_file():
-        raise ValueError(
-            f"{component}: canonical manifest is missing: {canonical_path}"
-        )
-    actual_digest = _sha256_digest(canonical_path.read_bytes())
-    if actual_digest != digest:
-        raise ValueError(
-            f"{component}: canonical manifest digest mismatch: "
-            f"expected {digest!r}, got {actual_digest!r}"
-        )
-
-    target = f"{DEFAULT_OCI_REGISTRY}/{DEFAULT_OCI_NAMESPACE}/{component}"
-    reference = f"{target}:{version}"
-
-    fetch_proc = runner(
-        ["oras", "manifest", "fetch", reference],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if fetch_proc.returncode == 0:
-        try:
-            remote_manifest = json.loads(fetch_proc.stdout)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"{reference}: remote OCI manifest is not valid JSON"
-            ) from exc
-
-        layers = (
-            remote_manifest.get("layers")
-            if isinstance(remote_manifest, Mapping)
-            else None
-        )
-        if not isinstance(layers, list):
-            raise ValueError(f"{reference}: remote OCI manifest has no layers list")
-
-        canonical_layers = [
-            layer
-            for layer in layers
-            if isinstance(layer, Mapping)
-            and layer.get("mediaType") == CANONICAL_MANIFEST_MEDIA_TYPE
-        ]
-        if len(canonical_layers) != 1:
-            raise ValueError(
-                f"{reference}: expected exactly 1 canonical manifest layer, "
-                f"found {len(canonical_layers)}"
-            )
-        remote_digest = canonical_layers[0].get("digest")
-        if remote_digest != digest:
-            raise ValueError(
-                f"immutable publication violation for {reference}: remote tag "
-                f"already points to canonical digest {remote_digest!r}, refusing "
-                f"to overwrite with {digest!r}"
-            )
-        return "already_published"
-
-    stderr_lower = (fetch_proc.stderr or "").lower()
-    if not any(marker in stderr_lower for marker in _NOT_FOUND_MARKERS):
-        raise RuntimeError(
-            f"failed to inspect existing GHCR tag {reference}: "
-            f"{(fetch_proc.stderr or '').strip()}"
-        )
-
-    manifest_arg = f"factory/artifacts/{digest}/canonical.json"
-    runner(
-        [
-            "oras",
-            "push",
-            reference,
-            "--artifact-type",
-            SOURCE_PACKAGE_OCI_ARTIFACT_TYPE,
-            f"{manifest_arg}:{CANONICAL_MANIFEST_MEDIA_TYPE}",
-            f"{root}:{SOURCE_PACKAGE_LAYER_MEDIA_TYPE}",
-        ],
-        check=True,
-    )
-    return "published"
 
 
 def _component_has_migrations(repository_root: Path, component_id: str) -> bool:
@@ -1960,7 +1961,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Reconcile factory/registry/component_registry.json after verified publication.",
     )
+    parser.add_argument(
+        "--write-records",
+        type=Path,
+        default=None,
+        help=(
+            "After publication, serialize the PublicationRecords as canonical "
+            "JSON to this path (publication evidence; records carry no "
+            "lifecycle claims and are re-verified before any reconciliation)."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.write_records is not None and not (
+        args.publish_ghcr or args.reconcile_registry
+    ):
+        parser.error("--write-records requires --publish-ghcr or --reconcile-registry")
 
     repository_root = args.root.resolve()
     output_root = (
@@ -1975,6 +1991,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.publish_ghcr or args.reconcile_registry:
         records = publish_artifacts_to_oci(results, artifacts_root=output_root)
+        if args.write_records is not None:
+            records_path = (
+                args.write_records
+                if args.write_records.is_absolute()
+                else repository_root / args.write_records
+            )
+            records_path.parent.mkdir(parents=True, exist_ok=True)
+            records_path.write_text(
+                json.dumps(
+                    [asdict(record) for record in records],
+                    sort_keys=True,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         if args.reconcile_registry:
             registry_path = repository_root / REGISTRY_PATH
             registry_doc = load_registry_document(registry_path)
