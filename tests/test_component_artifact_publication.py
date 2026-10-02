@@ -45,6 +45,7 @@ from scripts.build_component_artifacts import (
     PublicationRecord,
     PublicationVerificationError,
     _RefuseRedirects,
+    _sha256_digest,
     build_all,
     declaration_for,
     dependency_closure_violations,
@@ -2505,3 +2506,548 @@ def test_deterministic_layout_tar_roundtrip_preserves_exact_bytes_and_paths(
     assert [dataclasses.asdict(rec) for rec in replayed] == [
         dataclasses.asdict(rec) for rec in original_records
     ]
+
+
+# ---------------------------------------------------------------------------
+# Authenticated blob GET 307: one credential-free hop, historical allowlist.
+# pkg-containers.githubusercontent.com is a historical/reference entry, not a
+# current production Location observation.
+# ---------------------------------------------------------------------------
+
+_QUERY_MARKER = "QUERYMARKER9f3a"
+_PRESERVED_QUERY = (
+    "se=2021-09-20T11%3A15%3A00Z&sig=abc%2Bdef%2Fxyz%3D&sp=r&spr=https&sr=b&sv=2019-12-12"
+    f"&marker={_QUERY_MARKER}"
+)
+_STORAGE_ORIGIN = "https://pkg-containers.githubusercontent.com"
+_BLOB_WORKFLOW_TOKEN = "raw-workflow-token"
+_BLOB_ISSUED_TOKEN = "registry-issued-token"
+
+
+def _storage_location(path: str = "/ghcr1/blobs/sha256:" + "ab" * 32) -> str:
+    return f"{_STORAGE_ORIGIN}{path}?{_PRESERVED_QUERY}"
+
+
+def _blob_registry_url(digest: str) -> str:
+    return (
+        "https://ghcr.io/v2/kvasha62/application-factory/authorization/blobs/"
+        f"{digest}"
+    )
+
+
+def _assert_secret_query_not_exposed(text: str) -> None:
+    assert _QUERY_MARKER not in text
+    assert "abc%2Bdef%2Fxyz%3D" not in text
+    assert "sig=" not in text
+    assert _BLOB_WORKFLOW_TOKEN not in text
+    assert _BLOB_ISSUED_TOKEN not in text
+
+
+def _followup_header_names(req: urllib.request.Request) -> list[str]:
+    return [name.lower() for name, _value in req.header_items()]
+
+
+def _blob_redirect_transport(
+    *,
+    digest: str,
+    on_authenticated: Any,
+    on_storage: Any | None = None,
+    challenge_scope: str | None = (
+        "repository:kvasha62/application-factory/authorization:pull"
+    ),
+) -> tuple[GHCRHTTPTransport, list[urllib.request.Request]]:
+    """Anonymous 401, one token exchange, then the authenticated blob response."""
+    calls: list[urllib.request.Request] = []
+
+    def opener(req: urllib.request.Request, timeout: int | None = None) -> Any:
+        calls.append(req)
+        url = req.full_url
+        if "ghcr.io/token" in url:
+            auth = req.get_header("Authorization")
+            assert auth is not None and auth.startswith("Basic ")
+            return _FakeResponse(
+                200, {}, json.dumps({"token": _BLOB_ISSUED_TOKEN}).encode()
+            )
+        if url.startswith((f"{_STORAGE_ORIGIN}/", f"{_STORAGE_ORIGIN}:")):
+            if on_storage is None:
+                raise AssertionError(f"storage host contacted: {url}")
+            return on_storage(req)
+        auth = req.get_header("Authorization")
+        if auth is None:
+            raise _http_error(
+                url,
+                401,
+                {"WWW-Authenticate": _bearer_challenge(scope=challenge_scope)},
+            )
+        assert auth == f"Bearer {_BLOB_ISSUED_TOKEN}"
+        return on_authenticated(req)
+
+    transport = GHCRHTTPTransport(
+        token=_BLOB_WORKFLOW_TOKEN,
+        username="publisher",
+        opener=opener,
+    )
+    return transport, calls
+
+
+def test_blob_redirect_allowlist_is_historical_reference_only() -> None:
+    """The allowlist is one historical host and the shared refusal stays installed."""
+    assert GHCRHTTPTransport.BLOB_REDIRECT_HOSTS == frozenset(
+        {"pkg-containers.githubusercontent.com"}
+    )
+    transport = GHCRHTTPTransport(token="tok-not-a-secret")
+    director = transport._open.__self__
+    assert any(isinstance(handler, _RefuseRedirects) for handler in director.handlers)
+
+
+def test_allowed_https_307_is_one_credential_free_get_and_bytes_still_verify() -> None:
+    """307 to the historical host: one GET, query preserved, digest check intact."""
+    body = b"canonical-blob-bytes"
+    digest = _sha256_digest(body)
+    location = _storage_location("/ghcr1/blobs/" + digest)
+    followups: list[urllib.request.Request] = []
+
+    def on_authenticated(req: urllib.request.Request) -> Any:
+        assert req.get_method() == "GET"
+        assert req.full_url == _blob_registry_url(digest)
+        raise _http_error(
+            req.full_url,
+            307,
+            {"Location": location, "Docker-Content-Digest": digest},
+        )
+
+    def on_storage(req: urllib.request.Request) -> Any:
+        followups.append(req)
+        return _FakeResponse(200, {"Docker-Content-Digest": digest}, body)
+
+    transport, calls = _blob_redirect_transport(
+        digest=digest, on_authenticated=on_authenticated, on_storage=on_storage
+    )
+    fetched = transport.fetch_blob(
+        "ghcr.io/kvasha62/application-factory/authorization", digest
+    )
+    assert fetched == body
+    # Same comparison publish_artifacts_to_oci performs on fetch_blob's return.
+    assert _sha256_digest(fetched) == digest
+    assert len(followups) == 1
+    followup = followups[0]
+    assert followup.get_method() == "GET"
+    assert followup.full_url == location
+    assert "%2B" in followup.full_url
+    assert "%2F" in followup.full_url
+    assert "%3D" in followup.full_url
+    assert _followup_header_names(followup) == [
+        "user-agent",
+    ]
+    assert followup.get_header("Authorization") is None
+    assert followup.get_header("Cookie") is None
+    assert followup.get_header("Proxy-authorization") is None
+    assert _BLOB_WORKFLOW_TOKEN not in followup.full_url
+    assert _BLOB_ISSUED_TOKEN not in followup.full_url
+    assert all(
+        _BLOB_WORKFLOW_TOKEN not in value and _BLOB_ISSUED_TOKEN not in value
+        for _name, value in followup.header_items()
+    )
+    assert _QUERY_MARKER not in repr(transport.__dict__)
+    assert sum(1 for call in calls if call.full_url.startswith(_STORAGE_ORIGIN)) == 1
+
+
+def test_returned_307_response_is_followed_once_without_credentials() -> None:
+    """A 307 response object, not only HTTPError, still takes the narrow path."""
+    body = b"from-storage"
+    digest = _sha256_digest(body)
+    location = _storage_location()
+
+    def on_authenticated(req: urllib.request.Request) -> Any:
+        return _FakeResponse(
+            307,
+            {"Location": location, "Docker-Content-Digest": digest},
+            b"",
+        )
+
+    def on_storage(req: urllib.request.Request) -> Any:
+        assert req.get_header("Authorization") is None
+        assert req.full_url == location
+        return _FakeResponse(200, {}, body)
+
+    transport, _calls = _blob_redirect_transport(
+        digest=digest, on_authenticated=on_authenticated, on_storage=on_storage
+    )
+    assert (
+        transport.fetch_blob(
+            "ghcr.io/kvasha62/application-factory/authorization", digest
+        )
+        == body
+    )
+
+
+def test_direct_200_blob_get_does_not_redirect() -> None:
+    """A 200 blob GET stays a single authenticated read."""
+    digest = "sha256:" + "b" * 64
+
+    def on_authenticated(req: urllib.request.Request) -> Any:
+        return _FakeResponse(200, {}, b"inline-blob")
+
+    transport, calls = _blob_redirect_transport(
+        digest=digest, on_authenticated=on_authenticated
+    )
+    assert (
+        transport.fetch_blob(
+            "ghcr.io/kvasha62/application-factory/authorization", digest
+        )
+        == b"inline-blob"
+    )
+    assert all(not call.full_url.startswith(_STORAGE_ORIGIN) for call in calls)
+
+
+@pytest.mark.parametrize(
+    ("location", "reason"),
+    [
+        (
+            "https://evil.example/capture?marker=QUERYMARKER9f3a",
+            "cross-host",
+        ),
+        (
+            "http://pkg-containers.githubusercontent.com/x?marker=QUERYMARKER9f3a",
+            "downgrade",
+        ),
+        (
+            "https://pkg-containers.githubusercontent.com:8443/x?marker=QUERYMARKER9f3a",
+            "port",
+        ),
+        (
+            "https://user:pw@pkg-containers.githubusercontent.com/x?marker=QUERYMARKER9f3a",
+            "userinfo",
+        ),
+        (
+            "https://185.199.108.154/x?marker=QUERYMARKER9f3a",
+            "ip-literal",
+        ),
+        (
+            "https://[2606:50c0:8000::154]/x?marker=QUERYMARKER9f3a",
+            "ip-literal",
+        ),
+        ("/v2/blobs/sha256:" + "cd" * 32, "relative"),
+        ("//pkg-containers.githubusercontent.com/x", "relative"),
+        (
+            "https://PKG-CONTAINERS.GITHUBUSERCONTENT.COM/x?marker=QUERYMARKER9f3a",
+            "cross-host",
+        ),
+    ],
+)
+def test_blob_redirect_location_is_rejected_without_a_followup(
+    location: str, reason: str
+) -> None:
+    """Hostile or non-absolute Locations are not requested and not logged."""
+    digest = "sha256:" + "d" * 64
+
+    def on_authenticated(req: urllib.request.Request) -> Any:
+        raise _http_error(req.full_url, 307, {"Location": location})
+
+    transport, calls = _blob_redirect_transport(
+        digest=digest, on_authenticated=on_authenticated
+    )
+    with pytest.raises(
+        PublicationBlockedError, match=rf"rejected \({reason}\)"
+    ) as excinfo:
+        transport.fetch_blob(
+            "ghcr.io/kvasha62/application-factory/authorization", digest
+        )
+    _assert_secret_query_not_exposed(str(excinfo.value))
+    assert all("evil.example" not in call.full_url for call in calls)
+    assert all("185.199.108.154" not in call.full_url for call in calls)
+    assert all("2606:50c0" not in call.full_url for call in calls)
+    assert all("user:pw" not in call.full_url for call in calls)
+    assert all(not call.full_url.startswith(_STORAGE_ORIGIN) for call in calls)
+    assert all(not call.full_url.startswith("http://") for call in calls)
+    assert len(calls) == 3
+
+
+def test_missing_blob_redirect_location_is_rejected() -> None:
+    digest = "sha256:" + "e" * 64
+
+    def on_authenticated(req: urllib.request.Request) -> Any:
+        raise _http_error(req.full_url, 307, {})
+
+    transport, calls = _blob_redirect_transport(
+        digest=digest, on_authenticated=on_authenticated
+    )
+    with pytest.raises(PublicationBlockedError, match=r"rejected \(missing\)"):
+        transport.fetch_blob(
+            "ghcr.io/kvasha62/application-factory/authorization", digest
+        )
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("code", [301, 302, 303, 308])
+def test_non_307_blob_redirect_is_fail_closed(code: int) -> None:
+    digest = "sha256:" + "1" * 64
+    location = _storage_location()
+
+    def on_authenticated(req: urllib.request.Request) -> Any:
+        raise _http_error(req.full_url, code, {"Location": location})
+
+    transport, calls = _blob_redirect_transport(
+        digest=digest, on_authenticated=on_authenticated
+    )
+    with pytest.raises(PublicationBlockedError, match=rf"failed \({code}\)") as excinfo:
+        transport.fetch_blob(
+            "ghcr.io/kvasha62/application-factory/authorization", digest
+        )
+    _assert_secret_query_not_exposed(str(excinfo.value))
+    assert all(not call.full_url.startswith(_STORAGE_ORIGIN) for call in calls)
+
+
+def test_second_blob_redirect_is_not_followed() -> None:
+    digest = "sha256:" + "2" * 64
+    location = _storage_location()
+    second = f"{_STORAGE_ORIGIN}/other?marker=SECONDHOPMARKER"
+    storage_calls: list[str] = []
+
+    def on_authenticated(req: urllib.request.Request) -> Any:
+        raise _http_error(
+            req.full_url,
+            307,
+            {"Location": location, "Docker-Content-Digest": digest},
+        )
+
+    def on_storage(req: urllib.request.Request) -> Any:
+        storage_calls.append(req.full_url)
+        raise _http_error(req.full_url, 307, {"Location": second})
+
+    transport, _calls = _blob_redirect_transport(
+        digest=digest, on_authenticated=on_authenticated, on_storage=on_storage
+    )
+    with pytest.raises(
+        PublicationBlockedError, match="further redirects are not followed"
+    ) as excinfo:
+        transport.fetch_blob(
+            "ghcr.io/kvasha62/application-factory/authorization", digest
+        )
+    assert storage_calls == [location]
+    message = str(excinfo.value)
+    _assert_secret_query_not_exposed(message)
+    assert "SECONDHOPMARKER" not in message
+
+
+def test_anonymous_blob_307_is_not_followed() -> None:
+    digest = "sha256:" + "3" * 64
+    calls: list[str] = []
+
+    def opener(req: urllib.request.Request, timeout: int | None = None) -> Any:
+        calls.append(req.full_url)
+        raise _http_error(
+            req.full_url,
+            307,
+            {"Location": _storage_location()},
+        )
+
+    transport = GHCRHTTPTransport(
+        token=_BLOB_WORKFLOW_TOKEN, username="publisher", opener=opener
+    )
+    with pytest.raises(PublicationBlockedError, match=r"failed \(307\)") as excinfo:
+        transport.fetch_blob(
+            "ghcr.io/kvasha62/application-factory/authorization", digest
+        )
+    assert calls == [_blob_registry_url(digest)]
+    _assert_secret_query_not_exposed(str(excinfo.value))
+
+
+def test_manifest_307_is_not_followed_even_for_allowlisted_host() -> None:
+    digest = "sha256:" + "4" * 64
+    calls: list[str] = []
+
+    def opener(req: urllib.request.Request, timeout: int | None = None) -> Any:
+        calls.append(req.full_url)
+        url = req.full_url
+        if "ghcr.io/token" in url:
+            return _FakeResponse(
+                200, {}, json.dumps({"token": _BLOB_ISSUED_TOKEN}).encode()
+            )
+        if req.get_header("Authorization") is None:
+            raise _http_error(
+                url,
+                401,
+                {"WWW-Authenticate": _bearer_challenge(scope=None)},
+            )
+        raise _http_error(url, 307, {"Location": _storage_location()})
+
+    transport = GHCRHTTPTransport(
+        token=_BLOB_WORKFLOW_TOKEN, username="publisher", opener=opener
+    )
+    with pytest.raises(PublicationBlockedError, match=r"failed \(307\)"):
+        transport.fetch_manifest(
+            "ghcr.io/kvasha62/application-factory/authorization", digest
+        )
+    assert all(not url.startswith(_STORAGE_ORIGIN) for url in calls)
+
+
+def test_token_endpoint_307_is_not_followed() -> None:
+    digest = "sha256:" + "5" * 64
+    calls: list[str] = []
+
+    def opener(req: urllib.request.Request, timeout: int | None = None) -> Any:
+        calls.append(req.full_url)
+        url = req.full_url
+        if "ghcr.io/token" in url:
+            raise _http_error(url, 307, {"Location": _storage_location()})
+        raise _http_error(
+            url,
+            401,
+            {
+                "WWW-Authenticate": _bearer_challenge(
+                    scope="repository:kvasha62/application-factory/authorization:pull"
+                )
+            },
+        )
+
+    transport = GHCRHTTPTransport(
+        token=_BLOB_WORKFLOW_TOKEN, username="publisher", opener=opener
+    )
+    with pytest.raises(PublicationBlockedError, match="token exchange") as excinfo:
+        transport.fetch_blob(
+            "ghcr.io/kvasha62/application-factory/authorization", digest
+        )
+    assert all(not url.startswith(_STORAGE_ORIGIN) for url in calls)
+    _assert_secret_query_not_exposed(str(excinfo.value))
+
+
+def test_upload_307_is_not_followed() -> None:
+    digest = "sha256:" + "6" * 64
+    calls: list[str] = []
+
+    def opener(req: urllib.request.Request, timeout: int | None = None) -> Any:
+        calls.append(req.full_url)
+        raise _http_error(req.full_url, 307, {"Location": _storage_location()})
+
+    transport = GHCRHTTPTransport(
+        token=_BLOB_WORKFLOW_TOKEN, username="publisher", opener=opener
+    )
+    with pytest.raises(PublicationBlockedError, match=r"failed \(307\)"):
+        transport.push_blob(
+            "ghcr.io/kvasha62/application-factory/authorization", digest, b"payload"
+        )
+    assert calls == [
+        "https://ghcr.io/v2/kvasha62/application-factory/authorization/blobs/uploads/"
+    ]
+
+
+def test_blob_redirect_digest_header_mismatch_does_not_follow() -> None:
+    digest = "sha256:" + "7" * 64
+    location = _storage_location()
+
+    def on_authenticated(req: urllib.request.Request) -> Any:
+        raise _http_error(
+            req.full_url,
+            307,
+            {
+                "Location": location,
+                "Docker-Content-Digest": "sha256:" + "8" * 64,
+            },
+        )
+
+    transport, calls = _blob_redirect_transport(
+        digest=digest, on_authenticated=on_authenticated
+    )
+    with pytest.raises(
+        PublicationBlockedError, match="Docker-Content-Digest does not match"
+    ) as excinfo:
+        transport.fetch_blob(
+            "ghcr.io/kvasha62/application-factory/authorization", digest
+        )
+    _assert_secret_query_not_exposed(str(excinfo.value))
+    assert all(not call.full_url.startswith(_STORAGE_ORIGIN) for call in calls)
+
+
+def test_followup_digest_header_mismatch_is_not_returned_as_verified() -> None:
+    body = b"storage-bytes"
+    digest = _sha256_digest(body)
+    location = _storage_location()
+
+    def on_authenticated(req: urllib.request.Request) -> Any:
+        raise _http_error(req.full_url, 307, {"Location": location})
+
+    def on_storage(req: urllib.request.Request) -> Any:
+        return _FakeResponse(
+            200,
+            {"Docker-Content-Digest": "sha256:" + "9" * 64},
+            body,
+        )
+
+    transport, _calls = _blob_redirect_transport(
+        digest=digest, on_authenticated=on_authenticated, on_storage=on_storage
+    )
+    with pytest.raises(
+        PublicationBlockedError, match="Docker-Content-Digest does not match"
+    ) as excinfo:
+        transport.fetch_blob(
+            "ghcr.io/kvasha62/application-factory/authorization", digest
+        )
+    _assert_secret_query_not_exposed(str(excinfo.value))
+
+
+def test_publisher_still_hashes_blob_bytes_after_redirect(
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+) -> None:
+    """The post-push SHA-256 comparison still gates a redirected blob read."""
+    artifacts_dir, results, _records = built_suite
+    item = next(entry for entry in results if entry["component_id"] == "authorization")
+    digest = str(item["artifact"]["digest"])
+    oci = item["oci"]
+    layout = artifacts_dir / oci["layout_path"] / "blobs" / "sha256"
+    canonical = (layout / digest.removeprefix("sha256:")).read_bytes()
+    manifest_digest = str(oci["oci_manifest_digest"])
+    manifest_bytes = (layout / manifest_digest.removeprefix("sha256:")).read_bytes()
+    location = _storage_location("/ghcr1/blobs/" + digest)
+    issued = "publisher-registry-token"
+
+    def _transport(body: bytes) -> GHCRHTTPTransport:
+        def opener(req: urllib.request.Request, timeout: int | None = None) -> Any:
+            url = req.full_url
+            if "ghcr.io/token" in url:
+                return _FakeResponse(200, {}, json.dumps({"token": issued}).encode())
+            if url.startswith(f"{_STORAGE_ORIGIN}/"):
+                assert req.get_method() == "GET"
+                assert req.get_header("Authorization") is None
+                assert req.get_header("Cookie") is None
+                assert req.get_header("Proxy-authorization") is None
+                assert req.full_url == location
+                return _FakeResponse(200, {"Docker-Content-Digest": digest}, body)
+            if req.get_header("Authorization") is None:
+                raise _http_error(
+                    url,
+                    401,
+                    {"WWW-Authenticate": _bearer_challenge(scope=None)},
+                )
+            method = req.get_method()
+            if method == "POST":
+                return _FakeResponse(202, {"Location": "/v2/uploads/1"})
+            if method == "GET" and "/manifests/" in url:
+                return _FakeResponse(200, {}, manifest_bytes)
+            if method == "GET" and "/blobs/" in url:
+                raise _http_error(
+                    url,
+                    307,
+                    {"Location": location, "Docker-Content-Digest": digest},
+                )
+            if method == "PUT":
+                return _FakeResponse(201, {})
+            raise AssertionError(f"unexpected {method} {url}")
+
+        return GHCRHTTPTransport(token="publisher-workflow-token", opener=opener)
+
+    records = publish_artifacts_to_oci(
+        [item], artifacts_root=artifacts_dir, transport=_transport(canonical)
+    )
+    assert len(records) == 1
+    assert records[0].verified is True
+    assert records[0].artifact["digest"] == digest
+
+    with pytest.raises(
+        PublicationVerificationError, match="remote canonical manifest digest"
+    ):
+        publish_artifacts_to_oci(
+            [item],
+            artifacts_root=artifacts_dir,
+            transport=_transport(canonical + b"!"),
+        )

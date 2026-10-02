@@ -24,6 +24,7 @@ import base64
 import copy
 import hashlib
 import io
+import ipaddress
 import json
 import os
 import re
@@ -1196,6 +1197,30 @@ _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9.:_-]{1,128}$")
 _ERROR_BODY_LIMIT = 4096
 
 
+def _host_is_ip_literal(host: str) -> bool:
+    """True for an IPv4 or IPv6 address, which is never an allowlisted redirect host."""
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def _header_value(headers: Any, name: str) -> str | None:
+    """Return one header value without treating a missing header as empty."""
+    if headers is None:
+        return None
+    getter = getattr(headers, "get", None)
+    if not callable(getter):
+        return None
+    value = getter(name)
+    if value is None:
+        value = getter(name.lower())
+    if isinstance(value, str) and value != "":
+        return value
+    return None
+
+
 class GHCRHTTPTransport(OCIRegistryTransport):
     """OCI Distribution Spec v1.1 HTTP transport for GHCR (digest-addressed).
 
@@ -1210,14 +1235,24 @@ class GHCRHTTPTransport(OCIRegistryTransport):
     reads, ``pull,push`` for writes), and the original request is retried
     exactly once with the issued registry bearer. Any other status - including
     403 - is terminal, is reported with bounded diagnostics, and is never
-    converted into a retry. Mutable tag references are never requested or
-    written.
+    converted into a retry. The sole exception is ``fetch_blob``: an
+    authenticated blob GET that answers HTTP 307 may be followed exactly once,
+    with a new credential-free GET, and only when ``Location`` passes
+    ``_blob_redirect_block_reason``. Mutable tag references are never requested
+    or written.
     """
 
     _REALM_RE = re.compile(r'realm="([^"]+)"')
     _SERVICE_RE = re.compile(r'service="([^"]+)"')
     _SCOPE_RE = re.compile(r'scope="([^"]*)"')
     TRUSTED_TOKEN_HOSTS: frozenset[str] = frozenset({"ghcr.io"})
+    #: Historical/reference blob-redirect host only. It is NOT a current
+    #: production Location observation: the read-only probe could not complete
+    #: TLS to ghcr.io. Do not add a host without a separately authorized
+    #: evidence-based patch.
+    BLOB_REDIRECT_HOSTS: frozenset[str] = frozenset(
+        {"pkg-containers.githubusercontent.com"}
+    )
 
     def __init__(
         self,
@@ -1583,10 +1618,222 @@ class GHCRHTTPTransport(OCIRegistryTransport):
         )
 
     def fetch_blob(self, repository: str, digest: str) -> bytes:
+        """Fetch one blob, following at most one authenticated 307.
+
+        Anonymous responses are never redirected. A 307 is eligible only on the
+        authenticated retry of this blob GET. The follow-up is a new GET through
+        the redirect-refusing opener, with ``User-Agent`` only. Manifest, token,
+        and upload calls do not use this path.
+        """
         repo_path = self._repo_path(repository)
         url = f"{self._base_url}/v2/{repo_path}/blobs/{digest}"
-        _, _, body = self._request("GET", url, scope_repository=repo_path)
+        try:
+            status, headers, body = self._send("GET", url, token=None)
+        except _Unauthorized401 as exc:
+            return self._fetch_authenticated_blob(url, repo_path, exc.challenge, digest)
+        return self._direct_blob_bytes(url, status, headers, body, digest)
+
+    def _fetch_authenticated_blob(
+        self,
+        url: str,
+        repo_path: str,
+        challenge: str | None,
+        digest: str,
+    ) -> bytes:
+        """Retry one blob GET with the exchanged bearer, then maybe one redirect."""
+        if not isinstance(challenge, str) or not challenge:
+            msg = (
+                f"ghcr_http_error: GET {self._redact(url)} "
+                "failed (401): unauthorized"
+            )
+            raise PublicationBlockedError([msg]) from None
+        exchanged = self._exchange_token(
+            challenge,
+            repo_path,
+            required_actions=_READ_SCOPE_ACTIONS,
+        )
+        try:
+            status, headers, body = self._send("GET", url, token=exchanged)
+        except _Unauthorized401 as retry_exc:
+            msg = (
+                "ghcr_auth_error: "
+                f"GET {self._redact(url)} was rejected "
+                "(401) even after token exchange"
+            )
+            raise PublicationBlockedError([msg]) from retry_exc
+        except PublicationBlockedError as blocked:
+            location = self._authenticated_blob_redirect(blocked, digest)
+            if location is None:
+                raise
+            return self._follow_blob_redirect(location, digest)
+        if status == 307:
+            location = _header_value(headers, "Location")
+            self._reject_or_accept_blob_location(location, headers, digest)
+            if not isinstance(location, str):
+                msg = "ghcr_protocol_error: blob redirect Location rejected (missing)"
+                raise PublicationBlockedError([msg])
+            return self._follow_blob_redirect(location, digest)
+        return self._direct_blob_bytes(url, status, headers, body, digest)
+
+    def _direct_blob_bytes(
+        self,
+        url: str,
+        status: int,
+        headers: Mapping[str, str],
+        body: bytes,
+        digest: str,
+    ) -> bytes:
+        """Accept an inline blob body. Redirect statuses stay fail-closed here."""
+        if status != 200:
+            msg = f"ghcr_http_error: GET {self._redact(url)} failed ({status})"
+            raise PublicationBlockedError([msg])
+        self._assert_available_digest(headers, digest)
         return body
+
+    def _authenticated_blob_redirect(
+        self, blocked: PublicationBlockedError, digest: str
+    ) -> str | None:
+        """Return a validated Location for an authenticated 307, else None.
+
+        Non-307 failures propagate unchanged. A 307 with a rejected Location
+        fails closed without echoing the target (the query is a credential).
+        """
+        cause = blocked.__cause__
+        if not isinstance(cause, urllib.error.HTTPError) or cause.code != 307:
+            return None
+        headers = getattr(cause, "headers", None)
+        location = _header_value(headers, "Location")
+        self._reject_or_accept_blob_location(location, headers, digest)
+        if not isinstance(location, str):
+            msg = "ghcr_protocol_error: blob redirect Location rejected (missing)"
+            raise PublicationBlockedError([msg]) from None
+        return location
+
+    def _reject_or_accept_blob_location(
+        self, location: str | None, headers: Any, digest: str
+    ) -> None:
+        reason = self._blob_redirect_block_reason(location)
+        if reason is not None:
+            msg = f"ghcr_protocol_error: blob redirect Location rejected ({reason})"
+            raise PublicationBlockedError([msg]) from None
+        self._assert_available_digest(headers, digest)
+
+    def _blob_redirect_block_reason(self, location: object) -> str | None:
+        """Return a fixed rejection code, or None when Location may be followed.
+
+        The code is never derived from the URL, so a SAS query cannot reach a
+        diagnostic. ``pkg-containers.githubusercontent.com`` is accepted only
+        because it is the historical/reference allowlist entry.
+        """
+        if not isinstance(location, str) or location == "":
+            return "missing"
+        if location.startswith(("/", "//")):
+            return "relative"
+        if any(char in location for char in "\r\n\t \x00\\#"):
+            return "rejected"
+        scheme, separator, _rest = location.partition(":")
+        if separator and scheme.lower() == "http":
+            return "downgrade"
+        if not location.startswith("https://"):
+            return "rejected"
+        try:
+            parts = urllib.parse.urlsplit(location)
+        except ValueError:
+            return "rejected"
+        if parts.username or parts.password:
+            return "userinfo"
+        host = parts.hostname
+        if not isinstance(host, str) or host == "":
+            return "rejected"
+        if _host_is_ip_literal(host):
+            return "ip-literal"
+        if parts.port not in (None, 443):
+            return "port"
+        if parts.scheme != "https" or parts.fragment:
+            return "rejected"
+        if host not in self.BLOB_REDIRECT_HOSTS:
+            return "cross-host"
+        authority = location[len("https://") :].split("/", 1)[0]
+        allowed_authorities = {
+            item for name in self.BLOB_REDIRECT_HOSTS for item in (name, f"{name}:443")
+        }
+        if authority not in allowed_authorities:
+            return "cross-host"
+        if not location.startswith(f"https://{authority}/"):
+            return "rejected"
+        return None
+
+    def _follow_blob_redirect(self, location: str, digest: str) -> bytes:
+        """One credential-free GET. A further 3xx is fail-closed."""
+        reason = self._blob_redirect_block_reason(location)
+        if reason is not None:
+            msg = f"ghcr_protocol_error: blob redirect Location rejected ({reason})"
+            raise PublicationBlockedError([msg]) from None
+        status, headers, body = self._open_credential_free_get(location)
+        if 300 <= status < 400:
+            msg = (
+                "ghcr_http_error: GET blob redirect target failed "
+                f"({status}): further redirects are not followed"
+            )
+            raise PublicationBlockedError([msg])
+        if status != 200:
+            msg = f"ghcr_http_error: GET blob redirect target failed ({status})"
+            raise PublicationBlockedError([msg])
+        self._assert_available_digest(headers, digest)
+        return body
+
+    def _open_credential_free_get(
+        self, url: str
+    ) -> tuple[int, Mapping[str, str], bytes]:
+        """GET ``url`` with User-Agent only, through the redirect-refusing opener.
+
+        The URL is not copied into the failure diagnostic: blob redirect queries
+        carry storage signatures.
+        """
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "application-factory-artifact-publisher/1.0"},
+            method="GET",
+        )
+        if any(
+            req.has_header(name)
+            for name in ("Authorization", "Cookie", "Proxy-authorization")
+        ):
+            msg = "ghcr_protocol_error: blob redirect follow-up refused"
+            raise PublicationBlockedError([msg])
+        try:
+            with self._open(req, timeout=30) as response:
+                status = getattr(response, "status", 200)
+                raw_headers = getattr(response, "headers", {}) or {}
+                body = response.read()
+                return status, dict(raw_headers), body
+        except urllib.error.HTTPError as exc:
+            if 300 <= exc.code < 400:
+                detail = (
+                    "ghcr_http_error: GET blob redirect target failed "
+                    f"({exc.code}): further redirects are not followed"
+                )
+            else:
+                detail = (
+                    "ghcr_http_error: GET blob redirect target failed " f"({exc.code})"
+                )
+            detail += self._error_diagnostics(exc)
+            raise PublicationBlockedError([detail]) from None
+        except (urllib.error.URLError, OSError, ValueError, RuntimeError):
+            msg = "ghcr_unreachable: GET blob redirect target failed"
+            raise PublicationBlockedError([msg]) from None
+
+    def _assert_available_digest(self, headers: Any, digest: str) -> None:
+        """Fail closed when Docker-Content-Digest is present and disagrees."""
+        raw = _header_value(headers, "Docker-Content-Digest")
+        if raw is None:
+            return
+        if raw != digest:
+            msg = (
+                "ghcr_protocol_error: Docker-Content-Digest does not match "
+                "the requested blob digest"
+            )
+            raise PublicationBlockedError([msg])
 
     def fetch_manifest(self, repository: str, digest: str) -> bytes:
         repo_path = self._repo_path(repository)
