@@ -1,0 +1,91 @@
+# Read-only, independent verification of immutable OCI content in GHCR.
+#
+# This workflow never publishes, tags, deletes, reconciles or otherwise
+# mutates registry or repository state. It fetches the nine digest-addressed
+# component artifacts from ghcr.io, recomputes SHA-256 of the manifest and of
+# every referenced config/layer blob, compares digests and byte counts with the
+# descriptors, and uploads a credential-free evidence matrix.
+#
+# Trigger: manual only. Permissions: least privilege (contents: read to check
+# out the verifier, packages: read to pull from GHCR). No packages: write.
+#
+# The workflow FAILS unless all nine components classify as PASS; ACCESS
+# BLOCKED and FAIL are never converted into success.
+
+name: Verify GHCR immutable content (read-only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: verify-ghcr-immutability
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Fetch + independent SHA-256 of 9 digest-addressed artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout verifier (read-only)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install ORAS (official setup action, pinned)
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
+        with:
+          version: 1.3.0
+
+      - name: Record tool versions
+        run: |
+          oras version
+          python --version
+
+      - name: Log in to GHCR (read-only token, stdin only)
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | oras login ghcr.io -u "$GHCR_USER" --password-stdin
+
+      - name: Verify nine digest-addressed artifacts
+        id: verify
+        env:
+          # The verifier only reads; the token is exposed solely so that any
+          # accidental echo of it can be redacted from the evidence.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/verify_ghcr_immutability.py \
+            --output "$RUNNER_TEMP/ghcr-verification"
+
+      - name: Publish evidence to job summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/ghcr-verification/verification-matrix.md" ]; then
+            cat "$RUNNER_TEMP/ghcr-verification/verification-matrix.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No evidence matrix produced (verifier did not run to completion)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload evidence artifact (credential-free)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghcr-immutability-evidence-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ghcr-verification/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Remove registry credentials from the runner
+        if: always()
+        run: oras logout ghcr.io || true
