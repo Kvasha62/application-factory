@@ -1456,12 +1456,11 @@ def test_publish_workflow_uses_deterministic_digest_addressed_path() -> None:
     assert "github.event_name == 'push' && github.ref == 'refs/heads/main'" in text
     assert "packages: write" in text
     assert "packages: read" not in text  # write scope is on the publish leg only
-    # The publish step itself speaks only the deterministic digest path; the
-    # registry-API reconcile step (app registry, not GHCR) is a separate step.
+    # The publish step itself speaks only the deterministic digest path.
     publish_step = text.split(
-        "Publish deterministic OCI artifacts to GHCR by digest", 1
+        "- name: Publish deterministic OCI artifacts to GHCR by digest", 1
     )[1]
-    publish_step = publish_step.split("Package the deterministic", 1)[0]
+    publish_step = publish_step.split("- name: Archive generated artifacts", 1)[0]
     low = publish_step.lower()
     for forbidden in (
         "oras",
@@ -1473,6 +1472,43 @@ def test_publish_workflow_uses_deterministic_digest_addressed_path() -> None:
         "reconcile",
     ):
         assert forbidden not in low, f"publish step must not reference {forbidden!r}"
+
+
+def test_publish_workflow_splits_write_scope_into_dedicated_job() -> None:
+    """T1b permission split: only the publication job may hold packages: write."""
+    text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    workflow_permissions, jobs = text.split("jobs:", 1)
+    # Workflow default: read-only; no registry scope anywhere near it.
+    assert "permissions:\n  contents: read" in workflow_permissions
+    assert "packages" not in workflow_permissions.split("permissions:", 1)[1]
+    build_job, publish_job = jobs.split("\n  publish-by-digest:", 1)
+    # The build/verify job (also the PR leg) is strictly read-only: it must
+    # never hold a packages scope nor see the registry token nor publish.
+    assert "packages: write" not in build_job
+    assert (
+        "packages:" not in build_job.split("permissions:", 1)[1].split("steps:", 1)[0]
+    )
+    assert "GHCR_TOKEN" not in build_job
+    assert "--publish-ghcr" not in build_job
+    # The publication job: explicit minimal scope, gated to main, and chained
+    # behind the verified build through the workflow artifact transfer only.
+    assert "needs: build-and-verify" in publish_job
+    assert "contents: read" in publish_job
+    assert "packages: write" in publish_job
+    assert (
+        "if: github.event_name == 'push' && github.ref == 'refs/heads/main'"
+        in publish_job
+    )
+    assert "actions/upload-artifact@v4" in build_job
+    assert "actions/download-artifact@v4" in publish_job
+    assert build_job.count("name: deterministic-oci-layout") == 1
+    assert publish_job.count("name: deterministic-oci-layout") == 1
+    # Evidence archive naming/retention preserved on both legs; exactly one
+    # evidence upload per event type (pull request: build job; push: publish).
+    evidence = "component-artifacts-${{ github.sha }}"
+    assert build_job.count(evidence) == 1 and publish_job.count(evidence) == 1
+    assert "retention-days: 90" in build_job and "retention-days: 90" in publish_job
+    assert "retention-days: 1" in build_job  # transfer artifact is ephemeral
 
 
 def test_cli_write_records_requires_publication(
