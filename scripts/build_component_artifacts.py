@@ -1333,15 +1333,20 @@ class GHCRHTTPTransport(OCIRegistryTransport):
         id are surfaced when they are present and well-formed. Only values that
         match fixed, non-secret character sets are reported; response bodies are
         parsed but never reproduced, and nothing here can carry a credential.
+
+        The body is read with ``_ERROR_BODY_LIMIT`` as the read size itself, so
+        an oversized error body is never loaded into memory: at most that many
+        bytes are consumed from the stream, regardless of how much the server
+        sent.
         """
         notes: list[str] = []
         try:
-            raw = exc.read() or b""
+            raw = exc.read(_ERROR_BODY_LIMIT) or b""
         except (OSError, ValueError, RuntimeError):
             raw = b""
         if raw:
             try:
-                payload = json.loads(raw[:_ERROR_BODY_LIMIT])
+                payload = json.loads(raw)
             except ValueError:
                 payload = None
             if isinstance(payload, Mapping):

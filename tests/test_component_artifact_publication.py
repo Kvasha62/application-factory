@@ -30,6 +30,7 @@ from component_registry import (
 )
 from factory_artifact import canonical_manifest_reference
 from scripts.build_component_artifacts import (
+    _ERROR_BODY_LIMIT,
     _READ_SCOPE_ACTIONS,
     _WRITE_SCOPE_ACTIONS,
     APPROVED_COMPONENT_IDS,
@@ -1472,6 +1473,83 @@ def test_t20_forbidden_is_terminal_and_never_exchanged() -> None:
     # Bounded: the raw response body is not reproduced in the error.
     assert "denied" not in message
     assert "raw-workflow-token" not in message
+
+
+class _RecordingHTTPErrorBody:
+    """Minimal HTTPError body double that records every read size it receives."""
+
+    def __init__(self, body: bytes, headers: dict[str, str] | None = None) -> None:
+        self._body = body
+        self.headers = dict(headers or {})
+        self.read_sizes: list[int] = []
+        self.bytes_returned = 0
+
+    def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
+        if size is None or size < 0:
+            msg = "unbounded read: diagnostics must pass an explicit size"
+            raise AssertionError(msg)
+        chunk = self._body[:size]
+        self.bytes_returned += len(chunk)
+        return chunk
+
+    def close(self) -> None:
+        """No-op: HTTPError wraps its fp and may close it during GC."""
+
+
+def test_t20_error_diagnostics_passes_body_limit_directly_to_read() -> None:
+    """The read itself is bounded: size == _ERROR_BODY_LIMIT, never unbounded."""
+    request_id = "ABCD:1234:5678:90AB:0123456789AB"
+    body = json.dumps(
+        {"errors": [{"code": "DENIED", "message": "raw-upstream-detail"}]}
+    ).encode()
+    fake = _RecordingHTTPErrorBody(body, {"X-GitHub-Request-Id": request_id})
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token", username="u", opener=lambda req, timeout=None: None
+    )
+
+    notes = transport._error_diagnostics(fake)
+
+    assert fake.read_sizes == [_ERROR_BODY_LIMIT]
+    assert "registry error code=DENIED" in notes
+    assert f"request-id={request_id}" in notes
+    # The response body is never reproduced, only the allow-listed fields.
+    assert "raw-upstream-detail" not in notes
+
+
+def test_t20_error_diagnostics_never_consumes_oversized_body() -> None:
+    """An oversized error body is not loaded in full: one read, capped at the limit."""
+    request_id = "WXYZ:0001:0002:0003:FFFFFFFFFF"
+    marker = "OVERSIZED-BODY-MARKER"
+    oversized = b"z" * (_ERROR_BODY_LIMIT * 4) + marker.encode()
+    headers = Message()
+    headers["X-GitHub-Request-Id"] = request_id
+    streams: list[_RecordingHTTPErrorBody] = []
+
+    def opener(req, timeout=None):
+        stream = _RecordingHTTPErrorBody(oversized)
+        streams.append(stream)
+        raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", headers, stream)
+
+    transport = GHCRHTTPTransport(
+        token="raw-workflow-token", username="u", opener=opener
+    )
+    with pytest.raises(PublicationBlockedError) as excinfo:
+        transport.fetch_blob(
+            "ghcr.io/kvasha62/application-factory/saga", "sha256:" + "7" * 64
+        )
+
+    message = str(excinfo.value)
+    assert len(oversized) > _ERROR_BODY_LIMIT
+    assert len(streams) == 1
+    stream = streams[0]
+    # Exactly one read, sized by the limit: the 4x oversized body is not loaded.
+    assert stream.read_sizes == [_ERROR_BODY_LIMIT]
+    assert stream.bytes_returned == _ERROR_BODY_LIMIT
+    assert stream.bytes_returned < len(oversized)
+    assert marker not in message
+    assert f"request-id={request_id}" in message
+    assert len(message) < 1024  # bounded diagnostics
 
 
 def test_t20_secrets_never_appear_when_transport_fails() -> None:
