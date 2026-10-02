@@ -12,6 +12,7 @@ import hashlib
 import io
 import json
 import shutil
+import subprocess
 import urllib.error
 import urllib.request
 from email.message import Message
@@ -2010,3 +2011,92 @@ def test_transport_never_follows_redirects() -> None:
         )
     assert excinfo.value.code == 302
     assert "redirects are never followed" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# Follow-up mutation 5951966281: workflow artifact transfer via deterministic
+# tar archive (T13).
+# ---------------------------------------------------------------------------
+
+
+def test_workflow_artifact_transfer_avoids_colon_in_upload_path() -> None:
+    """T13a: artifact upload must transfer an archive path to prevent colon-in-path failures."""
+    text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    _workflow_permissions, jobs = text.split("jobs:", 1)
+    build_job, publish_job = jobs.split("\n  publish-by-digest:", 1)
+
+    assert "deterministic-oci-layout.tar" in build_job
+    assert "deterministic-oci-layout.tar" in publish_job
+
+    # The upload-artifact step for deterministic-oci-layout must upload a tar file,
+    # never a directory path that contains colons (e.g. raw factory/artifacts).
+    upload_step = build_job.split("name: deterministic-oci-layout", 1)[1].split(
+        "\n\n", 1
+    )[0]
+    assert "path: factory/artifacts" not in upload_step
+    assert "deterministic-oci-layout.tar" in upload_step
+
+    # Build job packages factory/artifacts into the tar archive with deterministic flags
+    assert "--sort=name" in build_job
+    assert "--format=gnu" in build_job
+    assert "--mtime=@0" in build_job
+    assert "--owner=0" in build_job
+    assert "--group=0" in build_job
+    assert "--numeric-owner" in build_job
+    assert 'deterministic-oci-layout.tar" factory/artifacts' in build_job
+
+    # Publish job extracts the transferred tar archive before publication
+    assert "deterministic-oci-layout.tar" in publish_job
+    assert "tar -xf" in publish_job
+
+
+def test_deterministic_layout_tar_roundtrip_preserves_exact_bytes_and_paths(
+    tmp_path: Path,
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+) -> None:
+    """T13b: tar archive transfer preserves exact files, digests, and layout."""
+    artifacts_dir, _original_results, original_records = built_suite
+    # Ensure there are directories with colons (e.g. sha256:...)
+    colon_dirs = [p for p in artifacts_dir.iterdir() if ":" in p.name]
+    assert len(colon_dirs) == 9
+
+    tar_path = tmp_path / "deterministic-oci-layout.tar"
+    subprocess.run(
+        [
+            "tar",
+            "--sort=name",
+            "--format=gnu",
+            "--mtime=@0",
+            "--owner=0",
+            "--group=0",
+            "--numeric-owner",
+            "--mode=a+rX,u+w,go-w",
+            "-cf",
+            str(tar_path),
+            artifacts_dir.name,
+        ],
+        cwd=artifacts_dir.parent,
+        check=True,
+    )
+    assert tar_path.is_file()
+
+    extract_dest = tmp_path / "extracted"
+    extract_dest.mkdir()
+    subprocess.run(
+        ["tar", "-xf", str(tar_path)],
+        cwd=extract_dest,
+        check=True,
+    )
+
+    extracted_artifacts = extract_dest / artifacts_dir.name
+    assert _dir_fingerprint(artifacts_dir) == _dir_fingerprint(extracted_artifacts)
+
+    # Loader succeeds from extracted layout and reproduces identical inputs
+    loaded = load_publication_layout(extracted_artifacts)
+    assert len(loaded) == 9
+    replayed = publish_artifacts_to_oci(
+        loaded, artifacts_root=extracted_artifacts, transport=InMemoryOCIRegistry()
+    )
+    assert [dataclasses.asdict(rec) for rec in replayed] == [
+        dataclasses.asdict(rec) for rec in original_records
+    ]
