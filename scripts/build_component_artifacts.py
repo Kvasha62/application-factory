@@ -1169,6 +1169,7 @@ class GHCRHTTPTransport(OCIRegistryTransport):
 
     _REALM_RE = re.compile(r'realm="([^"]+)"')
     _SERVICE_RE = re.compile(r'service="([^"]+)"')
+    TRUSTED_TOKEN_HOSTS: frozenset[str] = frozenset({"ghcr.io"})
 
     def __init__(
         self,
@@ -1177,6 +1178,7 @@ class GHCRHTTPTransport(OCIRegistryTransport):
         username: str = "github-actions",
         base_url: str = "https://ghcr.io",
         opener: Callable[..., Any] | None = None,
+        trusted_token_hosts: Iterable[str] | None = None,
     ) -> None:
         if not isinstance(token, str) or not token.strip():
             msg = (
@@ -1188,6 +1190,16 @@ class GHCRHTTPTransport(OCIRegistryTransport):
         self._username = username
         self._base_url = base_url.rstrip("/")
         self._open = opener if opener is not None else urllib.request.urlopen
+        self._trusted_token_hosts = (
+            frozenset(host.lower() for host in trusted_token_hosts)
+            if trusted_token_hosts is not None
+            else self.TRUSTED_TOKEN_HOSTS
+        )
+        self._issued_tokens: list[str] = []
+
+    def _redact(self, text: str, *extra: str) -> str:
+        """Scrub the workflow token and every exchanged bearer from a message."""
+        return redact_secrets(text, (self._token, *self._issued_tokens, *extra))
 
     def _repo_path(self, repository: str) -> str:
         prefix = "ghcr.io/"
@@ -1222,17 +1234,33 @@ class GHCRHTTPTransport(OCIRegistryTransport):
         except urllib.error.HTTPError as exc:
             if exc.code == 401:
                 raise _Unauthorized401(exc.headers.get("WWW-Authenticate")) from None
-            safe_msg = redact_secrets(str(exc), [self._token, token])
-            raise PublicationBlockedError(
-                [f"ghcr_http_error: {method} {url} failed ({exc.code}): {safe_msg}"]
-            ) from exc
+            safe_msg = self._redact(str(exc), token)
+            detail = (
+                f"ghcr_http_error: {method} {self._redact(url, token)} "
+                f"failed ({exc.code}): {safe_msg}"
+            )
+            raise PublicationBlockedError([detail]) from exc
         except (urllib.error.URLError, OSError, ValueError, RuntimeError) as exc:
-            safe_msg = redact_secrets(str(exc))
-            raise PublicationBlockedError(
-                [f"ghcr_unreachable: {method} {url} failed: {safe_msg}"]
-            ) from exc
+            safe_msg = self._redact(str(exc), token)
+            detail = (
+                f"ghcr_unreachable: {method} {self._redact(url, token)} "
+                f"failed: {safe_msg}"
+            )
+            raise PublicationBlockedError([detail]) from exc
 
-    def _exchange_token(self, challenge: str, repository: str) -> str:
+    def _trusted_realm(self, challenge: str) -> str:
+        """Validate the 401 challenge before any credentials leave the runner.
+
+        Only an HTTPS ``Bearer`` realm whose host is an explicitly trusted GHCR
+        token endpoint may be contacted with the workflow token; attacker- or
+        misconfiguration-controlled realms are refused without a request.
+        """
+        if not challenge.lstrip().lower().startswith("bearer "):
+            msg = (
+                "ghcr_auth_error: HTTP 401 challenge scheme is not Bearer; "
+                "refusing token exchange"
+            )
+            raise PublicationBlockedError([msg])
         realm_match = self._REALM_RE.search(challenge)
         if realm_match is None:
             msg = (
@@ -1240,11 +1268,33 @@ class GHCRHTTPTransport(OCIRegistryTransport):
                 "cannot exchange a registry token"
             )
             raise PublicationBlockedError([msg])
+        realm = realm_match.group(1)
+        try:
+            parts = urllib.parse.urlsplit(realm)
+        except ValueError:
+            parts = None
+        if (
+            parts is None
+            or parts.scheme != "https"
+            or (parts.port not in (None, 443))
+            or parts.username
+            or parts.password
+            or (parts.hostname or "").lower() not in self._trusted_token_hosts
+        ):
+            msg = (
+                "ghcr_auth_error: refusing token exchange with an untrusted "
+                f"realm; expected HTTPS on one of {sorted(self._trusted_token_hosts)}"
+            )
+            raise PublicationBlockedError([msg])
+        return realm
+
+    def _exchange_token(self, challenge: str, repository: str) -> str:
+        realm = self._trusted_realm(challenge)
         params: dict[str, str] = {"scope": f"repository:{repository}:pull,push"}
         service_match = self._SERVICE_RE.search(challenge)
         if service_match is not None:
             params["service"] = service_match.group(1)
-        exchange_url = f"{realm_match.group(1)}?{urllib.parse.urlencode(params)}"
+        exchange_url = f"{realm}?{urllib.parse.urlencode(params)}"
         credentials = base64.b64encode(
             f"{self._username}:{self._token}".encode()
         ).decode("ascii")
@@ -1257,16 +1307,26 @@ class GHCRHTTPTransport(OCIRegistryTransport):
         )
         try:
             with self._open(req, timeout=30) as response:
-                payload = json.loads(response.read())
+                raw = response.read()
         except (urllib.error.URLError, OSError, ValueError, RuntimeError) as exc:
-            safe_msg = redact_secrets(str(exc), [self._token, credentials])
+            safe_msg = self._redact(str(exc), credentials)
             msg = f"ghcr_auth_error: token exchange for {repository} failed: {safe_msg}"
             raise PublicationBlockedError([msg]) from exc
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            # Never echo the raw exchange body: it may itself carry tokens.
+            msg = (
+                "ghcr_auth_error: token exchange response for "
+                f"{repository} was unreadable; refusing to continue"
+            )
+            raise PublicationBlockedError([msg]) from None
         exchanged: str | None = None
         if isinstance(payload, Mapping):
             candidate = payload.get("token") or payload.get("access_token")
             if isinstance(candidate, str) and candidate:
                 exchanged = candidate
+                self._issued_tokens.append(candidate)
         if exchanged is None:
             msg = (
                 "ghcr_auth_error: token exchange response for "
@@ -1295,7 +1355,10 @@ class GHCRHTTPTransport(OCIRegistryTransport):
                 or not isinstance(challenge, str)
                 or not challenge
             ):
-                msg = f"ghcr_http_error: {method} {url} failed (401): unauthorized"
+                msg = (
+                    f"ghcr_http_error: {method} {self._redact(url)} "
+                    "failed (401): unauthorized"
+                )
                 raise PublicationBlockedError([msg]) from None
             exchanged = self._exchange_token(challenge, scope_repository)
             try:
@@ -1305,7 +1368,8 @@ class GHCRHTTPTransport(OCIRegistryTransport):
             except _Unauthorized401 as retry_exc:
                 msg = (
                     "ghcr_auth_error: "
-                    f"{method} {url} was rejected (401) even after token exchange"
+                    f"{method} {self._redact(url)} was rejected "
+                    "(401) even after token exchange"
                 )
                 raise PublicationBlockedError([msg]) from retry_exc
 
@@ -1469,6 +1533,101 @@ def publish_artifacts_to_oci(
         )
 
     return records
+
+
+_LAYOUT_REQUIRED_OCI_KEYS = (
+    "layout_path",
+    "registry_repository",
+    "oci_manifest_digest",
+    "config_digest",
+    "package_layer_digest",
+)
+
+
+def load_publication_layout(artifacts_root: Path) -> list[dict[str, Any]]:
+    """Rebuild the publish inputs from a verified layout on disk, read-only.
+
+    This is the exact-bytes seam used by the publication job: it consumes the
+    ``publication-manifest.json`` and the OCI blobs written by the read-only
+    build job without rebuilding, rewriting, or re-staging anything. Every
+    referenced blob must exist on disk so a truncated or tampered transfer
+    fails closed before any request leaves the runner.
+    """
+    artifacts_root = Path(artifacts_root)
+    manifest_path = artifacts_root / "publication-manifest.json"
+    try:
+        raw = manifest_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        msg = (
+            "publication-layout: cannot read "
+            f"{manifest_path.name}: {redact_secrets(str(exc))}"
+        )
+        raise PublicationBlockedError([msg]) from exc
+    try:
+        document = json.loads(raw)
+    except ValueError as exc:
+        msg = "publication-layout: publication-manifest.json is not valid JSON"
+        raise PublicationBlockedError([msg]) from exc
+    if not isinstance(document, list):
+        msg = "publication-layout: publication-manifest.json is not a list"
+        raise PublicationBlockedError([msg])
+
+    expected_components = sorted(COMPONENT_ROOTS)
+    results: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in document:
+        if not isinstance(entry, dict):
+            msg = "publication-layout: manifest entry is not an object"
+            raise PublicationBlockedError([msg])
+        component_id = str(entry.get("component_id", ""))
+        oci = entry.get("oci")
+        artifact = entry.get("artifact")
+        problems: list[str] = []
+        if component_id in seen:
+            problems.append(f"{component_id}: duplicated manifest entry")
+        if not isinstance(oci, dict) or not isinstance(artifact, dict):
+            problems.append(f"{component_id}: manifest entry lacks oci/artifact data")
+        else:
+            missing = [key for key in _LAYOUT_REQUIRED_OCI_KEYS if key not in oci]
+            if "digest" not in artifact:
+                missing.append("artifact.digest")
+            if missing:
+                problems.append(
+                    f"{component_id}: manifest entry lacks {sorted(missing)}"
+                )
+            else:
+                blobs_dir = (
+                    artifacts_root / str(oci["layout_path"]) / "blobs" / "sha256"
+                )
+                digests = (
+                    str(oci["oci_manifest_digest"]),
+                    str(oci["config_digest"]),
+                    str(oci["package_layer_digest"]),
+                    str(artifact["digest"]),
+                )
+                absent = [
+                    digest
+                    for digest in digests
+                    if not (blobs_dir / digest.removeprefix(DIGEST_PREFIX)).is_file()
+                ]
+                if absent:
+                    problems.append(
+                        f"{component_id}: layout blobs missing on disk: {sorted(absent)}"
+                    )
+        if problems:
+            raise PublicationBlockedError(problems)
+        seen.add(component_id)
+        results.append(entry)
+
+    if sorted(seen) != expected_components:
+        missing = sorted(set(expected_components) - seen)
+        extra = sorted(seen - set(expected_components))
+        msg = (
+            "publication-layout: component set is not the required nine "
+            f"(missing={missing}, unexpected={extra})"
+        )
+        raise PublicationBlockedError([msg])
+    return results
 
 
 def _component_has_migrations(repository_root: Path, component_id: str) -> bool:
@@ -1971,23 +2130,37 @@ def main(argv: Sequence[str] | None = None) -> int:
             "lifecycle claims and are re-verified before any reconciliation)."
         ),
     )
+    parser.add_argument(
+        "--from-layout",
+        action="store_true",
+        help=(
+            "Publish the exact artifacts already present in --output (loaded "
+            "from publication-manifest.json plus their OCI layout blobs); "
+            "never rebuild, rewrite, or re-stage them."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.write_records is not None and not (
         args.publish_ghcr or args.reconcile_registry
     ):
         parser.error("--write-records requires --publish-ghcr or --reconcile-registry")
+    if args.from_layout and not (args.publish_ghcr or args.reconcile_registry):
+        parser.error("--from-layout requires --publish-ghcr or --reconcile-registry")
 
     repository_root = args.root.resolve()
     output_root = (
         args.output if args.output.is_absolute() else repository_root / args.output
     )
 
-    results = build_all(
-        repository_root,
-        output_root,
-        artifact_type=args.artifact_type,
-    )
+    if args.from_layout:
+        results = load_publication_layout(output_root)
+    else:
+        results = build_all(
+            repository_root,
+            output_root,
+            artifact_type=args.artifact_type,
+        )
 
     if args.publish_ghcr or args.reconcile_registry:
         records = publish_artifacts_to_oci(results, artifacts_root=output_root)

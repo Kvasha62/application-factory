@@ -10,8 +10,9 @@
 # Permission minimization: the build/verify job (which runs on pull requests
 # too) holds only contents: read and never sees a registry token. The
 # publication job is the only job holding packages: write, runs only on
-# push to main, and consumes the exact deterministic layout bytes that the
-# read-only job verified, transferred as a short-lived workflow artifact.
+# push to main, and publishes the exact deterministic layout bytes that the
+# read-only job verified (--from-layout: no rebuild, no overwrite), fed by a
+# short-lived workflow artifact transfer.
 
 name: Publish component artifacts
 
@@ -124,6 +125,7 @@ jobs:
         run: |
           python scripts/build_component_artifacts.py \
             --output factory/artifacts \
+            --from-layout \
             --publish-ghcr \
             --write-records factory/artifacts/publication-records.json
 
