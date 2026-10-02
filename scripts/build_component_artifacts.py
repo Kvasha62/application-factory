@@ -1155,6 +1155,32 @@ class _Unauthorized401(Exception):
         self.challenge = challenge
 
 
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Never replay a request (with its credentials) to a redirect target.
+
+    Registry interactions here are strictly digest-addressed against the
+    configured endpoint; a 3xx therefore surfaces as an HTTPError (and a
+    blocked publication) instead of a follow-up request.
+    """
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        raise urllib.error.HTTPError(
+            newurl,
+            code,
+            f"{code} redirects are never followed by the publication transport",
+            headers,
+            fp,
+        )
+
+
 class GHCRHTTPTransport(OCIRegistryTransport):
     """OCI Distribution Spec v1.1 HTTP transport for GHCR (digest-addressed).
 
@@ -1189,7 +1215,11 @@ class GHCRHTTPTransport(OCIRegistryTransport):
         self._token = token.strip()
         self._username = username
         self._base_url = base_url.rstrip("/")
-        self._open = opener if opener is not None else urllib.request.urlopen
+        if opener is not None:
+            self._open = opener
+        else:
+            self._open = urllib.request.build_opener(_RefuseRedirects()).open
+        self._base_parts = urllib.parse.urlsplit(self._base_url)
         self._trusted_token_hosts = (
             frozenset(host.lower() for host in trusted_token_hosts)
             if trusted_token_hosts is not None
@@ -1207,6 +1237,25 @@ class GHCRHTTPTransport(OCIRegistryTransport):
             repository.removeprefix(prefix)
             if repository.startswith(prefix)
             else repository
+        )
+
+    def _is_trusted_upload_target(self, url: str) -> bool:
+        """A registry-provided upload URL may only move along the trusted endpoint.
+
+        Cross-scheme, cross-host, foreign-port, or credential-bearing targets
+        are refused so workflow/Bearer credentials can never be replayed to
+        an endpoint the registry arbitrarily chose.
+        """
+        try:
+            parts = urllib.parse.urlsplit(url)
+        except ValueError:
+            return False
+        return (
+            parts.scheme == self._base_parts.scheme
+            and parts.hostname == self._base_parts.hostname
+            and parts.port == self._base_parts.port
+            and not parts.username
+            and not parts.password
         )
 
     def _send(
@@ -1386,6 +1435,13 @@ class GHCRHTTPTransport(OCIRegistryTransport):
             )
         if location.startswith("/"):
             location = f"{self._base_url}{location}"
+        if not self._is_trusted_upload_target(location):
+            detail = (
+                f"ghcr_protocol_error: upload Location for {repo_path} is "
+                "outside the trusted registry endpoint; refusing to send "
+                "credentials to it"
+            )
+            raise PublicationBlockedError([detail])
         sep = "&" if "?" in location else "?"
         put_url = f"{location}{sep}digest={digest}"
         self._request(
@@ -1476,6 +1532,23 @@ def publish_artifacts_to_oci(
         manifest_blob = (
             blobs_dir / oci_manifest_digest.removeprefix(DIGEST_PREFIX)
         ).read_bytes()
+
+        # Transferred-layout integrity seam: the exact bytes about to be
+        # published must hash to the digests they are addressed by BEFORE the
+        # first registry write. Any mismatch fails closed with zero writes.
+        for expected, blob in (
+            (oci_manifest_digest, manifest_blob),
+            (config_digest, config_blob),
+            (package_layer_digest, package_blob),
+            (artifact_digest, canonical_blob),
+        ):
+            actual = _sha256_digest(blob)
+            if actual != expected:
+                msg = (
+                    f"{component_id}: layout blob integrity mismatch before "
+                    f"any registry write: expected {expected}, computed {actual}"
+                )
+                raise PublicationVerificationError([msg])
 
         try:
             transport.push_blob(repository, config_digest, config_blob)

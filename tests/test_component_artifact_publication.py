@@ -13,6 +13,7 @@ import io
 import json
 import shutil
 import urllib.error
+import urllib.request
 from email.message import Message
 from pathlib import Path
 from typing import Any, Self
@@ -39,6 +40,7 @@ from scripts.build_component_artifacts import (
     PublicationBlockedError,
     PublicationRecord,
     PublicationVerificationError,
+    _RefuseRedirects,
     build_all,
     declaration_for,
     dependency_closure_violations,
@@ -1680,7 +1682,8 @@ def test_from_layout_publish_refuses_tampered_bytes_fail_closed(
     tmp_path: Path,
     built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
 ) -> None:
-    """T8c: mutated transferred bytes never publish as the recorded identity."""
+    """T8c: mutated transferred bytes fail the local integrity seam, not the
+    registry: publication raises before a single write is attempted."""
     artifacts_dir, results, _ = built_suite
     copied = tmp_path / "tampered"
     shutil.copytree(artifacts_dir, copied)
@@ -1694,10 +1697,11 @@ def test_from_layout_publish_refuses_tampered_bytes_fail_closed(
     )
     blob.write_bytes(b"tampered mid-transfer")
     loaded = load_publication_layout(copied)
-    with pytest.raises((PublicationVerificationError, PublicationBlockedError)):
-        publish_artifacts_to_oci(
-            loaded, artifacts_root=copied, transport=InMemoryOCIRegistry()
-        )
+    transport = _RecordingTransport()
+    entry = next(item for item in loaded if item["component_id"] == "saga")
+    with pytest.raises(PublicationVerificationError, match="integrity mismatch"):
+        publish_artifacts_to_oci([entry], artifacts_root=copied, transport=transport)
+    assert transport.calls == []
 
 
 @pytest.mark.parametrize(
@@ -1852,3 +1856,157 @@ def test_unreadable_exchange_body_is_never_echoed() -> None:
     assert "unreadable" in message
     assert workflow_token not in message
     assert leaked not in message
+
+
+# ---------------------------------------------------------------------------
+# Follow-up mutation 5950433186: pre-write blob integrity (T11) and the
+# upload-Location / redirect credential boundary (T12).
+# ---------------------------------------------------------------------------
+
+
+class _RecordingTransport:
+    """OCI transport double: records every attempted call."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def push_blob(self, repository: str, digest: str, data: bytes) -> None:
+        self.calls.append(("blob", digest))
+
+    def push_manifest(
+        self, repository: str, digest: str, media_type: str, data: bytes
+    ) -> None:
+        self.calls.append(("manifest", digest))
+
+    def fetch_blob(self, repository: str, digest: str) -> bytes:
+        self.calls.append(("fetch-blob", digest))
+        return b""
+
+    def fetch_manifest(self, repository: str, digest: str) -> bytes:
+        self.calls.append(("fetch-manifest", digest))
+        return b""
+
+
+@pytest.mark.parametrize(
+    "blob_key",
+    ["manifest", "config", "package", "canonical"],
+)
+def test_integrity_mismatch_blocks_before_any_registry_write(
+    tmp_path: Path,
+    built_suite: tuple[Path, list[dict[str, Any]], list[PublicationRecord]],
+    blob_key: str,
+) -> None:
+    """T11: every transferred blob type is hash-verified before first write."""
+    artifacts_dir, results, _ = built_suite
+    copied = tmp_path / f"tamper-{blob_key}"
+    shutil.copytree(artifacts_dir, copied)
+    victim = next(item for item in results if item["component_id"] == "saga")
+    oci = victim["oci"]
+    digests = {
+        "manifest": str(oci["oci_manifest_digest"]),
+        "config": str(oci["config_digest"]),
+        "package": str(oci["package_layer_digest"]),
+        "canonical": str(victim["artifact"]["digest"]),
+    }
+    blob = (
+        copied
+        / oci["layout_path"]
+        / "blobs"
+        / "sha256"
+        / digests[blob_key].removeprefix("sha256:")
+    )
+    blob.write_bytes(blob.read_bytes() + b"!")
+    loaded = load_publication_layout(copied)
+    entry = next(item for item in loaded if item["component_id"] == "saga")
+    transport = _RecordingTransport()
+    with pytest.raises(
+        PublicationVerificationError, match="integrity mismatch before any"
+    ):
+        publish_artifacts_to_oci([entry], artifacts_root=copied, transport=transport)
+    assert transport.calls == []
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "http://ghcr.io/uploads/1",
+        "https://evil.example/uploads/1",
+        "https://ghcr.io:8443/uploads/1",
+        "https://user:pw@ghcr.io/uploads/1",
+    ],
+)
+def test_push_blob_refuses_credentials_to_untrusted_upload_location(
+    location: str,
+) -> None:
+    """T12a: a hostile registry-provided Location must not receive any PUT."""
+    attempts: list[tuple[str, str]] = []
+
+    def opener(req, timeout=None):
+        attempts.append((req.get_method(), req.full_url))
+        if req.get_method() == "POST":
+            return _FakeResponse(202, {"Location": location})
+        raise AssertionError(
+            f"follow-up request to hostile upload target: {req.full_url}"
+        )
+
+    transport = GHCRHTTPTransport(token="secret-token-xyz", opener=opener)
+    with pytest.raises(
+        PublicationBlockedError, match="outside the trusted registry endpoint"
+    ):
+        transport.push_blob("ghcr.io/o/r", "sha256:" + "b" * 64, b"payload")
+    # only the initial POST happened; no PUT to the hostile Location
+    assert [m for m, _u in attempts] == ["POST"]
+
+
+def test_push_blob_relative_location_stays_on_trusted_authority() -> None:
+    """T12b: Location is resolved against the endpoint authority only."""
+    attempts: list[str] = []
+
+    def opener(req, timeout=None):
+        url = req.full_url
+        attempts.append(url)
+        if req.get_method() == "POST":
+            return _FakeResponse(202, {"Location": "//evil.example/uploads/9"})
+        return _FakeResponse(200, {}, b"")
+
+    transport = GHCRHTTPTransport(token="tok", opener=opener)
+    transport.push_blob("ghcr.io/o/r", "sha256:" + "c" * 64, b"payload")
+    assert len(attempts) == 2
+    assert attempts[0].startswith("https://ghcr.io/v2/")
+    # protocol-relative Location stays pinned to ghcr.io authority
+    assert attempts[1].startswith("https://ghcr.io/")
+    assert "evil.example" not in attempts[1].split("/")[2]
+
+
+def test_transport_never_follows_redirects() -> None:
+    """T12c: 3xx surfaces as a blocked transport error; no replayed request."""
+    attempts: list[str] = []
+
+    def opener(req, timeout=None):
+        attempts.append(req.full_url)
+        raise _http_error(
+            req.full_url,
+            302,
+            {"Location": "https://evil.example/catch"},
+        )
+
+    transport = GHCRHTTPTransport(token="tok", opener=opener)
+    with pytest.raises(PublicationBlockedError, match=r"failed \(302\)"):
+        transport.fetch_manifest("ghcr.io/o/r", "sha256:" + "d" * 64)
+    assert len(attempts) == 1
+
+    # the production default opener actively refuses redirect following
+    default = GHCRHTTPTransport(token="tok2")
+    director = default._open.__self__
+    assert any(isinstance(h, _RefuseRedirects) for h in director.handlers)
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        _RefuseRedirects().redirect_request(
+            urllib.request.Request("https://ghcr.io/x"),
+            io.BytesIO(b""),
+            302,
+            "Found",
+            Message(),
+            "https://evil.example/y",
+        )
+    assert excinfo.value.code == 302
+    assert "redirects are never followed" in str(excinfo.value)
