@@ -1,0 +1,22 @@
+{
+  "digest": "sha256:aeeb7017bd8c6a68057ac2cf5aeb3110e1e3bbc1fa6a864157756dc2086b49a9",
+  "entries": [
+    {
+      "kind": "capability",
+      "refs": [],
+      "req_id": "req-001",
+      "source_channels": [
+        "form",
+        "nl"
+      ],
+      "statement": {
+        "summary": "Shoppers can search and check out with a basket."
+      },
+      "status": "open"
+    }
+  ],
+  "predecessor": null,
+  "project_ref": "demo_shop",
+  "requirements_id": "demo_shop/requirements/1",
+  "schema_version": "control-plane/requirements/v1"
+}

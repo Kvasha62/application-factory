@@ -1,0 +1,52 @@
+{
+  "attachments": {
+    "approval": null,
+    "build": null,
+    "proposal": null,
+    "release": null
+  },
+  "branding": {
+    "logo_url": "https://static.example/logo.svg"
+  },
+  "components": [
+    {
+      "component_id": "identity",
+      "component_version": "0.3.0"
+    },
+    {
+      "component_id": "tenant_authority",
+      "component_version": "0.1.0"
+    }
+  ],
+  "configuration": {
+    "identity": {
+      "require_mfa_for_admins": true,
+      "session_ttl_seconds": 3600
+    },
+    "tenant_authority": {
+      "tenant_model": "single"
+    }
+  },
+  "configuration_id": "demo_shop/configurations/1",
+  "digest": "sha256:aea14d93a45b15728dff91ceb4fd32bc810d73196feffda9a7624b4c3983a07a",
+  "extensions": {
+    "checkout": {
+      "enable_express_pay": true
+    }
+  },
+  "golden_bundle": {
+    "bundle_id": "golden_demo_v1"
+  },
+  "manifest": {
+    "manifest_id": "demo_shop_platform"
+  },
+  "predecessor": null,
+  "project_ref": "demo_shop",
+  "requirements_ref": {
+    "digest": "sha256:aeeb7017bd8c6a68057ac2cf5aeb3110e1e3bbc1fa6a864157756dc2086b49a9",
+    "requirements_id": "demo_shop/requirements/1"
+  },
+  "schema_version": "control-plane/configuration/v1",
+  "template_ref": null,
+  "variant_ref": null
+}

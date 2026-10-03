@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory/control_plane/schema/requirements_version.schema.json",
+  "title": "Control Plane RequirementsVersion",
+  "description": "Immutable canonical convergence of user intent; every intake channel (form/NL/import/API) normalizes into this shape (Slice 1 baseline).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "requirements_id", "project_ref", "entries", "predecessor", "digest"],
+  "properties": {
+    "schema_version": { "const": "control-plane/requirements/v1" },
+    "requirements_id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*/requirements/[1-9][0-9]*$" },
+    "project_ref": { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$" },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["req_id", "kind", "statement", "source_channels", "refs", "status"],
+        "properties": {
+          "req_id": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["capability", "constraint", "input"] },
+          "statement": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["summary"],
+            "properties": {
+              "summary": { "type": "string", "minLength": 1 },
+              "constraints": {
+                "type": "object",
+                "description": "Flat mapping of scalar constraint values."
+              }
+            }
+          },
+          "source_channels": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "enum": ["form", "nl", "import", "api"] }
+          },
+          "refs": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "status": { "enum": ["open", "resolved"] }
+        }
+      }
+    },
+    "predecessor": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requirements_id", "digest"],
+          "properties": {
+            "requirements_id": { "type": "string" },
+            "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          }
+        }
+      ]
+    },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}
