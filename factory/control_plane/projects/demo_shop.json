@@ -1,0 +1,17 @@
+{
+  "created_at": "2026-10-03",
+  "pointers": {
+    "configuration": {
+      "configuration_id": "demo_shop/configurations/1",
+      "digest": "sha256:aea14d93a45b15728dff91ceb4fd32bc810d73196feffda9a7624b4c3983a07a"
+    },
+    "requirements": {
+      "digest": "sha256:aeeb7017bd8c6a68057ac2cf5aeb3110e1e3bbc1fa6a864157756dc2086b49a9",
+      "requirements_id": "demo_shop/requirements/1"
+    }
+  },
+  "project_id": "demo_shop",
+  "schema_version": "control-plane/project/v1",
+  "status": "active",
+  "title": "Demo Shop"
+}

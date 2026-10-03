@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory/control_plane/schema/configuration_index.schema.json",
+  "title": "Control Plane Configuration Aggregate",
+  "description": "Mutable aggregate whose only state is the current ConfigurationVersion pointer; carries no digest of its own.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "configuration_id", "project_ref", "current"],
+  "properties": {
+    "schema_version": { "const": "control-plane/configuration-index/v1" },
+    "configuration_id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*/configurations$" },
+    "project_ref": { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$" },
+    "current": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configuration_id", "digest"],
+      "properties": {
+        "configuration_id": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    }
+  }
+}

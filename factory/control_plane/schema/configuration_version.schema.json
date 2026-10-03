@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory/control_plane/schema/configuration_version.schema.json",
+  "title": "Control Plane ConfigurationVersion",
+  "description": "Immutable, selector-free, exact-version technical configuration bound to a RequirementsVersion digest; attachment slots for future Proposal/Approval/Build/Release records (Slice 1: always null).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "configuration_id",
+    "project_ref",
+    "requirements_ref",
+    "template_ref",
+    "variant_ref",
+    "manifest",
+    "components",
+    "configuration",
+    "golden_bundle",
+    "extensions",
+    "branding",
+    "attachments",
+    "predecessor",
+    "digest"
+  ],
+  "properties": {
+    "schema_version": { "const": "control-plane/configuration/v1" },
+    "configuration_id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*/configurations/[1-9][0-9]*$" },
+    "project_ref": { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$" },
+    "requirements_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirements_id", "digest"],
+      "properties": {
+        "requirements_id": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "template_ref": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$" }
+      ],
+      "description": "Reserved reference; Product Template domain not implemented in Slice 1."
+    },
+    "variant_ref": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$" }
+      ],
+      "description": "Reserved reference; Variant domain not implemented in Slice 1."
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest_id"],
+      "properties": {
+        "manifest_id": { "type": "string", "pattern": "^[a-z][a-z0-9]*([_-][a-z0-9]+)*$" }
+      }
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["component_id", "component_version"],
+        "properties": {
+          "component_id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$" },
+          "component_version": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+\\.\\d+([-+][0-9A-Za-z.-]+)?$",
+            "description": "Exact selector-free version; range operators are forbidden."
+          }
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "description": "Project-scoped resolved configuration values; component facts stay in the canonical Component Registry."
+    },
+    "golden_bundle": { "type": ["object", "null"] },
+    "extensions": { "type": ["object", "null"] },
+    "branding": { "type": ["object", "null"] },
+    "attachments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proposal", "approval", "build", "release"],
+      "description": "Future attachment points; every value must be null in Slice 1.",
+      "properties": {
+        "proposal": { "type": "null" },
+        "approval": { "type": "null" },
+        "build": { "type": "null" },
+        "release": { "type": "null" }
+      }
+    },
+    "predecessor": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["configuration_id", "digest"],
+          "properties": {
+            "configuration_id": { "type": "string" },
+            "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          }
+        }
+      ]
+    },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

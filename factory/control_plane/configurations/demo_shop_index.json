@@ -1,0 +1,9 @@
+{
+  "configuration_id": "demo_shop/configurations",
+  "current": {
+    "configuration_id": "demo_shop/configurations/1",
+    "digest": "sha256:aea14d93a45b15728dff91ceb4fd32bc810d73196feffda9a7624b4c3983a07a"
+  },
+  "project_ref": "demo_shop",
+  "schema_version": "control-plane/configuration-index/v1"
+}
