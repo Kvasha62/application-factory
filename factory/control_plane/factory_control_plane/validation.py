@@ -11,7 +11,10 @@ Enforced invariants:
 - explicit attachment points present and null (Proposal/Approval/Build/
   Release are future domains — attachment slots only, no subsystem);
 - no parallel Registry/Catalog authority: configuration documents carry
-  references, never component facts.
+  references, never component facts;
+- Registry authority: ConfigurationVersion references are cross-checked
+  against the canonical Component Registry on the authoritative
+  validation/build path and fail closed on any disagreement.
 """
 
 from __future__ import annotations
@@ -19,6 +22,8 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
+
+from factory_control_plane.registry_reference import component_reference_errors
 
 #: Project/component identifier shape (same rule as the composer's
 #: component id pattern; see ``src/composer/request.py``).
@@ -420,6 +425,12 @@ def configuration_version_errors(document: object) -> list[str]:
                     f"{where}: component_version {component.get('component_version')!r} "
                     "must be an exact selector-free version"
                 )
+    # Registry authority is enforced on the authoritative validation/build
+    # path (new_configuration_version -> configuration_version_errors): any
+    # disagreement with the canonical Component Registry fails closed here —
+    # unknown id, version mismatch, or lifecycle state != registered.
+    if isinstance(components, list):
+        errors.extend(component_reference_errors(components))
     configuration = document.get("configuration")
     if not isinstance(configuration, dict):
         errors.append("configuration version: configuration must be an object")

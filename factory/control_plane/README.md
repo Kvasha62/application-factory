@@ -33,9 +33,14 @@ new digest and a `predecessor` link.
   ranges); validation refuses range operators.
 - **Registry stays canonical.** Component identity, versions and
   lifecycle live exclusively in `factory/registry/component_registry.json`.
-  This package only reads it (`registry_reference.py`) to cross-check
-  references; configuration documents carry references, never component
-  facts (no `dependencies`, `lifecycle`, `artifact`, availability data).
+  This package only reads it (`registry_reference.py`); every
+  ConfigurationVersion reference is cross-checked **on the authoritative
+  validation/build path** (`new_configuration_version` →
+  `configuration_version_errors` → `component_reference_errors`) and any
+  disagreement — unknown id, version mismatch, lifecycle state other than
+  `registered`, or an unreadable registry — fails closed. Configuration
+  documents carry references, never component facts (no `dependencies`,
+  `lifecycle`, `artifact`, availability data).
 - **Template/Variant references** are explicit nullable fields
   (`template_ref`, `variant_ref`); the Template/Variant domains
   themselves are not implemented in Slice 1.

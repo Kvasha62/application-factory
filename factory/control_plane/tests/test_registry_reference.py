@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from conftest import EXAMPLES, REPOSITORY_ROOT
-from factory_control_plane import registry_reference
+from factory_control_plane import documents, registry_reference
+from factory_control_plane.digests import verify_digest
+from factory_control_plane.validation import ControlPlaneError
 
 PARALLEL_AUTHORITY_KEYS = frozenset(
     {
@@ -110,3 +113,59 @@ def test_registry_document_itself_is_untouched_by_tests():
     registry_reference.load_registry_components()
     after = registry_path.stat().st_mtime_ns
     assert before == after, "reading the registry must not modify it"
+
+
+# --------------------------------------------------------------------------
+# Authoritative build-path regressions: these exercise
+# new_configuration_version() itself (review finding #5971461904), proving
+# the primary ConfigurationVersion construction path fails closed on
+# registry disagreement.
+# --------------------------------------------------------------------------
+
+
+def _build_version(components):
+    return documents.new_configuration_version(
+        project_ref="demo_shop",
+        requirements_ref=_load(EXAMPLES["requirements"]),
+        manifest_id="demo_shop_platform",
+        components=components,
+        configuration={"identity": {"purpose": "registry-authority"}},
+    )
+
+
+def test_builder_rejects_unknown_component_id():
+    with pytest.raises(ControlPlaneError) as excinfo:
+        _build_version(
+            [{"component_id": "not_a_component", "component_version": "1.0.0"}]
+        )
+    assert "registry" in str(excinfo.value)
+
+
+def test_builder_rejects_wrong_component_version():
+    with pytest.raises(ControlPlaneError) as excinfo:
+        _build_version([{"component_id": "identity", "component_version": "9.9.9"}])
+    assert "differs from the registry" in str(excinfo.value)
+
+
+def test_builder_rejects_non_registered_component(monkeypatch):
+    entries = registry_reference.load_registry_components()
+    entries["identity"] = dict(entries["identity"])
+    entries["identity"]["lifecycle"] = {
+        **entries["identity"]["lifecycle"],
+        "registry_state": "deprecated",
+    }
+    monkeypatch.setattr(registry_reference, "load_registry_components", lambda: entries)
+    with pytest.raises(ControlPlaneError) as excinfo:
+        _build_version([{"component_id": "identity", "component_version": "0.3.0"}])
+    assert "registry state" in str(excinfo.value)
+
+
+def test_builder_accepts_valid_canonical_references():
+    version = _build_version(
+        [
+            {"component_id": "identity", "component_version": "0.3.0"},
+            {"component_id": "tenant_authority", "component_version": "0.1.0"},
+        ]
+    )
+    assert verify_digest(version)
+    assert registry_reference.component_reference_errors(version["components"]) == []
