@@ -1,0 +1,45 @@
+{
+  "attachments": {
+    "approval": null,
+    "build": null,
+    "proposal": null,
+    "release": null
+  },
+  "branding": null,
+  "components": [
+    {
+      "component_id": "identity",
+      "component_version": "0.3.0"
+    },
+    {
+      "component_id": "tenant_authority",
+      "component_version": "0.1.0"
+    }
+  ],
+  "configuration": {
+    "identity": {
+      "current_platform_id": "demo_shop_platform"
+    },
+    "tenant_authority": {
+      "platform_id": "demo_shop_platform"
+    }
+  },
+  "configuration_id": "demo_shop/configurations/1",
+  "digest": "sha256:09ed2d1acd3387810c9156d3e2d38e4120f9778a5a8e989397476c268426b0ad",
+  "extensions": null,
+  "golden_bundle": null,
+  "manifest": {
+    "manifest_id": "demo_shop_platform",
+    "manifest_version": "1.0.0",
+    "predecessor": null
+  },
+  "predecessor": null,
+  "project_ref": "demo_shop",
+  "requirements_ref": {
+    "digest": "sha256:aeeb7017bd8c6a68057ac2cf5aeb3110e1e3bbc1fa6a864157756dc2086b49a9",
+    "requirements_id": "demo_shop/requirements/1"
+  },
+  "schema_version": "control-plane/configuration/v2",
+  "template_ref": null,
+  "variant_ref": null
+}

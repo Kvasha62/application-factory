@@ -1,0 +1,43 @@
+{
+  "configuration_ref": {
+    "configuration_id": "demo_shop/configurations/1",
+    "digest": "sha256:09ed2d1acd3387810c9156d3e2d38e4120f9778a5a8e989397476c268426b0ad"
+  },
+  "digest": "sha256:1ade68ba5abc532e789ff923e8f4051fb95a75b3fd36f5c640844bcb681609a0",
+  "findings": [
+    {
+      "code": "CP-WARN-OPEN-REQUIREMENTS",
+      "details": {
+        "count": 1,
+        "req_ids": [
+          "req-001"
+        ]
+      },
+      "finding_id": "fnd-c70c9039bd17",
+      "message": "1 requirement(s) remain open while the configuration is resolved; accepting this configuration requires acknowledging the residual openness",
+      "severity": "warning",
+      "target": "demo_shop/configurations/1"
+    },
+    {
+      "code": "CP-DEP-001",
+      "details": {},
+      "finding_id": "fnd-835aa05fae78",
+      "message": "the configuration pins no Golden Bundle: the composition will be explicitly uncertified (golden_bundle: null in the manifest)",
+      "severity": "info",
+      "target": "demo_shop/configurations/1"
+    }
+  ],
+  "inputs": {
+    "registry_fingerprint": "sha256:6683989dc79ebab30fa5059cef973c98e82256bf92ddb97adbe5eced8538b56d",
+    "validator_set": "control-plane/validators/v1"
+  },
+  "predecessor": null,
+  "project_ref": "demo_shop",
+  "proposal_id": "demo_shop/proposals/1",
+  "requirements_ref": {
+    "digest": "sha256:aeeb7017bd8c6a68057ac2cf5aeb3110e1e3bbc1fa6a864157756dc2086b49a9",
+    "requirements_id": "demo_shop/requirements/1"
+  },
+  "schema_version": "control-plane/proposal/v1",
+  "state": "ready"
+}
