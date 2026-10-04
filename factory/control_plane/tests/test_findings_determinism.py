@@ -37,6 +37,7 @@ from slice2_fixtures import (
     SUBTREE_ROOT,
     build_proposal,
     build_v2,
+    load,
 )
 
 PACKAGE_DIR = SUBTREE_ROOT / "factory_control_plane"
@@ -147,6 +148,8 @@ def test_request_record_bytes_are_stable_in_process():
         decided_at=DECIDED_AT,
         reason=REASON,
         acknowledged_findings=warning_ids(proposal["findings"]),
+        requirements=load("requirements"),
+        project=load("project"),
     )
     ledger = ApprovalLedger.empty("demo_shop").append(approval)
     first = composition_requests.new_request_record(
@@ -156,6 +159,8 @@ def test_request_record_bytes_are_stable_in_process():
         approval=approval,
         ledger=ledger,
         root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     second = composition_requests.new_request_record(
         project_ref="demo_shop",
@@ -164,6 +169,8 @@ def test_request_record_bytes_are_stable_in_process():
         approval=approval,
         ledger=ledger,
         root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert canonical_bytes(first) == canonical_bytes(second)
     assert composition_requests.request_fingerprint(

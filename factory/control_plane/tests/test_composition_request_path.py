@@ -37,6 +37,7 @@ from slice2_fixtures import (
     REPOSITORY_ROOT,
     build_proposal,
     build_v2,
+    load,
 )
 
 from composer import (
@@ -64,6 +65,8 @@ def _approved():
         decided_at=DECIDED_AT,
         reason=REASON,
         acknowledged_findings=warning_ids,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     ledger = ApprovalLedger.empty("demo_shop").append(approval)
     return configuration, proposal, approval, ledger
@@ -78,6 +81,8 @@ def test_record_wraps_the_exact_projection_of_the_approved_configuration():
         approval=approval,
         ledger=ledger,
         root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert composition_request_record_errors(record) == []
     assert record["generator_version"] == GENERATOR_VERSION
@@ -107,6 +112,8 @@ def test_record_requires_an_effective_approval():
             approval={**plain(approval), "decision": "rejected"},
             ledger=ledger,
             root=REPOSITORY_ROOT,
+            requirements=load("requirements"),
+            project=load("project"),
         )
 
     revoked = new_approval_revocation(
@@ -126,6 +133,8 @@ def test_record_requires_an_effective_approval():
             approval=approval,
             ledger=extended,
             root=REPOSITORY_ROOT,
+            requirements=load("requirements"),
+            project=load("project"),
         )
     assert "revoked by" in str(refusal.value)
 
@@ -141,6 +150,8 @@ def test_an_approval_for_another_configuration_cannot_be_reused():
             approval=approval,
             ledger=ledger,
             root=REPOSITORY_ROOT,
+            requirements=load("requirements"),
+            project=load("project"),
         )
 
 
@@ -153,6 +164,8 @@ def test_verify_recomputes_the_whole_chain():
         approval=approval,
         ledger=ledger,
         root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert (
         verify_request_record(
@@ -162,6 +175,8 @@ def test_verify_recomputes_the_whole_chain():
             approval=approval,
             ledger=ledger,
             root=REPOSITORY_ROOT,
+            requirements=load("requirements"),
+            project=load("project"),
         )
         == []
     )
@@ -169,7 +184,11 @@ def test_verify_recomputes_the_whole_chain():
     tampered_payload = copy.deepcopy(record)
     tampered_payload["request"]["manifest"]["manifest_version"] = "9.9.9"
     problems = verify_request_record(
-        tampered_payload, configuration=configuration, root=REPOSITORY_ROOT
+        tampered_payload,
+        configuration=configuration,
+        root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert any("digest does not match" in item for item in problems)
     assert any("not the exact projection" in item for item in problems)
@@ -183,7 +202,11 @@ def test_verify_recomputes_the_whole_chain():
         {key: value for key, value in mislabelled.items() if key != "digest"}
     )
     problems = verify_request_record(
-        mislabelled, configuration=configuration, root=REPOSITORY_ROOT
+        mislabelled,
+        configuration=configuration,
+        root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert any("configuration_ref does not reference" in item for item in problems)
 
@@ -198,6 +221,8 @@ def test_verify_recomputes_the_whole_chain():
         proposal=proposal,
         approval=bad_approval,
         root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert any("approval_ref does not reference" in item for item in problems)
     assert any("approval is not effective" in item for item in problems)
@@ -212,6 +237,8 @@ def test_composition_still_ends_at_a_draft_manifest():
         approval=approval,
         ledger=ledger,
         root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert validate_request_document(record["request"], root=REPOSITORY_ROOT) == []
     assert compose_diagnostics(record["request"], root=REPOSITORY_ROOT) == []
@@ -242,6 +269,8 @@ def test_request_identity_is_idempotent():
         approval=approval,
         ledger=ledger,
         root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     second = new_request_record(
         project_ref="demo_shop",
@@ -250,6 +279,8 @@ def test_request_identity_is_idempotent():
         approval=approval,
         ledger=ledger,
         root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert first == second
     assert first["digest"] == second["digest"]
@@ -273,6 +304,8 @@ def test_request_identity_is_idempotent():
             for item in successor_proposal["findings"]
             if item["severity"] == "warning"
         ],
+        requirements=load("requirements"),
+        project=load("project"),
     )
     other = new_request_record(
         project_ref="demo_shop",
@@ -281,6 +314,8 @@ def test_request_identity_is_idempotent():
         approval=successor_approval,
         ledger=ApprovalLedger.empty("demo_shop").append(successor_approval),
         root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert request_fingerprint(other) != request_fingerprint(first)
     assert same_request(first, other) is False
@@ -296,6 +331,8 @@ def test_request_id_follows_the_chain():
         approval=approval,
         ledger=ledger,
         root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     second = new_request_record(
         project_ref="demo_shop",
@@ -305,6 +342,8 @@ def test_request_id_follows_the_chain():
         ledger=ledger,
         predecessor=first,
         root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert first["request_id"] == "demo_shop/requests/1"
     assert second["request_id"] == "demo_shop/requests/2"
@@ -334,6 +373,8 @@ def test_v1_configuration_never_reaches_a_request_record():
             },
             ledger=None,
             root=REPOSITORY_ROOT,
+            requirements=load("requirements"),
+            project=load("project"),
         )
 
     # Even a structurally valid, retargeted grant cannot open the path: the v1
@@ -363,4 +404,6 @@ def test_v1_configuration_never_reaches_a_request_record():
             approval=retargeted,
             ledger=None,
             root=REPOSITORY_ROOT,
+            requirements=load("requirements"),
+            project=load("project"),
         )

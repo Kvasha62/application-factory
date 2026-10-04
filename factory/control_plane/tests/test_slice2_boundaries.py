@@ -41,6 +41,7 @@ from slice2_fixtures import (
     SUBTREE_ROOT,
     build_proposal,
     build_v2,
+    load,
 )
 from test_validation import schema_accepts
 
@@ -197,6 +198,8 @@ def test_running_the_whole_chain_changes_no_file_in_the_repository():
         decided_at=DECIDED_AT,
         reason=REASON,
         acknowledged_findings=warning_ids(proposal["findings"]),
+        requirements=load("requirements"),
+        project=load("project"),
     )
     ledger = ApprovalLedger.empty("demo_shop").append(approval)
     new_request_record(
@@ -206,6 +209,8 @@ def test_running_the_whole_chain_changes_no_file_in_the_repository():
         approval=approval,
         ledger=ledger,
         root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
 
     after = _tree_fingerprint()
@@ -364,6 +369,8 @@ def test_shipped_slice2_examples_are_reproducible_builder_outputs():
         decided_at=approval["decided_at"],
         reason=approval["reason"],
         acknowledged_findings=approval["acknowledged_findings"],
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert rebuilt_approval == approval
 
@@ -375,6 +382,8 @@ def test_shipped_slice2_examples_are_reproducible_builder_outputs():
         approval=approval,
         ledger=ledger,
         root=REPOSITORY_ROOT,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert rebuilt_request == request
     assert request_fingerprint(request) == EXAMPLE_FINGERPRINT
@@ -386,6 +395,8 @@ def test_shipped_slice2_examples_are_reproducible_builder_outputs():
             approval=approval,
             ledger=ledger,
             root=REPOSITORY_ROOT,
+            requirements=load("requirements"),
+            project=load("project"),
         )
         == []
     )

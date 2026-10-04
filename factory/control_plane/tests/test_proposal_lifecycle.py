@@ -66,10 +66,31 @@ def test_proposal_is_immutable_and_append_only():
     }
     assert first == snapshot
 
-    assert proposals.verify_proposal_version(first) == []
+    configuration = build_v2()
+    requirements = load_requirements()
+    project = load_project()
+    assert (
+        proposals.verify_proposal_version(
+            first,
+            configuration=configuration,
+            requirements=requirements,
+            project=project,
+            root=REPOSITORY_ROOT,
+        )
+        == []
+    )
     tampered = copy.deepcopy(first)
     tampered["state"] = "ready" if first["state"] == "blocked" else "blocked"
-    assert proposals.verify_proposal_version(tampered) != []
+    assert (
+        proposals.verify_proposal_version(
+            tampered,
+            configuration=configuration,
+            requirements=requirements,
+            project=project,
+            root=REPOSITORY_ROOT,
+        )
+        != []
+    )
 
     with pytest.raises(ControlPlaneError):
         build_proposal(predecessor=None, project_ref="other_project")
@@ -103,6 +124,8 @@ def test_requirements_existence_is_verified():
             decided_at=DECIDED_AT,
             reason=REASON,
             acknowledged_findings=[],
+            requirements=load_requirements(),
+            project=load_project(),
         )
 
 
@@ -125,16 +148,18 @@ def test_requirements_digest_mismatch_is_verified():
     assert "CP-SEM-REQ-DIGEST" in codes
     assert proposal["state"] == "blocked"
 
-    # The report is a faithful analysis of its (broken) inputs — and those
-    # inputs can never be approved, because the report is blocked.
+    # A report may faithfully describe the mismatch as a finding, but it is
+    # not a valid approval chain: the Configuration's typed Requirements ref
+    # does not equal the supplied RequirementsVersion pair.
     assert (
         proposals.verify_proposal_version(
             proposal,
             configuration=forged,
             requirements=load_requirements(),
+            project=load_project(),
             root=REPOSITORY_ROOT,
         )
-        == []
+        != []
     )
     with pytest.raises(ApprovalError):
         new_approval_record(
@@ -146,6 +171,8 @@ def test_requirements_digest_mismatch_is_verified():
             decided_at=DECIDED_AT,
             reason=REASON,
             acknowledged_findings=[],
+            requirements=load_requirements(),
+            project=load_project(),
         )
 
 
@@ -194,18 +221,32 @@ def load_project():
 
 
 def test_a_blocked_proposal_can_never_be_approved():
-    blocked = build_proposal(requirements=None)
+    configuration = build_v2(
+        configuration={
+            "identity": {
+                "current_platform_id": "demo_shop_platform",
+                "session_ttl_seconds": 3600,
+            }
+        }
+    )
+    requirements = load_requirements()
+    project = load_project()
+    blocked = build_proposal(
+        configuration=configuration, requirements=requirements, project=project
+    )
     assert blocked["state"] == "blocked"
     with pytest.raises(ApprovalError) as refusal:
         new_approval_record(
             project_ref="demo_shop",
-            configuration=build_v2(),
+            configuration=configuration,
             proposal=blocked,
             decision="granted",
             approver=dict(APPROVER),
             decided_at=DECIDED_AT,
             reason="attempted bypass",
             acknowledged_findings=_grantable_warnings(blocked),
+            requirements=requirements,
+            project=project,
         )
     assert "blocked proposal" in str(refusal.value)
 

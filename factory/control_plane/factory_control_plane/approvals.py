@@ -1,19 +1,21 @@
 """Immutable, append-only approval ledger (S2-2) with gated warnings (S2-3).
 
 An approval is an **act**, not a state: one immutable record bound to the exact
-``(configuration_id, digest)`` it authorizes, to the proposal it was taken
-against and to the warnings it knowingly accepted. Records are append-only —
+Requirements, Configuration and Proposal ``(id, digest)`` references it was
+made against, to the exact project and to the warnings it knowingly accepted.
+Records are append-only —
 there is no update or delete path anywhere in this module, an undo is a new
 ``revoked`` record, and the ledger is a frozen object whose record mappings
 cannot be mutated in place (attempting to does raise ``TypeError``).
 
-Effectiveness is always **derived**, never stored: an approval is effective
-only while its configuration digest still matches, its proposal still carries
-no blocking error, its acknowledgement set still equals the proposal's warning
-set, the canonical Component Registry still admits the approved references, and
-no later record revoked it. This is what makes "any technical change requires a
-new approval" true by construction — and what makes registry drift a derived
-invalidation with no writes anywhere.
+Effectiveness is always **derived**, never stored: the exact Requirements,
+Configuration, Project and Proposal must validate and cross-reference one
+another; the complete Proposal must reproduce from those inputs; and the
+Approval must be an exact member of a valid ledger. Its acknowledgement set
+must still equal the Proposal's warning set, the canonical Component Registry
+must still admit the approved references, and no later record may revoke it.
+Any changed linked input therefore requires a new Proposal/Approval; registry
+drift is a derived invalidation with no writes anywhere.
 
 RBAC attachment point: :class:`AuthorityPolicy` is the single seam where a
 future authorization subsystem attaches. This slice implements no policy — the
@@ -28,6 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol
 
@@ -39,6 +42,7 @@ from factory_control_plane.findings import (
     errors_of,
     warning_ids,
 )
+from factory_control_plane.proposals import verify_proposal_version
 from factory_control_plane.registry_reference import component_reference_errors
 from factory_control_plane.support import settle, successor_sequence
 from factory_control_plane.validation import (
@@ -166,6 +170,8 @@ def new_approval_record(
     *,
     project_ref: str,
     configuration: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+    project: Mapping[str, Any],
     proposal: Mapping[str, Any],
     decision: str,
     approver: Mapping[str, Any],
@@ -173,13 +179,18 @@ def new_approval_record(
     reason: str,
     acknowledged_findings: Iterable[str] = (),
     predecessor: Mapping[str, Any] | None = None,
+    proposal_predecessor: Mapping[str, Any] | None = None,
+    root: Path | None = None,
     authority: AuthorityPolicy | None = None,
 ) -> dict[str, Any]:
     """Create an immutable ``granted``/``rejected`` ledger record (fail closed).
 
-    ``granted`` requires a ``ready`` proposal **and** an acknowledgement set
-    equal to the proposal's warning set: a warning cannot proceed
-    unacknowledged, and an ``error`` cannot be acknowledged at all.
+    ``granted`` first requires a Proposal exactly re-derived from the supplied
+    Requirements, Configuration and Project documents. It then requires a
+    ``ready`` proposal **and** an acknowledgement set equal to the proposal's
+    warning set: a warning cannot proceed unacknowledged, and an ``error``
+    cannot be acknowledged at all. The inputs are verification-only and do not
+    change the serialized Approval contract.
     """
     if decision not in _BUILDER_DECISIONS:
         message = (
@@ -187,6 +198,23 @@ def new_approval_record(
             "is a separate appended record"
         )
         raise ApprovalError(message)
+
+    proposal_problems = verify_proposal_version(
+        proposal,
+        configuration=configuration,
+        requirements=requirements,
+        project=project,
+        predecessor=proposal_predecessor,
+        root=root,
+    )
+    if proposal_problems:
+        joined = "; ".join(proposal_problems)
+        raise ApprovalError(
+            f"{CODE_APPROVAL_NOT_EFFECTIVE}: proposal/input chain failed "
+            f"re-derivation: {joined}"
+        )
+    if project.get("project_id") != project_ref:
+        raise ApprovalError("the supplied project does not match project_ref")
     if configuration.get("project_ref") != project_ref:
         raise ApprovalError("the configuration version does not belong to this project")
     if proposal.get("project_ref") != project_ref:
@@ -350,57 +378,121 @@ def approval_ineffectiveness_reasons(
     record: Mapping[str, Any],
     *,
     configuration: Mapping[str, Any] | None = None,
+    requirements: Mapping[str, Any] | None = None,
+    project: Mapping[str, Any] | None = None,
     proposal: Mapping[str, Any] | None = None,
+    proposal_predecessor: Mapping[str, Any] | None = None,
     ledger: ApprovalLedger | None = None,
+    root: Path | None = None,
 ) -> list[str]:
     """Return every deterministic reason ``record`` is not effective.
 
-    An empty list means effective. Nothing here is stored state: the answer is
-    derived from the referenced documents, the live registry and the ledger.
+    Effectiveness requires the complete typed input chain and an Approval that
+    is an exact member of a valid ledger. Missing inputs, a digest that does not
+    verify, or an internally consistent but unreproduced Proposal all fail
+    closed. Nothing is stored here: the answer is derived on every call.
     """
     document = plain(record)
     if not isinstance(document, Mapping):
         return [f"{CODE_APPROVAL_NOT_EFFECTIVE}: the record is not an object"]
     reasons: list[str] = []
-    if document.get("decision") != GRANT:
-        reasons.append(
-            f"{CODE_APPROVAL_NOT_EFFECTIVE}: decision is "
-            f"{document.get('decision')!r}, not 'granted'"
+
+    record_problems = approval_record_errors(document)
+    if record_problems:
+        reasons.extend(
+            f"{CODE_APPROVAL_NOT_EFFECTIVE}: invalid approval record: {problem}"
+            for problem in record_problems
         )
     if not verify_digest(document):
         reasons.append(
             f"{CODE_APPROVAL_NOT_EFFECTIVE}: the approval record does not match "
             "its declared digest"
         )
-    if ledger is not None:
-        for later in ledger.records_after(document):
-            revokes = plain(later).get("revokes") or {}
-            if revokes.get("approval_id") == document.get(
-                "approval_id"
-            ) and revokes.get("digest") == document.get("digest"):
+    if document.get("decision") != GRANT:
+        reasons.append(
+            f"{CODE_APPROVAL_NOT_EFFECTIVE}: decision is "
+            f"{document.get('decision')!r}, not 'granted'"
+        )
+
+    # The ledger is a required part of the proof, not an optional revocation
+    # lookup. Revalidate even directly constructed ApprovalLedger instances.
+    exact_member = False
+    if not isinstance(ledger, ApprovalLedger):
+        reasons.append(
+            f"{CODE_APPROVAL_NOT_EFFECTIVE}: a verified ApprovalLedger is required"
+        )
+    else:
+        if ledger.project_ref != document.get("project_ref"):
+            reasons.append(
+                f"{CODE_APPROVAL_NOT_EFFECTIVE}: the ledger belongs to a different project"
+            )
+        ledger_problems = verify_ledger(
+            ledger.documents(), project_ref=ledger.project_ref
+        )
+        reasons.extend(
+            f"{CODE_APPROVAL_NOT_EFFECTIVE}: invalid ledger: {problem}"
+            for problem in ledger_problems
+        )
+        identifier = document.get("approval_id")
+        index = ledger.index_of(identifier) if isinstance(identifier, str) else None
+        if index is None:
+            reasons.append(
+                f"{CODE_APPROVAL_NOT_EFFECTIVE}: the record is not in this ledger"
+            )
+        else:
+            ledger_record = plain(ledger.records[index])
+            exact_member = ledger_record == document
+            if not exact_member:
                 reasons.append(
-                    f"{CODE_APPROVAL_NOT_EFFECTIVE}: revoked by "
-                    f"{later.get('approval_id')!r}"
+                    f"{CODE_APPROVAL_NOT_EFFECTIVE}: the ledger does not contain "
+                    "this exact approval id/digest and record content"
                 )
-    reference = document.get("configuration_ref") or {}
-    if configuration is None:
+            if exact_member:
+                for later in ledger.records_after(identifier):
+                    later_document = plain(later)
+                    revokes = later_document.get("revokes") or {}
+                    if revokes.get("approval_id") == document.get(
+                        "approval_id"
+                    ) and revokes.get("digest") == document.get("digest"):
+                        reasons.append(
+                            f"{CODE_APPROVAL_NOT_EFFECTIVE}: revoked by "
+                            f"{later_document.get('approval_id')!r}"
+                        )
+
+    configuration_ref_value = document.get("configuration_ref")
+    proposal_ref_value = document.get("proposal_ref")
+    requirements_ref_value = document.get("requirements_ref")
+    configuration_ref = (
+        configuration_ref_value if isinstance(configuration_ref_value, Mapping) else {}
+    )
+    proposal_ref = proposal_ref_value if isinstance(proposal_ref_value, Mapping) else {}
+    requirements_ref = (
+        requirements_ref_value if isinstance(requirements_ref_value, Mapping) else {}
+    )
+
+    if not isinstance(configuration, Mapping):
         reasons.append(
             f"{CODE_APPROVAL_NOT_EFFECTIVE}: the referenced configuration "
             "version is not available"
         )
     else:
-        if configuration.get("configuration_id") != reference.get("configuration_id"):
+        actual_configuration_ref = {
+            "configuration_id": configuration.get("configuration_id"),
+            "digest": configuration.get("digest"),
+        }
+        if actual_configuration_ref.get("configuration_id") != configuration_ref.get(
+            "configuration_id"
+        ):
             reasons.append(
                 f"{CODE_APPROVAL_NOT_EFFECTIVE}: configuration_id "
-                f"{configuration.get('configuration_id')!r} is not the approved "
-                f"{reference.get('configuration_id')!r}"
+                f"{actual_configuration_ref.get('configuration_id')!r} is not the "
+                f"approved {configuration_ref.get('configuration_id')!r}"
             )
-        if configuration.get("digest") != reference.get("digest"):
+        if actual_configuration_ref.get("digest") != configuration_ref.get("digest"):
             reasons.append(
                 f"{CODE_APPROVAL_NOT_EFFECTIVE}: configuration digest "
-                f"{configuration.get('digest')!r} differs from the approved "
-                f"{reference.get('digest')!r} — any technical change creates a "
-                "new version and requires a new approval"
+                f"{actual_configuration_ref.get('digest')!r} differs from the "
+                f"approved {configuration_ref.get('digest')!r}"
             )
         if not verify_digest(configuration):
             reasons.append(
@@ -413,37 +505,87 @@ def approval_ineffectiveness_reasons(
                 f"{CODE_APPROVAL_NOT_EFFECTIVE}: the canonical Component Registry "
                 "no longer admits the approved references: " + "; ".join(drift)
             )
-    proposal_reference = document.get("proposal_ref") or {}
-    if proposal is None:
+
+    if not isinstance(requirements, Mapping):
         reasons.append(
-            f"{CODE_APPROVAL_NOT_EFFECTIVE}: the referenced proposal is not available"
+            f"{CODE_APPROVAL_NOT_EFFECTIVE}: the exact RequirementsVersion is required"
         )
     else:
-        if proposal.get("proposal_id") != proposal_reference.get(
-            "proposal_id"
-        ) or proposal.get("digest") != proposal_reference.get("digest"):
+        actual_requirements_ref = {
+            "requirements_id": requirements.get("requirements_id"),
+            "digest": requirements.get("digest"),
+        }
+        if actual_requirements_ref != requirements_ref:
+            reasons.append(
+                f"{CODE_APPROVAL_NOT_EFFECTIVE}: the supplied RequirementsVersion "
+                "id/digest does not equal the Approval requirements_ref"
+            )
+        if not verify_digest(requirements):
+            reasons.append(
+                f"{CODE_APPROVAL_NOT_EFFECTIVE}: the RequirementsVersion digest "
+                "does not verify"
+            )
+
+    if not isinstance(project, Mapping):
+        reasons.append(
+            f"{CODE_APPROVAL_NOT_EFFECTIVE}: the exact Project document is required"
+        )
+    elif project.get("project_id") != document.get("project_ref"):
+        reasons.append(
+            f"{CODE_APPROVAL_NOT_EFFECTIVE}: the supplied Project does not match "
+            "the Approval project_ref"
+        )
+
+    if not isinstance(proposal, Mapping):
+        reasons.append(
+            f"{CODE_APPROVAL_NOT_EFFECTIVE}: the referenced Proposal is not available"
+        )
+    else:
+        actual_proposal_ref = {
+            "proposal_id": proposal.get("proposal_id"),
+            "digest": proposal.get("digest"),
+        }
+        if actual_proposal_ref != proposal_ref:
             reasons.append(
                 f"{CODE_APPROVAL_NOT_EFFECTIVE}: the proposal is not the analysed "
-                "proposal (id/digest mismatch)"
+                "proposal (id/digest mismatch with Approval proposal_ref)"
             )
-        if not verify_digest(proposal):
+        proposal_problems = (
+            verify_proposal_version(
+                proposal,
+                configuration=configuration,
+                requirements=requirements,
+                project=project,
+                predecessor=proposal_predecessor,
+                root=root,
+            )
+            if (
+                isinstance(configuration, Mapping)
+                and isinstance(requirements, Mapping)
+                and isinstance(project, Mapping)
+            )
+            else ["complete Requirements/Configuration/Project inputs are required"]
+        )
+        if proposal_problems:
             reasons.append(
-                f"{CODE_APPROVAL_NOT_EFFECTIVE}: the proposal document does not "
-                "match its declared digest"
+                f"{CODE_APPROVAL_NOT_EFFECTIVE}: the Proposal is not reproducible "
+                "from the exact typed inputs: " + "; ".join(proposal_problems)
             )
-        findings = proposal.get("findings") or []
-        if errors_of(findings):
-            reasons.append(
-                f"{CODE_APPROVAL_NOT_EFFECTIVE}: the proposal carries blocking "
-                "errors — an error can never be acknowledged or bypassed"
-            )
-        acknowledged = list(document.get("acknowledged_findings") or [])
-        expected = warning_ids(findings)
-        if acknowledged != expected:
-            reasons.append(
-                f"{CODE_ACKNOWLEDGEMENT_MISMATCH}: acknowledged findings "
-                f"{acknowledged} differ from the proposal's warning set {expected}"
-            )
+        else:
+            findings = proposal.get("findings") or []
+            if errors_of(findings):
+                reasons.append(
+                    f"{CODE_APPROVAL_NOT_EFFECTIVE}: the Proposal carries blocking "
+                    "errors — an error can never be acknowledged or bypassed"
+                )
+            acknowledged = list(document.get("acknowledged_findings") or [])
+            expected = warning_ids(findings)
+            if acknowledged != expected:
+                reasons.append(
+                    f"{CODE_ACKNOWLEDGEMENT_MISMATCH}: acknowledged findings "
+                    f"{acknowledged} differ from the Proposal warning set {expected}"
+                )
+
     return sorted(set(reasons))
 
 
@@ -451,49 +593,116 @@ def approval_effective(
     record: Mapping[str, Any],
     *,
     configuration: Mapping[str, Any] | None = None,
+    requirements: Mapping[str, Any] | None = None,
+    project: Mapping[str, Any] | None = None,
     proposal: Mapping[str, Any] | None = None,
+    proposal_predecessor: Mapping[str, Any] | None = None,
     ledger: ApprovalLedger | None = None,
+    root: Path | None = None,
 ) -> bool:
-    """True when every derived condition of effectiveness holds."""
+    """True only when the complete derived input and ledger proof holds."""
     return not approval_ineffectiveness_reasons(
-        record, configuration=configuration, proposal=proposal, ledger=ledger
+        record,
+        configuration=configuration,
+        requirements=requirements,
+        project=project,
+        proposal=proposal,
+        proposal_predecessor=proposal_predecessor,
+        ledger=ledger,
+        root=root,
     )
 
 
 def verify_ledger(
     records: Iterable[Mapping[str, Any]], *, project_ref: str | None = None
 ) -> list[str]:
-    """Verify a loaded ledger chain: contracts, digests and predecessor links."""
+    """Verify record contracts, digests, sequence/predecessor links and revokes."""
     errors: list[str] = []
     previous: dict[str, Any] | None = None
+    seen: dict[tuple[str, str], dict[str, Any]] = {}
+    revoked: set[tuple[str, str]] = set()
+    expected_project = project_ref
+
     for index, record in enumerate(records):
         document = plain(record)
+        if not isinstance(document, Mapping):
+            errors.append(f"records[{index}]: the record must be a JSON object")
+            continue
+
         problems = approval_record_errors(document)
         errors.extend(f"records[{index}]: {problem}" for problem in problems)
         if not verify_digest(document):
             errors.append(f"records[{index}]: the record digest does not verify")
-        if project_ref is not None and document.get("project_ref") != project_ref:
+
+        current_project = document.get("project_ref")
+        if expected_project is None and isinstance(current_project, str):
+            expected_project = current_project
+        if expected_project is not None and current_project != expected_project:
             errors.append(
                 f"records[{index}]: the record belongs to project "
-                f"{document.get('project_ref')!r}, not {project_ref!r}"
+                f"{current_project!r}, not {expected_project!r}"
             )
-        expected = (
+
+        expected_predecessor = (
             None
             if previous is None
-            else {"approval_id": previous["approval_id"], "digest": previous["digest"]}
+            else {
+                "approval_id": previous.get("approval_id"),
+                "digest": previous.get("digest"),
+            }
         )
-        if document.get("predecessor") != expected:
+        if document.get("predecessor") != expected_predecessor:
             errors.append(
                 f"records[{index}]: the predecessor link is broken (expected "
-                f"{expected}, found {document.get('predecessor')})"
+                f"{expected_predecessor}, found {document.get('predecessor')})"
             )
-        previous = document
+
+        try:
+            sequence = _sequence_of(document)
+            expected_sequence = 1 if previous is None else _sequence_of(previous) + 1
+            if sequence != expected_sequence:
+                errors.append(
+                    f"records[{index}]: sequence must continue the chain "
+                    f"(expected {expected_sequence}, found {sequence})"
+                )
+        except (ApprovalError, KeyError, TypeError):
+            errors.append(f"records[{index}]: approval_id has no valid sequence")
+
+        if document.get("decision") == REVOKE:
+            reference = document.get("revokes")
+            if isinstance(reference, Mapping):
+                target = (reference.get("approval_id"), reference.get("digest"))
+                target_record = seen.get(target)
+                if target_record is None:
+                    errors.append(
+                        f"records[{index}]: revocation target {target!r} is not an "
+                        "exact earlier record in this ledger"
+                    )
+                elif target_record.get("decision") == REVOKE:
+                    errors.append(
+                        f"records[{index}]: a revocation cannot revoke another "
+                        "revocation"
+                    )
+                elif target in revoked:
+                    errors.append(
+                        f"records[{index}]: the exact approval target was already revoked"
+                    )
+                else:
+                    revoked.add(target)
+
+        identifier = document.get("approval_id")
+        digest = document.get("digest")
+        if isinstance(identifier, str) and isinstance(digest, str):
+            seen[(identifier, digest)] = dict(document)
+        previous = dict(document)
+
     return errors
 
 
-#: Resolver used by the ledger's audit queries: ``kind`` is ``"configuration"``
-#: or ``"proposal"``, ``ref`` is the typed reference, the answer is the document
-#: or ``None`` when it is not available.
+#: Resolver used by the ledger's audit queries. ``kind`` is one of
+#: ``"requirements"``, ``"configuration"``, ``"project"`` or ``"proposal"``;
+#: ``ref`` is the typed reference (the Project ref contains ``project_id``).
+#: Return the document or ``None`` when it is unavailable.
 DocumentResolver = Callable[[str, Mapping[str, Any]], "Mapping[str, Any] | None"]
 
 
@@ -565,6 +774,13 @@ class ApprovalLedger:
 
     def append(self, record: Mapping[str, Any]) -> ApprovalLedger:
         """Return a new ledger with ``record`` appended (fail closed)."""
+        existing_problems = verify_ledger(
+            self.documents(), project_ref=self.project_ref
+        )
+        if existing_problems:
+            joined = "; ".join(existing_problems)
+            raise ApprovalError(f"cannot append to an invalid ledger: {joined}")
+
         document = plain(record)
         if not isinstance(document, Mapping):
             raise ApprovalError("an approval record must be an object")
@@ -596,20 +812,35 @@ class ApprovalLedger:
             )
             raise ApprovalError(message)
         head = self.head()
-        if head is not None and _sequence_of(document) != _sequence_of(head) + 1:
+        expected_sequence = 1 if head is None else _sequence_of(head) + 1
+        if _sequence_of(document) != expected_sequence:
             message = (
                 "append-only ledger: sequence numbers must continue the chain "
-                f"({_sequence_of(head)} -> {_sequence_of(document)})"
+                f"(expected {expected_sequence}, found {_sequence_of(document)})"
             )
             raise ApprovalError(message)
+
+        extended_records = (*self.documents(), dict(document))
+        new_problems = verify_ledger(extended_records, project_ref=self.project_ref)
+        if new_problems:
+            joined = "; ".join(new_problems)
+            raise ApprovalError(f"cannot append an invalid ledger record: {joined}")
         return replace(self, records=(*self.records, _freeze(document)))
 
     def ineffectiveness_reasons(
         self,
         record_or_id: Mapping[str, Any] | str,
         resolve: DocumentResolver,
+        *,
+        root: Path | None = None,
     ) -> list[str]:
-        """Return the deterministic reasons one record is not effective."""
+        """Return the deterministic reasons one exact record is not effective."""
+        ledger_problems = verify_ledger(self.documents(), project_ref=self.project_ref)
+        if ledger_problems:
+            return [
+                f"{CODE_APPROVAL_NOT_EFFECTIVE}: invalid ledger: "
+                + "; ".join(ledger_problems)
+            ]
         identifier = (
             record_or_id.get("approval_id")
             if isinstance(record_or_id, Mapping)
@@ -619,24 +850,44 @@ class ApprovalLedger:
         if index is None:
             return [f"{CODE_APPROVAL_NOT_EFFECTIVE}: the record is not in this ledger"]
         document = plain(self.records[index])
+        if isinstance(record_or_id, Mapping) and plain(record_or_id) != document:
+            return [
+                (
+                    f"{CODE_APPROVAL_NOT_EFFECTIVE}: the supplied record is not the "
+                    "exact immutable ledger member"
+                )
+            ]
+
+        proposal = resolve("proposal", document["proposal_ref"])
+        predecessor = None
+        if isinstance(proposal, Mapping) and isinstance(
+            proposal.get("predecessor"), Mapping
+        ):
+            predecessor = resolve("proposal", proposal["predecessor"])
         return approval_ineffectiveness_reasons(
             document,
             configuration=resolve("configuration", document["configuration_ref"]),
-            proposal=resolve("proposal", document["proposal_ref"]),
+            requirements=resolve("requirements", document["requirements_ref"]),
+            project=resolve("project", {"project_id": document["project_ref"]}),
+            proposal=proposal,
+            proposal_predecessor=predecessor,
             ledger=self,
+            root=root,
         )
 
     def effective_records(
-        self, resolve: DocumentResolver
+        self, resolve: DocumentResolver, *, root: Path | None = None
     ) -> tuple[dict[str, Any], ...]:
         """Return the plain records whose derived effectiveness holds, in order."""
         return tuple(
             document
             for document in self.documents()
-            if not self.ineffectiveness_reasons(document, resolve)
+            if not self.ineffectiveness_reasons(document, resolve, root=root)
         )
 
-    def audit_view(self, resolve: DocumentResolver) -> tuple[dict[str, Any], ...]:
+    def audit_view(
+        self, resolve: DocumentResolver, *, root: Path | None = None
+    ) -> tuple[dict[str, Any], ...]:
         """Return a deterministic audit view of the whole ledger.
 
         One entry per record, ascending by sequence, carrying the decision, the
@@ -646,7 +897,7 @@ class ApprovalLedger:
         """
         entries: list[dict[str, Any]] = []
         for document in self.documents():
-            reasons = self.ineffectiveness_reasons(document, resolve)
+            reasons = self.ineffectiveness_reasons(document, resolve, root=root)
             entries.append(
                 {
                     "sequence": _sequence_of(document),

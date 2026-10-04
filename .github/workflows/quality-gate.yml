@@ -49,8 +49,8 @@ jobs:
           python -m pip check
           python -m pip_audit
 
-      - name: Compile source
-        run: python -m compileall -q src
+      - name: Compile source and Control Plane
+        run: python -m compileall -q src factory/control_plane/factory_control_plane
 
       - name: Ruff
         run: ruff check .
@@ -58,5 +58,8 @@ jobs:
       - name: Black
         run: black --check .
 
-      - name: Test suite
+      - name: Root test suite
         run: python -m pytest tests/
+
+      - name: Control Plane test suite
+        run: python -m pytest factory/control_plane/tests

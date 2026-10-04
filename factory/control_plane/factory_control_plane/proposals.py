@@ -27,6 +27,7 @@ from factory_control_plane.configuration_v2 import (
     structural_errors,
 )
 from factory_control_plane.digests import verify_digest
+from factory_control_plane.documents import SCHEMA_PROJECT, SCHEMA_REQUIREMENTS
 from factory_control_plane.findings import (
     collect_findings,
     has_blocking_findings,
@@ -37,7 +38,9 @@ from factory_control_plane.support import settle, successor_sequence
 from factory_control_plane.validation import (
     SCHEMA_PROPOSAL,
     ControlPlaneError,
+    project_errors,
     proposal_version_errors,
+    requirements_errors,
 )
 
 #: Identifier of the rule set that produced a proposal. Changing any rule must
@@ -123,52 +126,157 @@ def new_proposal_version(
 def verify_proposal_version(
     document: Mapping[str, Any],
     *,
-    configuration: Mapping[str, Any] | None = None,
-    requirements: Mapping[str, Any] | None = None,
-    project: Mapping[str, Any] | None = None,
+    configuration: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+    project: Mapping[str, Any],
+    predecessor: Mapping[str, Any] | None = None,
     root: Path | None = None,
 ) -> list[str]:
-    """Re-derive a proposal from its inputs and report every disagreement.
+    """Strictly re-derive a Proposal from its exact typed inputs.
 
-    Checking more than the digest is the point: a tampered *finding* would break
-    the digest, but a proposal that lied about its inputs consistently would
-    still have to reproduce the same findings and state here.
+    A valid digest is necessary but not sufficient: all four document shapes,
+    digests and typed references are checked, then the complete Proposal is
+    rebuilt and compared.  A non-null predecessor in ``document`` must be
+    supplied separately so a self-asserted predecessor cannot satisfy the
+    chain check.  This function is the proof boundary used before Approval and
+    Composition Request authorization; incomplete inputs are never a successful
+    partial verification.
     """
     if not isinstance(document, Mapping):
         return ["proposal version must be a JSON object"]
+    if not isinstance(configuration, Mapping):
+        return ["configuration version must be a JSON object"]
+    if not isinstance(requirements, Mapping):
+        return ["requirements version must be a JSON object"]
+    if not isinstance(project, Mapping):
+        return ["project must be a JSON object"]
+
+    proposal_doc = dict(document)
+    configuration_doc = dict(configuration)
+    requirements_doc = dict(requirements)
+    project_doc = dict(project)
     errors: list[str] = []
-    if not verify_digest(document):
+
+    errors.extend(proposal_version_errors(proposal_doc))
+    if not verify_digest(proposal_doc):
         errors.append("proposal version digest does not match its payload")
-    if configuration is None:
-        return sorted(errors)
-    expected_ref = {
-        "configuration_id": configuration.get("configuration_id"),
-        "digest": configuration.get("digest"),
+
+    errors.extend(requirements_errors(requirements_doc))
+    if requirements_doc.get("schema_version") != SCHEMA_REQUIREMENTS:
+        errors.append(
+            f"requirements version schema_version must be {SCHEMA_REQUIREMENTS!r}"
+        )
+    if not verify_digest(requirements_doc):
+        errors.append("requirements version digest does not match its payload")
+
+    errors.extend(structural_errors(configuration_doc))
+    if not verify_digest(configuration_doc):
+        errors.append("configuration version digest does not match its payload")
+
+    errors.extend(project_errors(project_doc))
+    if project_doc.get("schema_version") != SCHEMA_PROJECT:
+        errors.append(f"project schema_version must be {SCHEMA_PROJECT!r}")
+
+    project_id = project_doc.get("project_id")
+    if project_id != configuration_doc.get("project_ref"):
+        errors.append("configuration project_ref does not match the supplied project")
+    if project_id != requirements_doc.get("project_ref"):
+        errors.append("requirements project_ref does not match the supplied project")
+    if project_id != proposal_doc.get("project_ref"):
+        errors.append("proposal project_ref does not match the supplied project")
+
+    requirements_ref = {
+        "requirements_id": requirements_doc.get("requirements_id"),
+        "digest": requirements_doc.get("digest"),
     }
-    if document.get("configuration_ref") != expected_ref:
+    configuration_requirements_ref = configuration_doc.get("requirements_ref")
+    if configuration_requirements_ref != requirements_ref:
         errors.append(
-            "proposal version configuration_ref does not reference the "
-            "analysed configuration version"
+            "configuration requirements_ref does not reference the exact "
+            "supplied RequirementsVersion (id/digest mismatch)"
         )
-    refusal: tuple[str, ...] = tuple(not_projectable_errors(configuration))
-    delegated: tuple[str, ...] = ()
-    if not refusal and is_v2(configuration):
-        delegated = tuple(composer_errors(configuration, root=root))
-    expected_findings = collect_findings(
-        configuration,
-        requirements=requirements,
-        project=project,
-        composer_errors=delegated,
-        not_projectable=refusal,
-    )
-    if list(document.get("findings") or []) != expected_findings:
-        errors.append("proposal version findings are not the ones its inputs justify")
-    expected_state = "blocked" if has_blocking_findings(expected_findings) else "ready"
-    if document.get("state") != expected_state:
+    if proposal_doc.get("requirements_ref") != requirements_ref:
         errors.append(
-            f"proposal version state must be {expected_state!r} for its inputs"
+            "proposal requirements_ref does not reference the exact "
+            "supplied RequirementsVersion (id/digest mismatch)"
         )
-    return sorted(errors)
+
+    configuration_ref = {
+        "configuration_id": configuration_doc.get("configuration_id"),
+        "digest": configuration_doc.get("digest"),
+    }
+    if proposal_doc.get("configuration_ref") != configuration_ref:
+        errors.append(
+            "proposal configuration_ref does not reference the exact "
+            "supplied ConfigurationVersion (id/digest mismatch)"
+        )
+
+    expected_predecessor_ref = None
+    predecessor_doc: dict[str, Any] | None = None
+    if predecessor is not None:
+        if not isinstance(predecessor, Mapping):
+            errors.append("proposal predecessor must be a JSON object")
+        else:
+            predecessor_doc = dict(predecessor)
+            errors.extend(
+                f"proposal predecessor: {problem}"
+                for problem in proposal_version_errors(predecessor_doc)
+            )
+            if not verify_digest(predecessor_doc):
+                errors.append("proposal predecessor digest does not match its payload")
+            if predecessor_doc.get("project_ref") != project_id:
+                errors.append("proposal predecessor belongs to a different project")
+            if isinstance(predecessor_doc.get("proposal_id"), str) and isinstance(
+                predecessor_doc.get("digest"), str
+            ):
+                expected_predecessor_ref = {
+                    "proposal_id": predecessor_doc["proposal_id"],
+                    "digest": predecessor_doc["digest"],
+                }
+    if proposal_doc.get("predecessor") != expected_predecessor_ref:
+        errors.append(
+            "proposal predecessor link does not match the separately supplied "
+            "expected predecessor"
+        )
+
+    # Do not invoke the builder on invalid inputs; its report-generation path is
+    # intentionally useful for blocked candidates, whereas authorization must
+    # have well-formed, digest-valid documents and exact cross-references.
+    if errors:
+        return sorted(set(errors))
+
+    try:
+        expected = new_proposal_version(
+            project_ref=str(project_id),
+            configuration=configuration_doc,
+            requirements=requirements_doc,
+            project=project_doc,
+            predecessor=predecessor_doc,
+            root=root,
+        )
+    except (ControlPlaneError, KeyError, TypeError, ValueError) as error:
+        return [f"proposal could not be re-derived from its exact inputs: {error}"]
+
+    if proposal_doc != expected:
+        fields = (
+            "proposal_id",
+            "project_ref",
+            "requirements_ref",
+            "configuration_ref",
+            "inputs",
+            "findings",
+            "state",
+            "predecessor",
+            "digest",
+        )
+        for field in fields:
+            if proposal_doc.get(field) != expected.get(field):
+                errors.append(
+                    f"proposal version {field} is not reproduced by its inputs"
+                )
+        if set(proposal_doc) != set(expected):
+            errors.append("proposal version has a different canonical field set")
+    return sorted(set(errors))
 
 
 def proposal_warning_ids(document: Mapping[str, Any]) -> list[str]:

@@ -43,10 +43,14 @@ def _warning_ids(proposal):
     return [item["finding_id"] for item in warnings_of(proposal["findings"])]
 
 
-def _resolver(configuration, proposal):
-    return lambda kind, ref: {"configuration": configuration, "proposal": proposal}.get(
-        kind
-    )
+def _resolver(configuration, proposal, requirements=None, project=None):
+    documents = {
+        "configuration": configuration,
+        "requirements": load("requirements") if requirements is None else requirements,
+        "project": load("project") if project is None else project,
+        "proposal": proposal,
+    }
+    return lambda kind, ref: documents.get(kind)
 
 
 def test_warning_requires_an_explicit_acknowledgement():
@@ -64,6 +68,8 @@ def test_warning_requires_an_explicit_acknowledgement():
             decided_at=DECIDED_AT,
             reason=REASON,
             acknowledged_findings=[],
+            requirements=load("requirements"),
+            project=load("project"),
         )
     assert CODE_ACKNOWLEDGEMENT_MISMATCH in str(refusal.value)
 
@@ -76,6 +82,8 @@ def test_warning_requires_an_explicit_acknowledgement():
         decided_at=DECIDED_AT,
         reason=REASON,
         acknowledged_findings=_warning_ids(proposal),
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert granted["acknowledged_findings"] == sorted(_warning_ids(proposal))
 
@@ -92,6 +100,8 @@ def test_warning_cannot_proceed_unacknowledged_into_composition():
         decided_at=DECIDED_AT,
         reason=REASON,
         acknowledged_findings=_warning_ids(proposal),
+        requirements=load("requirements"),
+        project=load("project"),
     )
     ledger = ApprovalLedger.empty("demo_shop").append(granted)
 
@@ -105,12 +115,21 @@ def test_warning_cannot_proceed_unacknowledged_into_composition():
     )
     assert (
         approval_effective(
-            silent, configuration=configuration, proposal=proposal, ledger=None
+            silent,
+            configuration=configuration,
+            proposal=proposal,
+            ledger=None,
+            requirements=load("requirements"),
+            project=load("project"),
         )
         is False
     )
     reasons = approval_ineffectiveness_reasons(
-        silent, configuration=configuration, proposal=proposal
+        silent,
+        configuration=configuration,
+        proposal=proposal,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert any(CODE_ACKNOWLEDGEMENT_MISMATCH in item for item in reasons)
     with pytest.raises(CompositionRequestError):
@@ -120,6 +139,8 @@ def test_warning_cannot_proceed_unacknowledged_into_composition():
             proposal=proposal,
             approval=silent,
             ledger=ledger,
+            requirements=load("requirements"),
+            project=load("project"),
         )
 
 
@@ -127,27 +148,48 @@ def test_error_cannot_be_acknowledged():
     configuration = build_v2()
     proposal = build_proposal(configuration=configuration, requirements=None)
     assert proposal["state"] == "blocked"
-    error_ids = [
-        item["finding_id"]
-        for item in proposal["findings"]
-        if item["severity"] == "error"
-    ]
-    warning_ids = _warning_ids(proposal)
     assert any(
         item["code"] == CODE_REQUIREMENTS_UNKNOWN for item in proposal["findings"]
     )
+
+    # A distinct, exactly supplied input chain yields a blocking Composer error;
+    # it can be re-derived, so the acknowledgement rule itself is exercised at
+    # the Approval boundary rather than relying on a missing Requirements doc.
+    blocked_configuration = build_v2(
+        configuration={
+            "identity": {
+                "current_platform_id": "demo_shop_platform",
+                "session_ttl_seconds": 3600,
+            }
+        }
+    )
+    requirements = load("requirements")
+    project = load("project")
+    blocked = build_proposal(
+        configuration=blocked_configuration,
+        requirements=requirements,
+        project=project,
+    )
+    error_ids = [
+        item["finding_id"]
+        for item in blocked["findings"]
+        if item["severity"] == "error"
+    ]
+    warning_ids = _warning_ids(blocked)
 
     for acknowledged in (error_ids, error_ids + warning_ids, warning_ids):
         with pytest.raises(ApprovalError) as refusal:
             new_approval_record(
                 project_ref="demo_shop",
-                configuration=configuration,
-                proposal=proposal,
+                configuration=blocked_configuration,
+                proposal=blocked,
                 decision="granted",
                 approver=dict(APPROVER),
                 decided_at=DECIDED_AT,
                 reason="bypass attempt",
                 acknowledged_findings=acknowledged,
+                requirements=load("requirements"),
+                project=load("project"),
             )
         message = str(refusal.value)
         assert (
@@ -159,20 +201,36 @@ def test_error_cannot_be_acknowledged():
     with pytest.raises(ApprovalError) as explicit:
         new_approval_record(
             project_ref="demo_shop",
-            configuration=configuration,
-            proposal=proposal,
+            configuration=blocked_configuration,
+            proposal=blocked,
             decision="granted",
             approver=dict(APPROVER),
             decided_at=DECIDED_AT,
             reason="bypass attempt",
             acknowledged_findings=error_ids,
+            requirements=requirements,
+            project=project,
         )
     assert CODE_ERROR_ACKNOWLEDGED in str(explicit.value)
 
 
 def test_error_cannot_be_bypassed_even_by_a_fabricated_record():
     configuration = build_v2()
-    blocked = build_proposal(configuration=configuration, requirements=None)
+    blocked_configuration = build_v2(
+        configuration={
+            "identity": {
+                "current_platform_id": "demo_shop_platform",
+                "session_ttl_seconds": 3600,
+            }
+        }
+    )
+    requirements = load("requirements")
+    project = load("project")
+    blocked = build_proposal(
+        configuration=blocked_configuration,
+        requirements=requirements,
+        project=project,
+    )
     good = build_proposal(configuration=configuration)
     granted = new_approval_record(
         project_ref="demo_shop",
@@ -183,9 +241,15 @@ def test_error_cannot_be_bypassed_even_by_a_fabricated_record():
         decided_at=DECIDED_AT,
         reason=REASON,
         acknowledged_findings=_warning_ids(good),
+        requirements=load("requirements"),
+        project=load("project"),
     )
 
     fabricated = plain(granted)
+    fabricated["configuration_ref"] = {
+        "configuration_id": blocked_configuration["configuration_id"],
+        "digest": blocked_configuration["digest"],
+    }
     fabricated["proposal_ref"] = {
         "proposal_id": blocked["proposal_id"],
         "digest": blocked["digest"],
@@ -194,9 +258,15 @@ def test_error_cannot_be_bypassed_even_by_a_fabricated_record():
     fabricated = with_digest(
         {key: value for key, value in fabricated.items() if key != "digest"}
     )
+    ledger = ApprovalLedger.empty("demo_shop").append(fabricated)
 
     reasons = approval_ineffectiveness_reasons(
-        fabricated, configuration=configuration, proposal=blocked
+        fabricated,
+        configuration=blocked_configuration,
+        requirements=requirements,
+        project=project,
+        proposal=blocked,
+        ledger=ledger,
     )
     assert any("carries blocking errors" in item for item in reasons)
     fabricated["proposal_ref"] = {
@@ -207,15 +277,23 @@ def test_error_cannot_be_bypassed_even_by_a_fabricated_record():
         {key: value for key, value in fabricated.items() if key != "digest"}
     )
     reasons = approval_ineffectiveness_reasons(
-        fabricated, configuration=configuration, proposal=blocked
+        fabricated,
+        configuration=blocked_configuration,
+        requirements=requirements,
+        project=project,
+        proposal=blocked,
+        ledger=ledger,
     )
-    assert any("proposal is not the analysed proposal" in item for item in reasons)
+    assert any("not the analysed proposal" in item for item in reasons)
     with pytest.raises(CompositionRequestError):
         new_request_record(
             project_ref="demo_shop",
-            configuration=configuration,
+            configuration=blocked_configuration,
+            requirements=requirements,
+            project=project,
             proposal=blocked,
             approval=fabricated,
+            ledger=ledger,
         )
 
 
@@ -243,6 +321,8 @@ def test_delegated_composer_errors_also_block_acknowledgement():
             decided_at=DECIDED_AT,
             reason="bypass attempt",
             acknowledged_findings=_warning_ids(proposal),
+            requirements=load("requirements"),
+            project=load("project"),
         )
     assert "blocked proposal" in str(refusal.value)
 
@@ -278,10 +358,17 @@ def test_info_requires_no_acknowledgement():
         decided_at=DECIDED_AT,
         reason=REASON,
         acknowledged_findings=[],
+        requirements=resolved_requirements,
+        project=load("project"),
     )
     ledger = ApprovalLedger.empty("demo_shop").append(granted)
     assert approval_effective(
-        granted, configuration=configuration, proposal=proposal, ledger=ledger
+        granted,
+        configuration=configuration,
+        proposal=proposal,
+        ledger=ledger,
+        requirements=resolved_requirements,
+        project=load("project"),
     )
     record = new_request_record(
         project_ref="demo_shop",
@@ -289,6 +376,8 @@ def test_info_requires_no_acknowledgement():
         proposal=proposal,
         approval=granted,
         ledger=ledger,
+        requirements=resolved_requirements,
+        project=load("project"),
     )
     assert record["request_id"] == "demo_shop/requests/1"
 
@@ -315,6 +404,8 @@ def test_acknowledgement_set_must_be_exact():
             decided_at=DECIDED_AT,
             reason=REASON,
             acknowledged_findings=["fnd-000000000000"],
+            requirements=load("requirements"),
+            project=load("project"),
         )
     assert "does not carry" in str(unknown.value)
 
@@ -328,6 +419,8 @@ def test_acknowledgement_set_must_be_exact():
             decided_at=DECIDED_AT,
             reason=REASON,
             acknowledged_findings=warning_ids[:1],
+            requirements=load("requirements"),
+            project=load("project"),
         )
     assert CODE_ACKNOWLEDGEMENT_MISMATCH in str(partial.value)
 
@@ -340,6 +433,8 @@ def test_acknowledgement_set_must_be_exact():
         decided_at=DECIDED_AT,
         reason=REASON,
         acknowledged_findings=list(reversed(warning_ids)),
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert granted["acknowledged_findings"] == sorted(warning_ids)
 
@@ -363,6 +458,8 @@ def test_acknowledgements_are_recorded_and_auditable():
         decided_at=DECIDED_AT,
         reason=REASON,
         acknowledged_findings=warning_ids,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     ledger = ApprovalLedger.load("demo_shop", [granted])
     view = ledger.audit_view(_resolver(configuration, proposal))
@@ -388,6 +485,8 @@ def test_regenerated_proposal_must_be_re_acknowledged():
         decided_at=DECIDED_AT,
         reason=REASON,
         acknowledged_findings=_warning_ids(first),
+        requirements=load("requirements"),
+        project=load("project"),
     )
 
     widened_requirements = documents.new_requirements_version(
@@ -423,7 +522,12 @@ def test_regenerated_proposal_must_be_re_acknowledged():
     assert len(_warning_ids(regenerated)) == 1
 
     reasons = approval_ineffectiveness_reasons(
-        granted, configuration=configuration, proposal=regenerated
+        granted,
+        configuration=configuration,
+        proposal=regenerated,
+        requirements=widened_requirements,
+        project=load("project"),
+        proposal_predecessor=first,
     )
     assert any("proposal is not the analysed proposal" in item for item in reasons)
     assert copy.deepcopy(granted)["digest"] == granted["digest"]

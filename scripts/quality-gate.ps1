@@ -41,8 +41,8 @@ if ($pythonVersion -ne "3.13") {
 Write-Host "[PASS] Python 3.13"
 Write-Host ""
 
-Invoke-GateStep -Name "Compile source" -Action {
-    python -m compileall -q src
+Invoke-GateStep -Name "Compile source and Control Plane" -Action {
+    python -m compileall -q src factory/control_plane/factory_control_plane
 }
 
 Invoke-GateStep -Name "Ruff" -Action {
@@ -53,8 +53,12 @@ Invoke-GateStep -Name "Black" -Action {
     black --check .
 }
 
-Invoke-GateStep -Name "Test suite" -Action {
+Invoke-GateStep -Name "Root test suite" -Action {
     python -m pytest tests/
+}
+
+Invoke-GateStep -Name "Control Plane test suite" -Action {
+    python -m pytest factory/control_plane/tests
 }
 
 Write-Host "========================================"
