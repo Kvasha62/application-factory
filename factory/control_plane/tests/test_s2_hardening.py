@@ -191,6 +191,54 @@ def test_requirements_and_configuration_substitution_fail_even_when_redigested()
     )
     assert any("does not match the supplied project" in item for item in problems)
 
+    tampered_configuration_ref = copy.deepcopy(proposal)
+    tampered_configuration_ref["configuration_ref"]["digest"] = (
+        substituted_configuration["digest"]
+    )
+    tampered_configuration_ref = _redigest(tampered_configuration_ref)
+    problems = proposals.verify_proposal_version(
+        tampered_configuration_ref,
+        configuration=configuration,
+        requirements=requirements,
+        project=project,
+        root=REPOSITORY_ROOT,
+    )
+    assert any("configuration_ref" in item for item in problems)
+
+    tampered_project_ref = copy.deepcopy(proposal)
+    tampered_project_ref["project_ref"] = "other_shop"
+    tampered_project_ref["proposal_id"] = "other_shop/proposals/1"
+    tampered_project_ref = _redigest(tampered_project_ref)
+    problems = proposals.verify_proposal_version(
+        tampered_project_ref,
+        configuration=configuration,
+        requirements=requirements,
+        project=project,
+        root=REPOSITORY_ROOT,
+    )
+    assert any("project_ref" in item for item in problems)
+
+    tampered_input_fingerprint = copy.deepcopy(proposal)
+    current_fingerprint = proposal["inputs"]["registry_fingerprint"]
+    zero_fingerprint = "sha256:" + "0" * 64
+    replacement_fingerprint = (
+        zero_fingerprint
+        if current_fingerprint != zero_fingerprint
+        else "sha256:" + "1" * 64
+    )
+    tampered_input_fingerprint["inputs"]["registry_fingerprint"] = (
+        replacement_fingerprint
+    )
+    tampered_input_fingerprint = _redigest(tampered_input_fingerprint)
+    problems = proposals.verify_proposal_version(
+        tampered_input_fingerprint,
+        configuration=configuration,
+        requirements=requirements,
+        project=project,
+        root=REPOSITORY_ROOT,
+    )
+    assert any("inputs" in item for item in problems)
+
     reasons = approval_ineffectiveness_reasons(
         _approval,
         configuration=configuration,
@@ -306,6 +354,28 @@ def test_revocation_requires_exact_prior_target_and_is_single_append_only():
     )
     with pytest.raises(ApprovalError, match="exact earlier record"):
         ApprovalLedger.empty("demo_shop").append(unappended_revocation)
+
+    future_target = plain(approval)
+    future_target["approval_id"] = "demo_shop/approvals/3"
+    future_target["predecessor"] = None
+    future_target = _redigest(future_target)
+    future_revocation = new_approval_revocation(
+        project_ref="demo_shop",
+        revoked=future_target,
+        approver=dict(APPROVER),
+        decided_at=DECIDED_AT,
+        reason="target appears later in the input sequence",
+        predecessor=approval,
+    )
+    future_target_problems = verify_ledger(
+        [approval, future_revocation, future_target], project_ref="demo_shop"
+    )
+    assert any(
+        "records[1]" in item
+        and "revocation target" in item
+        and "not an exact earlier record" in item
+        for item in future_target_problems
+    )
 
     wrong_target = new_approval_revocation(
         project_ref="demo_shop",
