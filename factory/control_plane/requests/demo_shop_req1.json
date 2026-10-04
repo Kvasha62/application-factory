@@ -1,0 +1,40 @@
+{
+  "approval_ref": {
+    "approval_id": "demo_shop/approvals/1",
+    "digest": "sha256:6f42740e0816369fed5a7caad15b782c6357b29ae9b7495435699a996b6be5b6"
+  },
+  "configuration_ref": {
+    "configuration_id": "demo_shop/configurations/1",
+    "digest": "sha256:09ed2d1acd3387810c9156d3e2d38e4120f9778a5a8e989397476c268426b0ad"
+  },
+  "digest": "sha256:486fb214d4cde3a56bf963fdd38ec6d95d477bc90092281f8fa91b7c43cbef31",
+  "generator_version": "control-plane/composition-requests/v1",
+  "project_ref": "demo_shop",
+  "request": {
+    "$schema": "factory/composer/schema/composition_request.schema.json",
+    "components": [
+      {
+        "component_id": "identity",
+        "component_version": "0.3.0"
+      },
+      {
+        "component_id": "tenant_authority",
+        "component_version": "0.1.0"
+      }
+    ],
+    "configuration": {
+      "identity": {
+        "current_platform_id": "demo_shop_platform"
+      },
+      "tenant_authority": {
+        "platform_id": "demo_shop_platform"
+      }
+    },
+    "manifest": {
+      "manifest_id": "demo_shop_platform",
+      "manifest_version": "1.0.0"
+    }
+  },
+  "request_id": "demo_shop/requests/1",
+  "schema_version": "control-plane/composition-request/v1"
+}

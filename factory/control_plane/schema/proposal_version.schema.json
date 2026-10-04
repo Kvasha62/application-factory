@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory/control_plane/schema/proposal_version.schema.json",
+  "title": "Control Plane ProposalVersion",
+  "description": "Immutable validation report for one exact ConfigurationVersion (S2-1/S2-3). It binds the configuration digest and the RequirementsVersion digest to the deterministic findings that justify accepting, acknowledging or rejecting the configuration, and derives its state from them: blocked exactly when a blocking error is present, ready otherwise. Findings are content-addressed and sorted by (severity, target, code, message, finding_id).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "proposal_id",
+    "project_ref",
+    "requirements_ref",
+    "configuration_ref",
+    "inputs",
+    "findings",
+    "state",
+    "predecessor",
+    "digest"
+  ],
+  "properties": {
+    "schema_version": { "const": "control-plane/proposal/v1" },
+    "proposal_id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*/proposals/[1-9][0-9]*$" },
+    "project_ref": { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$" },
+    "requirements_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirements_id", "digest"],
+      "properties": {
+        "requirements_id": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "configuration_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configuration_id", "digest"],
+      "properties": {
+        "configuration_id": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "description": "The exact ConfigurationVersion this report analyses; the digest is what an approval binds to."
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["validator_set", "registry_fingerprint"],
+      "properties": {
+        "validator_set": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Rule-set identifier; changing a rule must bump it, so findings and rules cannot drift apart."
+        },
+        "registry_fingerprint": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          ],
+          "description": "Fingerprint of the registry document as read (an input fingerprint, never an identity or a substitute for registry facts); null when the registry could not be read."
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "description": "Deterministic findings, sorted by (severity, target, code, message, finding_id) and de-duplicated by finding_id.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "severity", "target", "message", "details", "finding_id"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^CP-[A-Z0-9-]+$",
+            "description": "Frozen code registry: a code keeps its meaning forever."
+          },
+          "severity": {
+            "enum": ["error", "warning", "info"],
+            "description": "error = blocking, cannot be acknowledged; warning = requires an explicit acknowledgement; info = informational."
+          },
+          "target": { "type": "string", "minLength": 1 },
+          "message": { "type": "string", "minLength": 1 },
+          "details": { "type": "object" },
+          "finding_id": {
+            "type": "string",
+            "pattern": "^fnd-[0-9a-f]{12}$",
+            "description": "Content address: the first 12 hex characters of the SHA-256 of the finding content."
+          }
+        }
+      }
+    },
+    "state": {
+      "enum": ["ready", "blocked"],
+      "description": "Derived, never hand-set: blocked exactly when a blocking error is present."
+    },
+    "predecessor": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["proposal_id", "digest"],
+          "properties": {
+            "proposal_id": { "type": "string" },
+            "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          }
+        }
+      ]
+    },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

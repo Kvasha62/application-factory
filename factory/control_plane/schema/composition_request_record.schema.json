@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory/control_plane/schema/composition_request_record.schema.json",
+  "title": "Control Plane Composition Request Record",
+  "description": "Immutable record of one approved composition (S2-1/S2-2). It wraps the EXACT Composition Request payload the Composer consumes and carries the provenance in the wrapper: the approved configuration digest, the effective approval record and the generator identity. The nested request holds no control-plane field — a provenance key inside it would be a second authority speaking in the Composer's own document. The record authorizes composition only; the produced Platform Manifest is a draft and the manifest lifecycle keeps its sole publication authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "project_ref",
+    "configuration_ref",
+    "approval_ref",
+    "generator_version",
+    "request",
+    "digest"
+  ],
+  "properties": {
+    "schema_version": { "const": "control-plane/composition-request/v1" },
+    "request_id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*/requests/[1-9][0-9]*$" },
+    "project_ref": { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$" },
+    "configuration_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configuration_id", "digest"],
+      "properties": {
+        "configuration_id": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "approval_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approval_id", "digest"],
+      "properties": {
+        "approval_id": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "description": "The approval record that had to be effective before this record could exist."
+    },
+    "generator_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identity of the generator that produced the payload; participates in the record digest, so a behaviour change is visible."
+    },
+    "request": {
+      "type": "object",
+      "required": ["manifest", "components"],
+      "description": "The exact Composition Request payload (the Composer's own normative schema governs it). Control-plane provenance fields are forbidden here."
+    },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

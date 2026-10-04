@@ -473,3 +473,709 @@ def scalar_constraints(constraints: object, where: str) -> list[str]:
         if not _is_scalar(value):
             errors.append(f"{where}: constraint {key!r} must be a scalar value")
     return errors
+
+
+# ---------------------------------------------------------------------------
+# Slice 2 — additive validators (S2-1 configuration/v2, S2-2 approval ledger,
+# S2-3 acknowledgement-gated findings).
+#
+# Every rule below is ADDITIVE: the Slice 1 functions above are unchanged, so
+# the v1 schema and its validation semantics remain exactly as merged. The v2
+# family deliberately restates its own structural rules instead of delegating
+# to the v1 functions: the two schema generations are frozen independently, so
+# a later v1 change can never silently redefine v2 semantics.
+# ---------------------------------------------------------------------------
+
+#: New document schema ids introduced by Slice 2.
+SCHEMA_CONFIGURATION_V2 = "control-plane/configuration/v2"
+SCHEMA_PROPOSAL = "control-plane/proposal/v1"
+SCHEMA_APPROVAL = "control-plane/approval/v1"
+SCHEMA_COMPOSITION_REQUEST = "control-plane/composition-request/v1"
+
+#: Strict public SemVer MAJOR.MINOR.PATCH — the version form the existing
+#: Composition Request requires for ``manifest.manifest_version``.
+SEMVER_PATTERN = r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
+
+#: ISO-8601 UTC instant, same rule the Platform Manifest approval metadata
+#: uses; a floating or local timestamp is never accepted.
+ISO8601_PATTERN = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$"
+
+#: Finding identity: ``fnd-`` + 12 lowercase hex characters (content address).
+FINDING_ID_PATTERN = r"^fnd-[0-9a-f]{12}$"
+
+#: Finding code shape (frozen registry lives in ``findings.py``).
+CODE_PATTERN = r"^CP-[A-Z0-9-]+$"
+
+SEVERITY_ERROR = "error"
+SEVERITY_WARNING = "warning"
+SEVERITY_INFO = "info"
+SEVERITY_ORDER = (SEVERITY_ERROR, SEVERITY_WARNING, SEVERITY_INFO)
+SEVERITIES = frozenset(SEVERITY_ORDER)
+_SEVERITY_RANK = {severity: rank for rank, severity in enumerate(SEVERITY_ORDER)}
+
+PROPOSAL_STATES = frozenset({"ready", "blocked"})
+APPROVAL_DECISIONS = frozenset({"granted", "rejected", "revoked"})
+APPROVER_KINDS = frozenset({"owner", "agent", "system"})
+
+FINDING_KEYS = ("code", "severity", "target", "message", "details", "finding_id")
+
+#: Desired/Actual vocabulary. A Desired control-plane document must never
+#: carry Actual-state keys; the Slice 1 separation proof is extended to every
+#: Slice 2 document and schema by the same rule.
+ACTUAL_STATE_KEYS = frozenset(
+    {
+        "actual",
+        "actual_state",
+        "deployed",
+        "deployment",
+        "drift",
+        "health",
+        "observed",
+        "observed_identity",
+        "reconciliation",
+        "running_platform",
+        "runtime",
+        "runtime_health",
+        "runtime_root",
+        "runtime_state",
+    }
+)
+
+#: Leaf key names that denote secret material. Matching is exact on the key
+#: name (case-insensitive), so descriptive keys such as ``token_prefix`` or
+#: ``service_token_prefix`` are not candidates.
+SECRET_KEY_NAMES = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "apikey",
+        "client_secret",
+        "credential",
+        "credentials",
+        "password",
+        "passwd",
+        "private_key",
+        "refresh_token",
+        "secret",
+    }
+)
+
+#: Value prefixes that are secret material by construction (PEM blocks).
+SECRET_VALUE_PREFIXES = ("-----BEGIN ",)
+
+#: Control-plane provenance keys that must never appear inside the composer
+#: payload nested in a Composition Request record.
+REQUEST_PAYLOAD_FORBIDDEN_KEYS = frozenset(
+    {
+        "approval_ref",
+        "configuration_ref",
+        "digest",
+        "generator_version",
+        "proposal_ref",
+        "request_id",
+        "schema_version",
+    }
+)
+
+_CODE_RE = re.compile(CODE_PATTERN)
+_SEMVER_RE = re.compile(SEMVER_PATTERN)
+_ISO8601_RE = re.compile(ISO8601_PATTERN)
+_FINDING_ID_RE = re.compile(FINDING_ID_PATTERN)
+
+
+def finding_sort_key(finding: Mapping[str, Any]) -> tuple[int, str, str, str, str]:
+    """Return the frozen ordering key of a finding.
+
+    Order is ``(severity, target, code, message, finding_id)`` with
+    ``error < warning < info``. The finding id is the final tie-break, so the
+    order of an arbitrary input list never affects the sorted result.
+    """
+    severity = finding.get("severity")
+    rank = _SEVERITY_RANK.get(severity, len(SEVERITY_ORDER))
+    if not isinstance(severity, str):
+        rank = len(SEVERITY_ORDER)
+    return (
+        rank,
+        str(finding.get("target", "")),
+        str(finding.get("code", "")),
+        str(finding.get("message", "")),
+        str(finding.get("finding_id", "")),
+    )
+
+
+def _check_finding(value: object, where: str, errors: list[str]) -> None:
+    """Validate one finding object (structural rules only)."""
+    if not isinstance(value, dict):
+        errors.append(f"{where}: must be an object")
+        return
+    _check_keys(value, FINDING_KEYS, where, errors)
+    code = value.get("code")
+    if not isinstance(code, str) or _CODE_RE.fullmatch(code) is None:
+        errors.append(f"{where}: code must match {CODE_PATTERN}")
+    if value.get("severity") not in SEVERITIES:
+        errors.append(f"{where}: severity must be one of {sorted(SEVERITIES)}")
+    _check_string(value, "target", where, errors)
+    _check_string(value, "message", where, errors)
+    details = value.get("details")
+    if not isinstance(details, dict):
+        errors.append(f"{where}: details must be an object")
+    finding_identifier = value.get("finding_id")
+    if (
+        not isinstance(finding_identifier, str)
+        or _FINDING_ID_RE.fullmatch(finding_identifier) is None
+    ):
+        errors.append(f"{where}: finding_id must match {FINDING_ID_PATTERN}")
+
+
+def _check_manifest_request(
+    manifest: object, where: str, *, version_pattern: str, errors: list[str]
+) -> None:
+    """Validate the request-shaped manifest header of a v2 configuration."""
+    if not isinstance(manifest, dict):
+        errors.append(f"{where}: must be an object")
+        return
+    _check_keys(
+        manifest, ("manifest_id", "manifest_version", "predecessor"), where, errors
+    )
+    manifest_id = manifest.get("manifest_id")
+    if (
+        not isinstance(manifest_id, str)
+        or _MANIFEST_ID_RE.fullmatch(manifest_id) is None
+    ):
+        errors.append(f"{where}: manifest_id must match {MANIFEST_ID_PATTERN}")
+    version = manifest.get("manifest_version")
+    if not isinstance(version, str) or re.fullmatch(version_pattern, version) is None:
+        errors.append(
+            f"{where}: manifest_version must be an explicit SemVer "
+            "MAJOR.MINOR.PATCH (the Composition Request form)"
+        )
+    predecessor = manifest.get("predecessor")
+    if predecessor is not None:
+        if not isinstance(predecessor, dict):
+            errors.append(f"{where}.predecessor: must be null or an object")
+        else:
+            _check_keys(
+                predecessor,
+                ("manifest_id", "manifest_version", "manifest_digest"),
+                f"{where}.predecessor",
+                errors,
+            )
+            _check_manifest_request(
+                {
+                    "manifest_id": predecessor.get("manifest_id"),
+                    "manifest_version": predecessor.get("manifest_version"),
+                    "predecessor": None,
+                },
+                f"{where}.predecessor",
+                version_pattern=version_pattern,
+                errors=errors,
+            )
+            _check_digest(
+                predecessor.get("manifest_digest"),
+                "manifest_digest",
+                f"{where}.predecessor",
+                errors,
+            )
+
+
+def configuration_version_v2_errors(document: object) -> list[str]:
+    """Validate an immutable ``control-plane/configuration/v2`` document.
+
+    v2 is the Slice 2 generation of the ConfigurationVersion: identical to v1
+    except that the payload carries the fields the existing Composition
+    Request requires — ``manifest{manifest_id, manifest_version, predecessor}``,
+    a request-shaped nullable ``golden_bundle`` reference and a request-shaped
+    nullable ``extensions`` list. Both are validated for shape here; their
+    vocabulary (bundle identity, extension mechanisms, repository paths) stays
+    the Composer's published schema, enforced when the request is generated.
+    """
+    if not isinstance(document, dict):
+        return ["configuration version v2: must be an object"]
+    errors: list[str] = []
+    _check_keys(
+        document,
+        (
+            "schema_version",
+            "configuration_id",
+            "project_ref",
+            "requirements_ref",
+            "template_ref",
+            "variant_ref",
+            "manifest",
+            "components",
+            "configuration",
+            "golden_bundle",
+            "extensions",
+            "branding",
+            "attachments",
+            "predecessor",
+            "digest",
+        ),
+        "configuration version v2",
+        errors,
+    )
+    if document.get("schema_version") != SCHEMA_CONFIGURATION_V2:
+        errors.append(
+            f"configuration version v2: schema_version must be "
+            f"{SCHEMA_CONFIGURATION_V2!r}"
+        )
+    if "configuration_id" in document:
+        _check_versioned_id(
+            document["configuration_id"],
+            "configurations",
+            "configuration_id",
+            errors,
+        )
+    if "project_ref" in document:
+        _check_id(
+            document["project_ref"], "project_ref", "configuration version v2", errors
+        )
+    if (
+        isinstance(document.get("configuration_id"), str)
+        and isinstance(document.get("project_ref"), str)
+        and document["configuration_id"].split("/")[0] != document["project_ref"]
+    ):
+        errors.append(
+            "configuration version v2: configuration_id must live under project_ref"
+        )
+    if "requirements_ref" in document:
+        _check_digest_ref(
+            document["requirements_ref"],
+            "requirements_id",
+            "configuration version v2 requirements_ref",
+            errors,
+        )
+    for field in ("template_ref", "variant_ref"):
+        value = document.get(field)
+        if value is not None and (
+            not isinstance(value, str) or _ID_RE.fullmatch(value) is None
+        ):
+            errors.append(
+                f"configuration version v2: {field} must be null or match {ID_PATTERN}"
+            )
+    _check_manifest_request(
+        document.get("manifest"),
+        "configuration version v2 manifest",
+        version_pattern=SEMVER_PATTERN,
+        errors=errors,
+    )
+    components = document.get("components")
+    if not isinstance(components, list) or not components:
+        errors.append("configuration version v2: components must be a non-empty list")
+    else:
+        seen: set[str] = set()
+        for index, component in enumerate(components):
+            where = f"configuration version v2 components[{index}]"
+            if not isinstance(component, dict):
+                errors.append(f"{where}: must be an object")
+                continue
+            _check_keys(component, ("component_id", "component_version"), where, errors)
+            component_id = component.get("component_id")
+            if isinstance(component_id, str) and _ID_RE.fullmatch(component_id) is None:
+                errors.append(f"{where}: component_id must match {ID_PATTERN}")
+            elif isinstance(component_id, str):
+                if component_id in seen:
+                    errors.append(
+                        f"{where}: component_id {component_id!r} is duplicated"
+                    )
+                seen.add(component_id)
+            if "component_version" in component and not is_exact_version(
+                component["component_version"]
+            ):
+                errors.append(
+                    f"{where}: component_version "
+                    f"{component.get('component_version')!r} must be an exact "
+                    "selector-free version"
+                )
+        # Registry authority is enforced on the authoritative build/validation
+        # path exactly as in v1: any disagreement with the canonical Component
+        # Registry fails closed here (unknown id, version mismatch, lifecycle
+        # state other than ``registered``, or an unreadable registry).
+        errors.extend(component_reference_errors(components))
+    configuration = document.get("configuration")
+    if not isinstance(configuration, dict):
+        errors.append("configuration version v2: configuration must be an object")
+    golden_bundle = document.get("golden_bundle")
+    if golden_bundle is not None and not isinstance(golden_bundle, dict):
+        errors.append(
+            "configuration version v2: golden_bundle must be null or the "
+            "Composition Request bundle reference object"
+        )
+    extensions = document.get("extensions")
+    if extensions is not None:
+        if not isinstance(extensions, list):
+            errors.append(
+                "configuration version v2: extensions must be null or the "
+                "Composition Request extension list"
+            )
+        elif not all(isinstance(entry, dict) for entry in extensions):
+            errors.append(
+                "configuration version v2: extensions entries must be objects"
+            )
+    branding = document.get("branding")
+    if branding is not None and not isinstance(branding, dict):
+        errors.append("configuration version v2: branding must be null or an object")
+    attachments = document.get("attachments")
+    if not isinstance(attachments, dict):
+        errors.append("configuration version v2: attachments must be an object")
+    else:
+        _check_keys(
+            attachments,
+            _ATTACHMENT_KEYS,
+            "configuration version v2 attachments",
+            errors,
+        )
+        for key in _ATTACHMENT_KEYS:
+            if key in attachments and attachments[key] is not None:
+                errors.append(
+                    "configuration version v2: attachment "
+                    f"{key!r} must be null (approval is an immutable ledger "
+                    "record in Slice 2, never a field of the configuration)"
+                )
+    _check_predecessor(
+        document.get("predecessor"),
+        "configuration_id",
+        "configuration version v2 predecessor",
+        errors,
+    )
+    if "digest" in document:
+        _check_digest(document["digest"], "digest", "configuration version v2", errors)
+    return errors
+
+
+def proposal_version_errors(document: object) -> list[str]:
+    """Validate an immutable ``control-plane/proposal/v1`` document.
+
+    A ProposalVersion is the Slice 2 validation report for one exact
+    ConfigurationVersion: it binds the configuration digest to the findings
+    that justify accepting, acknowledging or rejecting it.
+    """
+    if not isinstance(document, dict):
+        return ["proposal version: must be an object"]
+    errors: list[str] = []
+    _check_keys(
+        document,
+        (
+            "schema_version",
+            "proposal_id",
+            "project_ref",
+            "requirements_ref",
+            "configuration_ref",
+            "inputs",
+            "findings",
+            "state",
+            "predecessor",
+            "digest",
+        ),
+        "proposal version",
+        errors,
+    )
+    if document.get("schema_version") != SCHEMA_PROPOSAL:
+        errors.append(f"proposal version: schema_version must be {SCHEMA_PROPOSAL!r}")
+    if "proposal_id" in document:
+        _check_versioned_id(document["proposal_id"], "proposals", "proposal_id", errors)
+    if "project_ref" in document:
+        _check_id(document["project_ref"], "project_ref", "proposal version", errors)
+    if (
+        isinstance(document.get("proposal_id"), str)
+        and isinstance(document.get("project_ref"), str)
+        and document["proposal_id"].split("/")[0] != document["project_ref"]
+    ):
+        errors.append("proposal version: proposal_id must live under project_ref")
+    if "requirements_ref" in document:
+        _check_digest_ref(
+            document["requirements_ref"],
+            "requirements_id",
+            "proposal version requirements_ref",
+            errors,
+        )
+    if "configuration_ref" in document:
+        _check_digest_ref(
+            document["configuration_ref"],
+            "configuration_id",
+            "proposal version configuration_ref",
+            errors,
+        )
+    inputs = document.get("inputs")
+    if not isinstance(inputs, dict):
+        errors.append("proposal version: inputs must be an object")
+    else:
+        _check_keys(
+            inputs,
+            ("validator_set", "registry_fingerprint"),
+            "proposal version inputs",
+            errors,
+        )
+        _check_string(inputs, "validator_set", "proposal version inputs", errors)
+        fingerprint = inputs.get("registry_fingerprint")
+        if fingerprint is not None:
+            _check_digest(
+                fingerprint, "registry_fingerprint", "proposal version inputs", errors
+            )
+    findings_list = document.get("findings")
+    if not isinstance(findings_list, list):
+        errors.append("proposal version: findings must be a list")
+    else:
+        seen_ids: set[str] = set()
+        for index, item in enumerate(findings_list):
+            where = f"proposal version findings[{index}]"
+            _check_finding(item, where, errors)
+            if isinstance(item, dict) and isinstance(item.get("finding_id"), str):
+                identifier = item["finding_id"]
+                if identifier in seen_ids:
+                    errors.append(f"{where}: finding_id {identifier!r} is duplicated")
+                seen_ids.add(identifier)
+        if all(isinstance(item, dict) for item in findings_list):
+            keys = [finding_sort_key(item) for item in findings_list]
+            if keys != sorted(keys):
+                errors.append(
+                    "proposal version: findings must be sorted by "
+                    "(severity, target, code, message, finding_id)"
+                )
+    state = document.get("state")
+    if state not in PROPOSAL_STATES:
+        errors.append("proposal version: state must be 'ready' or 'blocked'")
+    elif isinstance(findings_list, list) and all(
+        isinstance(item, dict) and item.get("severity") in SEVERITIES
+        for item in findings_list
+    ):
+        blocking = any(item["severity"] == SEVERITY_ERROR for item in findings_list)
+        expected_state = "blocked" if blocking else "ready"
+        if state != expected_state:
+            errors.append(
+                "proposal version: state must be "
+                f"{expected_state!r} for these findings (a blocking error "
+                "makes a proposal blocked; warnings never do)"
+            )
+    _check_predecessor(
+        document.get("predecessor"),
+        "proposal_id",
+        "proposal version predecessor",
+        errors,
+    )
+    if "digest" in document:
+        _check_digest(document["digest"], "digest", "proposal version", errors)
+    return errors
+
+
+def _check_approver(value: object, where: str, errors: list[str]) -> None:
+    """Validate the approver reference (RBAC attachment point included)."""
+    if not isinstance(value, dict):
+        errors.append(f"{where}: must be an object")
+        return
+    _check_keys(value, ("kind", "reference", "authority_ref"), where, errors)
+    if value.get("kind") not in APPROVER_KINDS:
+        errors.append(f"{where}: kind must be one of {sorted(APPROVER_KINDS)}")
+    _check_string(value, "reference", where, errors)
+    if value.get("authority_ref") is not None:
+        errors.append(
+            f"{where}: authority_ref is the RBAC attachment point and must be "
+            "null — no authorization policy is implemented in this slice"
+        )
+
+
+def approval_record_errors(document: object) -> list[str]:
+    """Validate one immutable ``control-plane/approval/v1`` ledger record.
+
+    Records are append-only: a written record has no update or delete form, an
+    undo is a new ``revoked`` record, and effectiveness is always derived
+    (never stored).
+    """
+    if not isinstance(document, dict):
+        return ["approval record: must be an object"]
+    errors: list[str] = []
+    _check_keys(
+        document,
+        (
+            "schema_version",
+            "approval_id",
+            "project_ref",
+            "decision",
+            "configuration_ref",
+            "proposal_ref",
+            "requirements_ref",
+            "acknowledged_findings",
+            "approver",
+            "decided_at",
+            "reason",
+            "revokes",
+            "predecessor",
+            "digest",
+        ),
+        "approval record",
+        errors,
+    )
+    if document.get("schema_version") != SCHEMA_APPROVAL:
+        errors.append(f"approval record: schema_version must be {SCHEMA_APPROVAL!r}")
+    if "approval_id" in document:
+        _check_versioned_id(document["approval_id"], "approvals", "approval_id", errors)
+    if "project_ref" in document:
+        _check_id(document["project_ref"], "project_ref", "approval record", errors)
+    if (
+        isinstance(document.get("approval_id"), str)
+        and isinstance(document.get("project_ref"), str)
+        and document["approval_id"].split("/")[0] != document["project_ref"]
+    ):
+        errors.append("approval record: approval_id must live under project_ref")
+    decision = document.get("decision")
+    if decision not in APPROVAL_DECISIONS:
+        errors.append(
+            f"approval record: decision must be one of {sorted(APPROVAL_DECISIONS)}"
+        )
+    if "configuration_ref" in document:
+        _check_digest_ref(
+            document["configuration_ref"],
+            "configuration_id",
+            "approval record configuration_ref",
+            errors,
+        )
+    if "proposal_ref" in document:
+        _check_digest_ref(
+            document["proposal_ref"],
+            "proposal_id",
+            "approval record proposal_ref",
+            errors,
+        )
+    if "requirements_ref" in document:
+        _check_digest_ref(
+            document["requirements_ref"],
+            "requirements_id",
+            "approval record requirements_ref",
+            errors,
+        )
+    acknowledged = document.get("acknowledged_findings")
+    if not isinstance(acknowledged, list):
+        errors.append("approval record: acknowledged_findings must be a list")
+    else:
+        for index, identifier in enumerate(acknowledged):
+            where = f"approval record acknowledged_findings[{index}]"
+            if (
+                not isinstance(identifier, str)
+                or _FINDING_ID_RE.fullmatch(identifier) is None
+            ):
+                errors.append(f"{where}: must match {FINDING_ID_PATTERN}")
+        if acknowledged != sorted(set(acknowledged)):
+            errors.append(
+                "approval record: acknowledged_findings must be sorted and "
+                "free of duplicates"
+            )
+        if decision == "revoked" and acknowledged:
+            errors.append(
+                "approval record: a revocation acknowledges nothing "
+                "(acknowledged_findings must be empty)"
+            )
+    _check_approver(document.get("approver"), "approval record approver", errors)
+    decided_at = document.get("decided_at")
+    if not isinstance(decided_at, str) or _ISO8601_RE.fullmatch(decided_at) is None:
+        errors.append(
+            "approval record: decided_at must be an ISO-8601 UTC instant "
+            "(YYYY-MM-DDTHH:MM:SSZ) — a floating selector is not a time"
+        )
+    _check_string(document, "reason", "approval record", errors)
+    revokes = document.get("revokes")
+    if decision == "revoked":
+        if not isinstance(revokes, dict):
+            errors.append(
+                "approval record: revokes is required when decision is 'revoked'"
+            )
+        else:
+            _check_digest_ref(revokes, "approval_id", "approval record revokes", errors)
+    elif revokes is not None:
+        errors.append(
+            "approval record: revokes is only meaningful for a revocation "
+            "(decision 'revoked'); it must be null otherwise"
+        )
+    _check_predecessor(
+        document.get("predecessor"),
+        "approval_id",
+        "approval record predecessor",
+        errors,
+    )
+    if "digest" in document:
+        _check_digest(document["digest"], "digest", "approval record", errors)
+    return errors
+
+
+def composition_request_record_errors(document: object) -> list[str]:
+    """Validate an immutable ``control-plane/composition-request/v1`` record.
+
+    The record wraps the exact Composition Request payload that the Composer
+    consumes; provenance (configuration digest, approval digest, generator
+    identity) lives in the wrapper, never inside the payload.
+    """
+    if not isinstance(document, dict):
+        return ["composition request record: must be an object"]
+    errors: list[str] = []
+    _check_keys(
+        document,
+        (
+            "schema_version",
+            "request_id",
+            "project_ref",
+            "configuration_ref",
+            "approval_ref",
+            "generator_version",
+            "request",
+            "digest",
+        ),
+        "composition request record",
+        errors,
+    )
+    if document.get("schema_version") != SCHEMA_COMPOSITION_REQUEST:
+        errors.append(
+            "composition request record: schema_version must be "
+            f"{SCHEMA_COMPOSITION_REQUEST!r}"
+        )
+    if "request_id" in document:
+        _check_versioned_id(document["request_id"], "requests", "request_id", errors)
+    if "project_ref" in document:
+        _check_id(
+            document["project_ref"], "project_ref", "composition request record", errors
+        )
+    if (
+        isinstance(document.get("request_id"), str)
+        and isinstance(document.get("project_ref"), str)
+        and document["request_id"].split("/")[0] != document["project_ref"]
+    ):
+        errors.append(
+            "composition request record: request_id must live under project_ref"
+        )
+    if "configuration_ref" in document:
+        _check_digest_ref(
+            document["configuration_ref"],
+            "configuration_id",
+            "composition request record configuration_ref",
+            errors,
+        )
+    if "approval_ref" in document:
+        _check_digest_ref(
+            document["approval_ref"],
+            "approval_id",
+            "composition request record approval_ref",
+            errors,
+        )
+    _check_string(document, "generator_version", "composition request record", errors)
+    request = document.get("request")
+    if not isinstance(request, dict):
+        errors.append(
+            "composition request record: request must be the Composition "
+            "Request object"
+        )
+    else:
+        for key in ("manifest", "components"):
+            if key not in request:
+                errors.append(
+                    f"composition request record: request is missing required "
+                    f"property {key!r}"
+                )
+        carried = sorted(set(request) & REQUEST_PAYLOAD_FORBIDDEN_KEYS)
+        if carried:
+            errors.append(
+                "composition request record: the nested request must carry no "
+                f"control-plane provenance fields, found {carried}"
+            )
+    if "digest" in document:
+        _check_digest(
+            document["digest"], "digest", "composition request record", errors
+        )
+    return errors

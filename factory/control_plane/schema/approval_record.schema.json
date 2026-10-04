@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory/control_plane/schema/approval_record.schema.json",
+  "title": "Control Plane ApprovalRecord (immutable ledger record)",
+  "description": "One immutable record of the append-only approval ledger (S2-2/S2-3). It binds the decision to the exact ConfigurationVersion digest, the analysed ProposalVersion digest and the warnings that were explicitly acknowledged. There is no update or delete form: a written record is final, an undo is a new record with decision 'revoked', and effectiveness is always derived (never stored). The control-plane approval authorizes composition only; the Platform Manifest lifecycle remains the sole publication authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "approval_id",
+    "project_ref",
+    "decision",
+    "configuration_ref",
+    "proposal_ref",
+    "requirements_ref",
+    "acknowledged_findings",
+    "approver",
+    "decided_at",
+    "reason",
+    "revokes",
+    "predecessor",
+    "digest"
+  ],
+  "properties": {
+    "schema_version": { "const": "control-plane/approval/v1" },
+    "approval_id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*/approvals/[1-9][0-9]*$" },
+    "project_ref": { "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$" },
+    "decision": { "enum": ["granted", "rejected", "revoked"] },
+    "configuration_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configuration_id", "digest"],
+      "properties": {
+        "configuration_id": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "description": "The exact configuration digest this approval authorizes; any technical change produces a new digest and therefore requires a new approval."
+    },
+    "proposal_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proposal_id", "digest"],
+      "properties": {
+        "proposal_id": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "requirements_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirements_id", "digest"],
+      "properties": {
+        "requirements_id": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "description": "Duplicated from the analysed proposal for tamper cross-checking; it is never an authority of its own."
+    },
+    "acknowledged_findings": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^fnd-[0-9a-f]{12}$" },
+      "description": "Exactly the warning finding ids of the analysed proposal, sorted: a warning cannot proceed unacknowledged, an error can never be acknowledged, and info needs none."
+    },
+    "approver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reference", "authority_ref"],
+      "properties": {
+        "kind": { "enum": ["owner", "agent", "system"] },
+        "reference": { "type": "string", "minLength": 1 },
+        "authority_ref": {
+          "type": "null",
+          "description": "RBAC attachment point. No authorization policy is implemented in this slice, so it must be null."
+        }
+      }
+    },
+    "decided_at": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$" },
+    "reason": { "type": "string", "minLength": 1 },
+    "revokes": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["approval_id", "digest"],
+          "properties": {
+            "approval_id": { "type": "string" },
+            "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          }
+        }
+      ],
+      "description": "Required exactly when decision is 'revoked': the record being revoked. The revoked record itself is never modified."
+    },
+    "predecessor": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["approval_id", "digest"],
+          "properties": {
+            "approval_id": { "type": "string" },
+            "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          }
+        }
+      ],
+      "description": "Append-only ledger chain: the record must declare the current ledger head."
+    },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

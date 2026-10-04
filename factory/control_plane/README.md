@@ -88,3 +88,41 @@ The repository Quality Gate (`pytest tests/` via
 `testpaths` would require editing `pyproject.toml`, which lies outside
 the authorized `factory/control_plane/**` boundary. This limitation is
 reported explicitly in the Slice 1 implementation report.
+
+## Slice 2 — composition gate (S2-1 / S2-2 / S2-3)
+
+Slice 2 adds the three ratified contracts *additively*. Slice 1 semantics,
+schemas and documents are untouched: a `configuration/v1` document stays valid
+with its original digest and is never rewritten.
+
+| Contract | Schema | Builder / verifier |
+|---|---|---|
+| `control-plane/configuration/v2` — the shape the existing Composition Request actually accepts | `schema/configuration_version_v2.schema.json` | `configuration_v2.new_configuration_version_v2`, `configuration_v2.generate_request_payload` |
+| `control-plane/proposal/v1` — immutable validation report (findings + state) for one exact configuration | `schema/proposal_version.schema.json` | `proposals.new_proposal_version`, `proposals.verify_proposal_version` |
+| `control-plane/approval/v1` — immutable ledger record bound to one exact `(configuration_id, digest)` + proposal digest | `schema/approval_record.schema.json` | `approvals.new_approval_record`, `approvals.new_approval_revocation`, `approvals.ApprovalLedger` |
+| `control-plane/composition-request/v1` — the exact Composer payload plus its provenance | `schema/composition_request_record.schema.json` | `composition_requests.new_request_record`, `composition_requests.verify_request_record` |
+
+Boundaries this slice keeps:
+
+- **v1 fails closed.** A `configuration/v1` version is valid, and composition
+  refuses it deterministically (`CP-CONF-V1-NOT-PROJECTABLE`); there is no
+  conversion, coercion or compatibility shim.
+- **Approval is a ledger, not a flag.** Records are immutable after creation;
+  revocation appends. There is no update or delete path, and effectiveness is
+  always derived from the record, the exact configuration, the exact proposal
+  and the chain — never stored.
+- **Warnings need an explicit acknowledgement; errors cannot be acknowledged
+  or bypassed.** `info` needs nothing. The acknowledged finding ids are part of
+  the digest-covered record, so an approval records exactly what was accepted.
+- **RBAC attachment point only.** `approvals.AuthorityPolicy` (with the
+  permissive `AllowAllAuthority`) is the single seam a future authorization
+  layer plugs into; no policy engine, roles or sessions are implemented here.
+- **The Composer stays the only composer.** Projection and diagnostics are
+  delegated to its public surface; the request record nests the payload
+  verbatim and keeps control-plane provenance outside it.
+- **Publication is untouched.** Composition ends at a `draft` manifest; the
+  manifest lifecycle remains the sole publication authority.
+
+The RBAC seam, the deferred proposal features (alternatives, conflicts,
+selection) and the repository Quality Gate's `testpaths` are reported as
+out-of-scope for this slice in the implementation report on PR #138.
