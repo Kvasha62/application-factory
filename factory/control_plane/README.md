@@ -151,3 +151,80 @@ boundary decision at that time. The separately authorized S2 hardening adds an
 explicit `python -m pytest factory/control_plane/tests` step to both the local
 PowerShell gate and CI, and includes the Control Plane package in compile
 coverage. `pyproject.toml:testpaths` remains unchanged.
+
+## Slice 3 — intake & composition-flow wrapper (S3)
+
+Slice 3 adds the ratified intake channels and a strict composition-flow wrapper on top of the hardened S2 proof chain. It is implemented strictly inside the `factory/control_plane/**` boundary; it does **not** edit any S1/S2 schema or module and adds no dependency.
+
+### Modules
+
+| Module | Responsibility |
+|---|---|
+| `factory_control_plane/requirements_intake.py` | Pure in-process normalizers for the four intake channels (`form` / `import` / `api` / structured `nl`); build the converged `control-plane/requirements/v1` version through `documents.new_requirements_version`. |
+| `factory_control_plane/requirements_flow.py` | Strict cross-link / re-derivation / approval-use wrapper that drives the hardened S2 chain and delegates to the S2 Composition Request builder. |
+
+### Intake channels
+
+Every channel is a *pure* value boundary: no network, no persistence, no external
+model or automatic synthesis, and no raw natural-language text is ever retained
+(the `nl` channel accepts only a *structured* parser candidate; free text is
+refused closed). The adapter — never the caller — assigns `source_channels` from
+the channel the input arrived on. A candidate is accepted only when it is
+representable by the existing `control-plane/requirements/v1` entry shape:
+
+- Required: `kind` (one of `capability` / `constraint` / `input`) and a
+  non-empty `statement.summary`.
+- Optional flat-scalar `constraints` (folded into `statement.constraints`).
+- `refs` defaults to `[]`; `status` defaults to `open` and is never inferred or
+  silently coerced to `resolved`; `req_id` must be unique per version or is
+  allocated deterministically as `s3-<n>` in candidate order.
+- Unknown fields, invalid values, ambiguity or contradiction fail closed
+  (`RequirementsIntakeError`, code `S3-FLOW-001`).
+
+### Composition-flow wrapper and S3-FLOW codes
+
+`requirements_flow.build_composition_request` runs the full chain — intake →
+RequirementsVersion → exact Requirements ↔ Configuration ↔ Project link → derive
+(or strictly verify) Proposal → create (or verify) Approval through the hardened
+S2 ledger → delegate to the S2 Composition Request builder — and raises
+`S3FlowError` on any failure. The wrapper introduces S3-local failure codes that
+are distinct from the S2 finding registry, are never persisted, and are never
+added to it:
+
+| Code | Meaning |
+|---|---|
+| `S3-FLOW-001` | malformed / ambiguous / contradictory / unsupported / unrepresentable intake |
+| `S3-FLOW-002` | invalid Requirements / Configuration / Proposal / Approval document, schema id or digest |
+| `S3-FLOW-003` | project or exact `(id, digest)` cross-reference mismatch (no "latest" fallback) |
+| `S3-FLOW-004` | Proposal re-derivation / canonical rebuild differs from the supplied Proposal |
+| `S3-FLOW-005` | Approval absent / non-grant / stale / changed / revoked / replayed; downstream use refused |
+
+The wrapper preserves S2 acknowledgement semantics unchanged, requires exact
+typed `(id, digest)` references and the recomputed digest, re-derives the
+Proposal from the exact inputs and compares it to any supplied Proposal, and
+requires the Approval to be an exact member of a verified append-only ledger
+(including revocation sweep) before delegating. It performs no persistence,
+network access, authentication/RBAC or external-model call; the Composer
+remains the sole composition authority.
+
+### Boundaries (S3 scope)
+
+No schema / S2 contract change, no Composer or `src/**` change, no
+Manifest/Instance/Artifact/Deployment/D&O, OCI/GHCR/publication, HTTP/UI,
+network, auth/RBAC/actor identity, persistence/current-pointer mutation,
+external NLP/AI, synthesis/alternatives/conflict resolution, cross-version
+requirement semantics, unrelated refactors, or dependency additions. Existing S2
+examples/digests are byte-for-byte unchanged. The wrapper has no reverse
+dependency on `src/` application code.
+
+### Tests
+
+`factory/control_plane/tests/test_requirements_intake.py`,
+`test_requirements_flow.py` and `test_requirements_integrity.py` cover the four
+channels, fail-closed intake, no raw-NL persistence, status semantics,
+deterministic id allocation, the exact `S3-FLOW-001..005` categories
+(fabricated/re-digested Proposal, Approval bypass, missing/non-member/stale/
+revoked ledger, incomplete Composition Request verification, successful
+delegation only after verification), v1 non-conversion, all S2
+error/warning/info acknowledgement semantics, and the absence of
+network/external-model/persistence/`src/` reverse-dependency side effects.
