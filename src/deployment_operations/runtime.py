@@ -235,6 +235,23 @@ class RuntimeAdapter(Protocol):
 
     def start(self, element: RuntimeElement) -> RuntimeHandle: ...
 
+    def attach(self, element: RuntimeElement) -> RuntimeHandle:
+        """Bind a runtime element the environment **already** supervises.
+
+        The re-binding counterpart of :meth:`start` for an operation that
+        realizes nothing: it returns a reference to the runtime element this
+        environment already runs for exactly this element, and refuses when
+        there is none. It creates nothing, starts nothing, restarts nothing,
+        stops nothing and migrates nothing — the lifecycle of the runtime
+        belongs to its own owner, and this operation only restores a
+        deployment operation's reference to a runtime that outlived it
+        (ADR-0016 §18).
+
+        An environment that cannot safely bind a runtime element surviving the
+        deployment process must refuse rather than fabricate a handle.
+        """
+        ...
+
     def request(
         self,
         handle: RuntimeHandle,
@@ -906,6 +923,24 @@ class LocalProcessRuntime:
             )
             raise RuntimeProcessError(message) from error
         return RuntimeHandle(element=element, process=process, log_stream=log_stream)
+
+    def attach(self, element: RuntimeElement) -> RuntimeHandle:
+        """Refuse: this process model cannot bind a runtime it does not own.
+
+        ``LocalProcessRuntime`` runs one subprocess per component **inside the
+        deployment process**: those processes do not outlive it, so there is no
+        standing runtime element to bind. Returning a handle here would claim a
+        runtime this operation never started and does not supervise — an
+        invented ``deployed`` claim, which the boundary refuses (§10, §20).
+        Re-binding a runtime that outlives the deployment process requires an
+        adapter whose environment supervises that runtime itself (ADR-0016 §18).
+        """
+        raise RuntimeProcessError(
+            f"{element.component.component_id}: this runtime adapter owns the "
+            "processes it started itself and cannot attach to a runtime element "
+            "that outlives the deployment process; attach requires an adapter "
+            "whose environment supervises a standing Running Platform"
+        )
 
     def request(
         self,

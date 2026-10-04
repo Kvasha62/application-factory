@@ -53,30 +53,32 @@ Both are constructor-injected parameters of the existing public API; neither is 
 
 | Seam | Contract | Injection point | Direction |
 |---|---|---|---|
-| **Runtime / control seam** | `RuntimeAdapter` — `materialize`, `migrate`, `start`, `request`, `stop` (`runtime.py:222-247`, "The seam between the deployment operation and its environment") | `deploy(request, runtime=…)` (`deployment.py:619-626`); `restart(request, runtime=…)` (`restart.py:361-367`) | Layer O → Layer R: requests only |
-| **S4 identity seam** | `PlatformIdentityProvider` (`platform_identity.py:153-160`), realized by `OwnerSuppliedPlatformIdentityProvider` over `RunningPlatformIdentitySource.observe(binding) -> ActualPlatformSnapshot` (`platform_identity_source.py:52-57`, `:60-111`) | `deploy(..., identity_provider=…)` (`deployment.py:623`); `reconcile(..., identity_provider=…)` (`reconciliation.py:179-182`); `restart(..., identity_provider=…)` (`restart.py:365`) | Layer R → Layer O: evidence only |
+| **Runtime / control seam** | `RuntimeAdapter` — `materialize`, `migrate`, `start`, `attach`, `request`, `stop` (`runtime.py:221-263`, "The seam between the deployment operation and its environment") | `deploy(request, runtime=…)` (`deployment.py:639-646`); `attach(request, runtime=…)` (`deployment.py:1391`); `restart(request, runtime=…)` (`restart.py:361-367`) | Layer O → Layer R: requests only |
+| **S4 identity seam** | `PlatformIdentityProvider` (`platform_identity.py:153-160`), realized by `OwnerSuppliedPlatformIdentityProvider` over `RunningPlatformIdentitySource.observe(binding) -> ActualPlatformSnapshot` (`platform_identity_source.py:52-57`, `:60-111`) | `deploy(..., identity_provider=…)` (`deployment.py:643`); `reconcile(..., identity_provider=…)` (`reconciliation.py:179-182`); `restart(..., identity_provider=…)` (`restart.py:365`) | Layer R → Layer O: evidence only |
 
 **The complete list of things Layer O can do to the runtime** — verified by enumeration of every adapter call inside `deploy()`:
 
 | Call | Anchor |
 |---|---|
-| `adapter.materialize(element)` | `deployment.py:930` |
-| `adapter.start(element)` | `deployment.py:1004` |
-| `adapter.request(handle, OP_START)` | `deployment.py:1019` |
-| `adapter.migrate(element)` | `deployment.py:1084` |
-| `adapter.request(handle, OP_PROBE)` | `deployment.py:1202` |
-| `adapter.stop(handle)` | `deployment.py:901` (fail-closed) and `Deployment.stop()` `:324-326` |
+| `adapter.materialize(element)` | `deployment.py:950` |
+| `adapter.start(element)` | `deployment.py:1024` |
+| `adapter.request(handle, OP_START)` | `deployment.py:1039` |
+| `adapter.migrate(element)` | `deployment.py:1104` |
+| `adapter.request(handle, OP_PROBE)` | `deployment.py:1222` |
+| `adapter.stop(handle)` | `deployment.py:921` (fail-closed) and `Deployment.stop()` `:344-346` |
 
 Because that list is exhaustive, ownership of the runtime can be relocated to Layer R **without changing D&O**: Layer O only ever issues those six requests, and the RP-owned adapter decides what each one means inside Layer R.
 
+**Added by the approved F-1 slice — one request, and nothing else.** `deployment_operations.attach` (`deployment.py:1391`) issues exactly one further request, `adapter.attach(element)` (`:1518`), which binds a runtime element Layer R **already** supervises. It creates, starts, stops, restarts and migrates nothing, so it moves no ownership: the list above stays the complete list of things Layer O can do *to* the runtime, and `attach` only restores Layer O's reference to it.
+
 ### 0.4 Why `deploy()` is not the runtime owner
 
-1. `deploy()` never touches a member process itself. Every runtime effect is one of the six adapter calls above; the default `LocalProcessRuntime` is only a **default**, replaced by injection at `deployment.py:749` (`adapter: RuntimeAdapter = runtime or LocalProcessRuntime(source_paths=paths)`).
-2. `RuntimeHandle.process` is dereferenced **only inside `LocalProcessRuntime`** (`runtime.py:919`, `:963`). Nothing in `deployment.py`, `restart.py` or `reconciliation.py` reads it, so an RP-owned adapter may define its own handle payload — the handle is a **reference to a Layer R runtime element**, not a process Layer O owns.
-3. `Deployment.stop()` is documented as "An operational action, not a lifecycle change" (`deployment.py:307-321`) and is idempotent. Under this runbook it means: *release Layer O's attachment and stop claiming a Running Platform in the record*. Whether a member runtime actually terminates is Layer R's policy decision.
+1. `deploy()` never touches a member process itself. Every runtime effect is one of the six adapter calls above; the default `LocalProcessRuntime` is only a **default**, replaced by injection at `deployment.py:769` (`adapter: RuntimeAdapter = runtime or LocalProcessRuntime(source_paths=paths)`).
+2. `RuntimeHandle.process` is dereferenced **only inside `LocalProcessRuntime`** (`runtime.py:954`, `:998`). Nothing in `deployment.py`, `restart.py` or `reconciliation.py` reads it, so an RP-owned adapter may define its own handle payload — the handle is a **reference to a Layer R runtime element**, not a process Layer O owns.
+3. `Deployment.stop()` is documented as "An operational action, not a lifecycle change" (`deployment.py:312-333`) and is idempotent. Under this runbook it means: *release Layer O's attachment and stop claiming a Running Platform in the record*. Whether a member runtime actually terminates is Layer R's policy decision.
 4. The platform's existence is therefore not a function of any Layer O object's lifetime — which §12.1 proves operationally (I1a, I1b, I2, I3).
 
-**Consequence, and a hard requirement on the RP-owned adapter:** `deploy()` calls `adapter.stop(handle)` for every handle when any stage fails (`deployment.py:896-901`). If `stop` destroyed runtime, a failed orchestration attempt would tear down Layer R. **`stop` MUST be detach-only.** See §7.
+**Consequence, and a hard requirement on the RP-owned adapter:** `deploy()` calls `adapter.stop(handle)` for every handle when any stage fails (`deployment.py:916-921`). If `stop` destroyed runtime, a failed orchestration attempt would tear down Layer R. **`stop` MUST be detach-only.** See §7.
 
 ---
 
@@ -135,8 +137,8 @@ The `<RUNTIME_ROOT>` denial is the load-bearing control: after a real run it con
 | Bind pinned content into a member slot | **Layer R** (executes) | On Layer O's `adapter.materialize(element)` request; digest verified against the pin |
 | Run component migrations for one deployment | **Layer O orchestrates**, Layer R executes | `adapter.migrate(element)` (ADR-0016 §14, §18) |
 | Establish health/readiness facts | **Layer R** | The member's own `/health`, `/ready` (`tenant_authority/api.py:142-153`) |
-| **Evaluate** health/readiness and decide acceptance | **Layer O** | `adapter.request(handle, OP_PROBE)` → `deployment.py:1202` |
-| Verify identity correspondence | **Layer O** | S4 seam; `deployment.py:878-892` |
+| **Evaluate** health/readiness and decide acceptance | **Layer O** | `adapter.request(handle, OP_PROBE)` → `deployment.py:1222` |
+| Verify identity correspondence | **Layer O** | S4 seam; `deployment.py:898-912` |
 | Stop claiming a Running Platform (record) | **Layer O** | `Deployment.stop()` → `mark_stopped` |
 | Decide whether a member runtime terminates | **Layer R** | Its own policy, on a detach request |
 | Upgrade / rollback / reconcile | **Layer O orchestrates** | `upgrade(..., runtime=…, identity_provider=…)`, `rollback(...)`, `reconcile(..., identity_provider=…)`; reconciliation "takes no runtime action of any kind" (`reconciliation.py:179-186`) |
@@ -152,7 +154,7 @@ The `<RUNTIME_ROOT>` denial is the load-bearing control: after a real run it con
 
 **One member: `tenant_authority` 0.1.0.**
 
-Verified reason: `build_deployment` exists in exactly six packages (`authorization_service`, `booking_service`, `commerce_service`, `learning_service`, `records_service`, `tenant_authority`); the Composer resolves the full declared dependency closure and never drops a dependency (`composer/errors.py:43`); and `build_elements` raises `RuntimeProcessError` for any instance component with no runtime binding (`runtime.py:259-262`). Real Composer closures: `tenant_authority` → 1 member (all startable); `identity` → 2 (`identity` not startable); `authorization` → 3; `records` → 4; `commerce` → 5 (`idempotency` + `identity` not startable). Registry dependencies: `tenant_authority: []`, `identity: [tenant_authority]`, `authorization: [identity, tenant_authority]`, `commerce/booking/learning: [authorization, idempotency, identity]`.
+Verified reason: `build_deployment` exists in exactly six packages (`authorization_service`, `booking_service`, `commerce_service`, `learning_service`, `records_service`, `tenant_authority`); the Composer resolves the full declared dependency closure and never drops a dependency (`composer/errors.py:43`); and `build_elements` raises `RuntimeProcessError` for any instance component with no runtime binding (`runtime.py:277-281`). Real Composer closures: `tenant_authority` → 1 member (all startable); `identity` → 2 (`identity` not startable); `authorization` → 3; `records` → 4; `commerce` → 5 (`idempotency` + `identity` not startable). Registry dependencies: `tenant_authority: []`, `identity: [tenant_authority]`, `authorization: [identity, tenant_authority]`, `commerce/booking/learning: [authorization, idempotency, identity]`.
 
 | Element | Value | Owner |
 |---|---|---|
@@ -191,7 +193,7 @@ The member runtime protocol implementation may be the shipped `deployment_operat
 
 ## 7. The RP-owned runtime adapter (the runtime seam implementation)
 
-Layer R implements `RuntimeAdapter` (`runtime.py:222-247`). Semantics are fixed by §0.4 and §4:
+Layer R implements `RuntimeAdapter` (`runtime.py:221-263`). Semantics are fixed by §0.4 and §4:
 
 | Method | Required Layer R semantics | Forbidden |
 |---|---|---|
@@ -200,12 +202,13 @@ Layer R implements `RuntimeAdapter` (`runtime.py:222-247`). Semantics are fixed 
 | `start(element)` | **Attach** to an existing Layer R member runtime, or ask the cell manager to create one under Layer R's own supervision; return a handle that is a **reference** to the Layer R element | Returning a process whose lifetime Layer O controls; creating a runtime outside Layer R's supervision |
 | `request(handle, op, timeout=…)` | Forward `OP_START` / `OP_PROBE` to the Layer R element within the deadline | Synthesizing an answer; consulting expected state |
 | `stop(handle)` | **Detach**: release Layer O's reference and let Layer R apply its own policy to the member | Killing the layer, the supervisor, the producer, or another deployment's runtime |
+| `attach(element)` | Return a handle to the member Layer R **already supervises** for exactly this element, or refuse (`runtime.py:238`) | Creating, starting, restarting or migrating anything; returning a handle for an element Layer R does not supervise |
 
 Two verified facts make this Level A:
-- `RuntimeHandle.process` is dereferenced only inside `LocalProcessRuntime` (`runtime.py:919`, `:963`), so the handle payload is Layer R's to define — **no D&O change**.
-- `deploy()`'s fail-closed path calls `adapter.stop(handle)` for every handle (`deployment.py:896-901`), so a detach-only `stop` is what keeps a failed orchestration attempt from destroying Layer R.
+- `RuntimeHandle.process` is dereferenced only inside `LocalProcessRuntime` (`runtime.py:954`, `:998`), so the handle payload is Layer R's to define — **no D&O change**.
+- `deploy()`'s fail-closed path calls `adapter.stop(handle)` for every handle (`deployment.py:916-921`), so a detach-only `stop` is what keeps a failed orchestration attempt from destroying Layer R.
 
-**Mandatory:** the RP-owned adapter is injected as `runtime=`. Using the default `LocalProcessRuntime` (`deployment.py:749`) would make Layer O the runtime owner and is a STOP condition (§14).
+**Mandatory:** the RP-owned adapter is injected as `runtime=`. Using the default `LocalProcessRuntime` (`deployment.py:769`) would make Layer O the runtime owner and is a STOP condition (§14).
 
 ---
 
@@ -389,7 +392,7 @@ Perform the three proofs in this order, each with its evidence recorded verbatim
 
 1. **I1b — actual identity without D&O.** Ensure no Layer O process is running (`pgrep -u <DNO_USER>` → empty). Ask the producer directly (step 6 command) and feed the answer through the S4 seam. Expected: a complete nine-surface actual identity and `MATCH` against `D_expected`, with no Layer O participation.
 2. **I2 — Layer O's death ends nothing.** Kill any Layer O process (`pkill -u <DNO_USER>`). Re-check: Layer R units still active (`systemctl status rp-cell-manager rp-identity-producer`), and the producer still answers a complete current identity.
-3. **I3 — Layer O's stop is a claim, not a kill.** Call `Deployment.stop()` on the `Deployment` object held by the **same Layer O process that performed step 13** — finding F-1 records that there is no attach/resume contract, so a fresh Layer O process cannot obtain a `Deployment` from persisted state. Expected: the deployment record reaches `mark_stopped` (Layer O no longer claims a Running Platform, `deployment.py:307-321`) **and** the member runtime's outcome follows Layer R's own policy, recorded by the cell manager. Record what Layer R did and why — that decision belongs to Layer R, not to Layer O.
+3. **I3 — Layer O's stop is a claim, not a kill.** Call `Deployment.stop()` on the `Deployment` object held by the Layer O process that performed step 13 — or, since the approved F-1 slice, on a handle re-bound by `deployment_operations.attach` in a **fresh** Layer O process (§15, F-1). A cold handle that holds no runtime element now **refuses** instead of writing `stopped` (`deployment.py:335`). Expected: the deployment record reaches `mark_stopped` (Layer O no longer claims a Running Platform, `deployment.py:312-333`) **and** the member runtime's outcome follows Layer R's own policy, recorded by the cell manager. Record what Layer R did and why — that decision belongs to Layer R, not to Layer O.
 
 If any of the three fails, stop: the bootstrap has silently rebuilt revision 1 (§14, item 12).
 
@@ -430,7 +433,7 @@ No evidence file may contain a secret value, an expected-state document, or cont
 | **I1a** | **The runtime layer and its identity surface exist without D&O** | Step 5: Layer R started by its supervisor; no Layer O process has ever run; ask the producer directly | A well-formed nine-surface document with `membership_established: true` and an empty member set; the S4 seam refuses it as incomplete (`platform_identity.py:329-330`). Layer R answered; nothing was fabricated |
 | **I1b** | **The Running Platform's actual identity is established without D&O** | After step 13, with **no Layer O process running**: ask the producer directly and evaluate the answer through the S4 seam | A complete, current, self-consistent nine-surface actual identity; `D_actual == D_expected` ⇒ `MATCH`, with no Layer O participation |
 | **I2** | **Layer O's death ends nothing** | After step 13, kill the Layer O process | Layer R units still active; the producer still answers a complete current identity; `pgrep -u <DNO_USER>` empty |
-| **I3** | **Layer O's stop is a claim, not a kill** | Call `Deployment.stop()` | The record becomes `mark_stopped` (Layer O no longer claims a Running Platform, `deployment.py:307-321`), while the member runtime's fate follows **Layer R's** policy — recorded as such by the cell manager |
+| **I3** | **Layer O's stop is a claim, not a kill** | Call `Deployment.stop()` | The record becomes `mark_stopped` (Layer O no longer claims a Running Platform, `deployment.py:312-333`), while the member runtime's fate follows **Layer R's** policy — recorded as such by the cell manager |
 
 I1a, I1b, I2 and I3 are the acceptance evidence for "Running Platform ≠ D&O orchestration". If any fails, the bootstrap has silently rebuilt revision 1 and must stop.
 
@@ -438,7 +441,7 @@ I1a, I1b, I2 and I3 are the acceptance evidence for "Running Platform ≠ D&O or
 
 | # | Case | Injected condition | Required result | Enforced at |
 |---|---|---|---|---|
-| A1 | MATCH | Complete, current, correctly correlated actual identity | `MATCH` → `identity_verified` → `realized` | `deployment.py:878-895` |
+| A1 | MATCH | Complete, current, correctly correlated actual identity | `MATCH` → `identity_verified` → `realized` | `deployment.py:898-915` |
 | A2 | Drift → MISMATCH | One identity-bearing value changed | `MISMATCH`, never `UNAVAILABLE` | `platform_identity.py:268` |
 | A3 | Stale → refusal | `freshness_current=false` or an earlier handle | `UNAVAILABLE` | `validate_actual_evidence` |
 | A4 | Foreign correlation → refusal | Handle the adapter never issued | refusal **by the owner-side adapter** | mandatory: Layer O alone returns `MATCH` for a foreign token |
@@ -449,6 +452,7 @@ I1a, I1b, I2 and I3 are the acceptance evidence for "Running Platform ≠ D&O or
 | A9 | Timeout → refusal | Producer stalls past `<BOUND_SECONDS>`, then answers late | refusal; never acceptance | owner-side adapter |
 | A10 | Boundary non-forwarding | Tap every byte adapter→producer | No expected-derived value, no secret, no `<RUNTIME_ROOT>` path crosses | owner-side adapter |
 | **A11** | **Runtime-ownership non-forwarding** | Inspect the RP-owned adapter | `stop` is detach-only; no Layer O code path terminates a Layer R runtime; a failed `deploy()` leaves Layer R intact (step 12) | §7 + step 12 |
+| **A12** | **Re-binding touches nothing** | A fresh Layer O process calls `attach` for the realized deployment | Only `adapter.attach` is issued — no `materialize`/`start`/`stop`/`migrate`; the same Layer R element stays alive; one `platform_attached` action is recorded; a cold `stop()` without a handle refuses | §7, §15 F-1 |
 
 ---
 
@@ -459,7 +463,7 @@ Unchanged in substance from revision 1; the owner column now reflects the two-la
 | RF | Closed by | Status after this runbook |
 |---|---|---|
 | RF-1 | §0–§9 change no contract, boundary or intake; the owner ticks Level A in D7 | **READY AFTER BOOTSTRAP** |
-| RF-2 | §10 step 10 composition root (attaches only) + `<RP_OWNER_USER>` ownership of both adapters; the public API already threads `runtime=` and `identity_provider=` (`deployment.py:619-626`, `upgrade.py:235→292`, `rollback.py:246→303`, `reconciliation.py:179-182`) | **READY AFTER BOOTSTRAP** |
+| RF-2 | §10 step 10 composition root (attaches only) + `<RP_OWNER_USER>` ownership of both adapters; the public API already threads `runtime=` and `identity_provider=` (`deployment.py:639-646`, `upgrade.py:235→292`, `rollback.py:246→303`, `reconciliation.py:179-182`) | **READY AFTER BOOTSTRAP** |
 | RF-3 | §10 steps 2 and 11 — `{"op","handle"}` out, one nine-surface document back | **READY AFTER BOOTSTRAP** |
 | RF-4 | §8 — per-evaluation handle, no caching, `<BOUND_SECONDS>` | **READY AFTER BOOTSTRAP** (value is owner input) |
 | RF-5 | Steps 0–5 (D1 environment, scope = the cell's own member registry, production status) | **OWNER DECISION + OWNER ACTION** |
@@ -479,7 +483,7 @@ Unchanged in substance from revision 1; the owner column now reflects the two-la
 Implementation of Issue #128 stays blocked while any of these holds:
 
 1. Steps 0–5 are incomplete — Layer R does not exist standalone, or I1a has not been evidenced.
-2. **The runtime seam is not injected** — i.e. the default `LocalProcessRuntime` (`deployment.py:749`) or the default S1 identity provider (`deployment.py:741-747`) would be used. Either makes Layer O the runtime owner and reintroduces revision 1's defect.
+2. **The runtime seam is not injected** — i.e. the default `LocalProcessRuntime` (`deployment.py:769`) or the default S1 identity provider (`deployment.py:761-767`) would be used. Either makes Layer O the runtime owner and reintroduces revision 1's defect.
 3. The RP-owned adapter's `stop` is not detach-only, or any Layer O path can terminate a Layer R runtime, its supervisor or its producer.
 4. The signed D8 authorization is not on Issue #128 (RF-10).
 5. Membership is broadened beyond `{tenant_authority}` before `identity` and `idempotency` gain deployment modules.
@@ -501,7 +505,7 @@ Implementation of Issue #128 stays blocked while any of these holds:
 
 | # | Finding | Evidence | What it needs |
 |---|---|---|---|
-| **F-1** | **No re-attach contract.** `Deployment(` is constructed in exactly one place — the return of `deploy()` (`deployment.py:906`) — and there is no `attach` / `reattach` / `resume` / `adopt` API anywhere in `src/deployment_operations/`. `state.py:1262 load_record` returns a `DeploymentRecord`, not a `Deployment`, and `ReconciliationRequest.deployment` requires a `Deployment` (`reconciliation.py:136`). So a **fresh** Layer O process cannot resume orchestration of an already-standing Layer R from persisted state | grep for `Deployment(` and for `def attach|reattach|resume|adopt` | Either a new contract function (e.g. `attach(deployment_id, *, runtime, identity_provider) -> Deployment`) or an owner ruling on who re-attaches. **A contract change ⇒ its own work item; if it alters the deployment model, a Level C ADR.** Not implemented here |
+| **F-1 — CLOSED (implemented, Level B, no Level C ADR).** Re-binding is now an explicit operation: `deployment_operations.attach(request, *, runtime, identity_provider)` (`deployment.py:1391`) fresh-reads the authoritative record, re-verifies the exact instance, binds only elements Layer R already supervises through `RuntimeAdapter.attach` (`runtime.py:238`, `LocalProcessRuntime` refuses at `:927`), re-verifies the actual identity through the unchanged S4 seam, records one `platform_attached` operational action, and creates/starts/stops/restarts/migrates nothing. Cold `Deployment.stop()` fails closed (`deployment.py:335`). Tests: `tests/test_deployment_operations_attach.py`. *Original finding, kept for history:* **No re-attach contract.** `Deployment(` is constructed in exactly one place — the return of `deploy()` (`deployment.py:926`) — and there is no `attach` / `reattach` / `resume` / `adopt` API anywhere in `src/deployment_operations/`. `state.py:1262 load_record` returns a `DeploymentRecord`, not a `Deployment`, and `ReconciliationRequest.deployment` requires a `Deployment` (`reconciliation.py:136`). So a **fresh** Layer O process cannot resume orchestration of an already-standing Layer R from persisted state | grep for `Deployment(` and for `def attach|reattach|resume|adopt` | Either a new contract function (e.g. `attach(deployment_id, *, runtime, identity_provider) -> Deployment`) or an owner ruling on who re-attaches. **A contract change ⇒ its own work item; if it alters the deployment model, a Level C ADR.** Not implemented here |
 | **F-2** | **One textual hook could be misread.** `docs/ARCHITECTURE.md:130` says the Running Platform "получается из Platform Instance стадией Deployment & Operations", and ADR-0016 §4/§18 give D&O the transition and "operational control". Read strictly these do **not** make D&O the owner of the runtime layer, so no ADR change is strictly required for this runbook | `ARCHITECTURE.md:130`; ADR-0016 line 79, §18 | A one-line Level A documentation clarification that *realization into a standing runtime layer ≠ ownership of that layer*. Recommended, not performed |
 | **F-3** | **Runbook placement.** This file lives under `docs/arena/`, which is not listed in `docs/DOCUMENTATION_BASELINE.md` §2 canonical sources | `DOCUMENTATION_BASELINE.md` §2 | Owner decides whether to register Arena runbooks in the baseline. Not modified here (scope) |
 | **F-4** | **Layer R's import posture.** If Layer R reuses the shipped `deployment_operations.runtime_worker` protocol, it imports a D&O package module. That is a protocol implementation, not ownership, but the owner may prefer zero such dependency | `runtime_worker.py`; §5 | Owner's packaging decision |
@@ -511,8 +515,10 @@ Implementation of Issue #128 stays blocked while any of these holds:
 
 ## 16. Verification status of this revision
 
-**Verified in the repository [V]:** every anchor cited above — `deploy()`'s injectable `runtime` and `identity_provider` (`deployment.py:619-626`), the six adapter call sites (`:901, :930, :1004, :1019, :1084, :1202`), the default adapter (`:749`) and default identity provider (`:741-747`), `Deployment.stop()` semantics (`:307-340`, with the adapter call at `:326`), the single `Deployment(` construction (`:906`), the absence of any attach/resume API, `RuntimeAdapter` (`runtime.py:222-247`), `RuntimeHandle.process` dereferenced only at `runtime.py:919, :963`, `restart(..., runtime=…, identity_provider=…)` (`restart.py:361-367, :379`), `reconcile(..., identity_provider=…)` and "takes no runtime action of any kind" (`reconciliation.py:179-200`), `ReconciliationRequest.deployment: Deployment` (`:136`), `state.py:1262 load_record`, the environment loader key set and overlay rules (`environment.py:188-267, :405`), `ASSEMBLABLE_MANIFEST_STATES` (`platform_instance/validation.py:73`), the CLI's provider-less `deploy(request)` call (`deployment_operations/__main__.py:129`), its `--keep-running` default-to-stop semantics (`:82-86`, `:145-146`), `_secrets` (`:51-63`), ADR-0016 §18 and line 79, `ARCHITECTURE.md:130`, `.github/workflows/publish-component-artifacts.yml:6-8`.
+**Verified in the repository [V]:** every anchor cited above — `deploy()`'s injectable `runtime` and `identity_provider` (`deployment.py:639-646`), the six adapter call sites inside `deploy()` (`:921, :950, :1024, :1039, :1104, :1222`), the default adapter (`:769`) and default identity provider (`:761-767`), `Deployment.stop()` semantics (`:311-360`, with the adapter call at `:346`), the single `Deployment(` construction inside `deploy()` (`:926`), `RuntimeAdapter` (`runtime.py:221-263`), `RuntimeHandle.process` dereferenced only at `runtime.py:954, :998`, `restart(..., runtime=…, identity_provider=…)` (`restart.py:361-367, :379`), `reconcile(..., identity_provider=…)` and "takes no runtime action of any kind" (`reconciliation.py:179-200`), `ReconciliationRequest.deployment: Deployment` (`:136`), `state.py:1262 load_record`, the environment loader key set and overlay rules (`environment.py:188-267, :405`), `ASSEMBLABLE_MANIFEST_STATES` (`platform_instance/validation.py:73`), the CLI's provider-less `deploy(request)` call (`deployment_operations/__main__.py:129`), its `--keep-running` default-to-stop semantics (`:82-86`, `:145-146`), `_secrets` (`:51-63`), ADR-0016 §18 and line 79, `ARCHITECTURE.md:130`, `.github/workflows/publish-component-artifacts.yml:6-8`.
 
 **Executed previously on this chain (revision 1, re-confirmed as the mechanism this revision relies on):** the full factory chain `composer validate → compose → lifecycle act → platform_manifest validate → platform_instance assemble/validate/digest` producing `D_expected = sha256:90531f5d8623de140ec2b9361a8dd414a87643837fd160402d123195b6dd6634`; `load_environment` on the exact §9 document; `deploy(..., identity_provider=OwnerSuppliedPlatformIdentityProvider(...))` with `provenance="ATTESTED"` reaching `lifecycle=realized, ready=True, identity_verified=True, deployed=True`; the negative control failing closed; the Composer closure table of §5; the `<RUNTIME_ROOT>` layout and `runtime.json` key list of §3; the S4 seam probe (MATCH / drift MISMATCH / stale / incomplete / `UNKNOWN` / duplicate / contamination refused; **foreign token → `MATCH`**).
+
+**Implemented since revision 2 (approved Level B F-1 slice):** `deployment_operations.attach` and `RuntimeAdapter.attach`, with the cold-stop guard; covered by `tests/test_deployment_operations_attach.py` (15 tests) and by the full suite. No Level C ADR was created, and the S4 ownership model is unchanged.
 
 **Not executed, and deliberately so:** no bootstrap step. No host, user, directory, permission, unit, producer, adapter, deployment or credential was created; no Layer R exists. I1a–I3 and A9–A11 can only be executed by the owner after steps 1–5.

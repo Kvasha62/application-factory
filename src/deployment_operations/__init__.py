@@ -43,6 +43,10 @@ the Factory into a deployment engine (ADR-0016 §6, §21, §22; LAW-03, LAW-04).
 Public surface:
 
 * :func:`deploy` — realize one accepted Platform Instance in one environment;
+* :func:`attach` — re-bind an already-realized deployment operation to the
+  Running Platform that outlived its own process: it binds the runtime elements
+  its environment already supervises, re-verifies the actual platform identity,
+  and creates, starts, stops, restarts and migrates nothing;
 * :func:`rollback` — explicitly re-realize an exact previously verified instance;
 * :func:`upgrade` — realize a new accepted instance before superseding current;
 * :func:`reconcile` — observe the Running Platform and compare it with the exact
@@ -68,6 +72,7 @@ from deployment_operations.deployment import (
     Deployment,
     DeploymentRequest,
     InstanceReference,
+    attach,
     default_source_paths,
     deploy,
 )
@@ -286,6 +291,7 @@ __all__ = [
     "StartupFailed",
     "StopStartPolicy",
     "UpgradeRequest",
+    "attach",
     "build_elements",
     "canonical_digest",
     "compute_actual_digest",

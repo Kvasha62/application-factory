@@ -259,12 +259,19 @@ def test_success_supersedes_old_only_after_new_deployed(tmp_path: Path, monkeypa
     )
 
 
+#: A runtime element this synthetic operation holds. An upgrade stops the
+#: runtime of an operation that is **bound** to one: ``Deployment.stop()``
+#: refuses an operation that reaches no runtime, so a handle-less deployment
+#: claiming ``running`` would model a state the boundary does not allow.
+BOUND_HANDLE = "bound-runtime-handle"
+
+
 def _real_deployment(
     tmp_path: Path,
     record: DeploymentRecord,
     *,
     runtime=None,
-    handles: tuple[str, ...] = (),
+    handles: tuple[str, ...] = (BOUND_HANDLE,),
 ) -> Deployment:
     state_path = DeploymentStateStore.path_for(tmp_path, record.deployment_id)
     store = DeploymentStateStore(state_path)
