@@ -9,7 +9,8 @@ speaking in the Composer's own document.
 
 The proof chain is re-derivable and re-checked here, fail closed:
 
-    effective Approval → exact Configuration digest → Composition Request →
+    exact Requirements + Configuration + Project → re-derived Proposal →
+    exact effective Approval in a verified ledger → Composition Request →
     existing Composer → draft Manifest → existing Manifest/Artifact gates
 
 Nothing in this module publishes, approves a manifest, writes a manifest or
@@ -76,21 +77,32 @@ def new_request_record(
     *,
     project_ref: str,
     configuration: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+    project: Mapping[str, Any],
     proposal: Mapping[str, Any],
     approval: Mapping[str, Any],
-    ledger: ApprovalLedger | None = None,
+    ledger: ApprovalLedger,
     predecessor: Mapping[str, Any] | None = None,
+    proposal_predecessor: Mapping[str, Any] | None = None,
     root: Path | None = None,
 ) -> dict[str, Any]:
     """Create the immutable record for an approved configuration (fail closed).
 
-    There is no parameter for a request payload: the payload can only come from
+    The complete Requirements/Project/Configuration/Proposal/Approval chain and
+    a non-null verified ledger are mandatory. There is no parameter for a request
+    payload: the payload can only come from
     :func:`~factory_control_plane.configuration_v2.generate_request_payload` on
-    the exact approved configuration, so no caller can hand in a composition the
-    approval does not cover.
+    the exact configuration that survived strict Proposal re-derivation.
     """
     reasons = approval_ineffectiveness_reasons(
-        approval, configuration=configuration, proposal=proposal, ledger=ledger
+        approval,
+        configuration=configuration,
+        requirements=requirements,
+        project=project,
+        proposal=proposal,
+        proposal_predecessor=proposal_predecessor,
+        ledger=ledger,
+        root=root,
     )
     if reasons:
         joined = "; ".join(reasons)
@@ -99,6 +111,8 @@ def new_request_record(
             f"this configuration: {joined}"
         )
         raise CompositionRequestError(message)
+    if project.get("project_id") != project_ref:
+        raise CompositionRequestError("the supplied project does not match project_ref")
     if configuration.get("project_ref") != project_ref:
         message = "the configuration version does not belong to this project"
         raise CompositionRequestError(message)
@@ -133,17 +147,20 @@ def verify_request_record(
     record: Mapping[str, Any],
     *,
     configuration: Mapping[str, Any] | None = None,
+    requirements: Mapping[str, Any] | None = None,
+    project: Mapping[str, Any] | None = None,
     proposal: Mapping[str, Any] | None = None,
     approval: Mapping[str, Any] | None = None,
     ledger: ApprovalLedger | None = None,
+    proposal_predecessor: Mapping[str, Any] | None = None,
     root: Path | None = None,
 ) -> list[str]:
-    """Re-derive the whole chain behind a record and report every disagreement.
+    """Re-derive the complete authorization chain and report disagreements.
 
-    This is the detection half of the boundary: given the record and the
-    documents it references, the payload must be the exact projection of the
-    approved configuration, the approval must still be effective, and every
-    digest must verify — offline, deterministically, with no writes.
+    Missing chain inputs are explicit failures: the low-level structural
+    validator remains available separately, but an empty result from this
+    verifier always means every typed input and the exact verified ledger were
+    supplied and checked.
     """
     if not isinstance(record, Mapping):
         return ["composition request record must be a JSON object"]
@@ -151,32 +168,69 @@ def verify_request_record(
     errors: list[str] = list(composition_request_record_errors(document))
     if not verify_digest(document):
         errors.append("composition request record digest does not match its payload")
-    if configuration is None:
-        return sorted(set(errors))
-    expected_configuration = {
-        "configuration_id": configuration.get("configuration_id"),
-        "digest": configuration.get("digest"),
+
+    required_inputs = {
+        "configuration": configuration,
+        "requirements": requirements,
+        "project": project,
+        "proposal": proposal,
+        "approval": approval,
+        "ledger": ledger,
     }
-    if document.get("configuration_ref") != expected_configuration:
-        errors.append(
-            "configuration_ref does not reference the supplied configuration version"
-        )
-    try:
-        expected_payload = generate_request_payload(configuration, root=root)
-        if document.get("request") != expected_payload:
+    for name, value in required_inputs.items():
+        if value is None:
             errors.append(
-                "the nested request is not the exact projection of the referenced "
-                "configuration version"
+                f"{CODE_APPROVAL_NOT_EFFECTIVE}: complete verification requires {name}"
             )
-    except ConfigurationProjectionError as error:
-        errors.append(f"the referenced configuration cannot be projected: {error}")
-    if approval is not None:
-        if document.get("approval_ref") != approval_reference(approval):
+        elif name == "ledger" and not isinstance(value, ApprovalLedger):
             errors.append(
-                "approval_ref does not reference the supplied approval record"
+                f"{CODE_APPROVAL_NOT_EFFECTIVE}: ledger must be an ApprovalLedger"
             )
+        elif name != "ledger" and not isinstance(value, Mapping):
+            errors.append(
+                f"{CODE_APPROVAL_NOT_EFFECTIVE}: {name} must be a JSON object"
+            )
+    if isinstance(configuration, Mapping):
+        expected_configuration = {
+            "configuration_id": configuration.get("configuration_id"),
+            "digest": configuration.get("digest"),
+        }
+        if document.get("configuration_ref") != expected_configuration:
+            errors.append(
+                "configuration_ref does not reference the supplied configuration version"
+            )
+        try:
+            expected_payload = generate_request_payload(configuration, root=root)
+            if document.get("request") != expected_payload:
+                errors.append(
+                    "the nested request is not the exact projection of the referenced "
+                    "configuration version"
+                )
+        except ConfigurationProjectionError as error:
+            errors.append(f"the referenced configuration cannot be projected: {error}")
+
+    if isinstance(project, Mapping) and document.get("project_ref") != project.get(
+        "project_id"
+    ):
+        errors.append("project_ref does not match the supplied Project document")
+
+    if isinstance(approval, Mapping):
+        expected_approval_ref = {
+            "approval_id": approval.get("approval_id"),
+            "digest": approval.get("digest"),
+        }
+        if document.get("approval_ref") != expected_approval_ref:
+            errors.append("approval_ref does not reference the exact supplied Approval")
+
         reasons = approval_ineffectiveness_reasons(
-            approval, configuration=configuration, proposal=proposal, ledger=ledger
+            approval,
+            configuration=configuration,
+            requirements=requirements,
+            project=project,
+            proposal=proposal,
+            proposal_predecessor=proposal_predecessor,
+            ledger=ledger,
+            root=root,
         )
         if reasons:
             errors.append(

@@ -126,3 +126,28 @@ Boundaries this slice keeps:
 The RBAC seam, the deferred proposal features (alternatives, conflicts,
 selection) and the repository Quality Gate's `testpaths` are reported as
 out-of-scope for this slice in the implementation report on PR #138.
+
+## S2 trust-boundary hardening (authorized separately)
+
+The S2 hardening addendum makes the verification APIs fail closed on incomplete
+proof inputs. Before Approval creation/effectiveness or Composition Request
+creation/verification, callers supply the exact Requirements, Project,
+Configuration and Proposal documents. The Proposal is schema/digest checked,
+its typed `(id, digest)` references and project are cross-checked, and its full
+canonical contents are re-derived from those inputs. A Proposal predecessor is
+also supplied separately when one is declared. Approval effectiveness further
+requires the exact Approval record to be a member of a verified append-only
+ledger; a revocation must target one exact earlier, not-yet-revoked record.
+
+The hardening preserves the existing schemas, finding codes, error/warning/info
+acknowledgement rules and shipped example bytes/digests. It adds no
+Requirements v1 or Configuration v2 semantics, authentication, persistence,
+network access or Composer behavior. The guarantee is data binding and
+re-derivation, not proof of a human actor's identity: the in-memory ledger must
+come from the trusted in-process caller.
+
+**Quality Gate addendum:** the earlier `testpaths` note above records the Slice 1
+boundary decision at that time. The separately authorized S2 hardening adds an
+explicit `python -m pytest factory/control_plane/tests` step to both the local
+PowerShell gate and CI, and includes the Control Plane package in compile
+coverage. `pyproject.toml:testpaths` remains unchanged.

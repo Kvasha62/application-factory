@@ -35,7 +35,14 @@ from factory_control_plane.validation import (
     ControlPlaneError,
     approval_record_errors,
 )
-from slice2_fixtures import APPROVER, DECIDED_AT, REASON, build_proposal, build_v2
+from slice2_fixtures import (
+    APPROVER,
+    DECIDED_AT,
+    REASON,
+    build_proposal,
+    build_v2,
+    load,
+)
 
 
 def _grant(configuration=None, proposal=None, **overrides):
@@ -60,12 +67,21 @@ def _grant(configuration=None, proposal=None, **overrides):
         ],
     }
     arguments.update(overrides)
+    arguments.setdefault("requirements", load("requirements"))
+    arguments.setdefault("project", load("project"))
     return new_approval_record(**arguments), configuration, proposal
 
 
-def _resolver(configuration, proposal):
+def _resolver(configuration, proposal, requirements=None, project=None):
+    documents = {
+        "configuration": configuration,
+        "requirements": load("requirements") if requirements is None else requirements,
+        "project": load("project") if project is None else project,
+        "proposal": proposal,
+    }
+
     def resolve(kind, reference):
-        return {"configuration": configuration, "proposal": proposal}.get(kind)
+        return documents.get(kind)
 
     return resolve
 
@@ -94,6 +110,8 @@ def test_record_contract_and_digest():
             approver=dict(APPROVER),
             decided_at=DECIDED_AT,
             reason=REASON,
+            requirements=load("requirements"),
+            project=load("project"),
         )
 
 
@@ -234,14 +252,24 @@ def test_effectiveness_is_derived_and_never_stored():
     snapshot = json.dumps(ledger.documents(), sort_keys=True)
 
     assert approval_effective(
-        record, configuration=configuration, proposal=proposal, ledger=ledger
+        record,
+        configuration=configuration,
+        proposal=proposal,
+        ledger=ledger,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert ledger.effective_records(resolve) == ledger.documents()
 
     changed = build_v2(predecessor=configuration, manifest_version="1.0.1")
     assert changed["configuration_id"] != configuration["configuration_id"]
     reasons = approval_ineffectiveness_reasons(
-        record, configuration=changed, proposal=proposal, ledger=ledger
+        record,
+        configuration=changed,
+        proposal=proposal,
+        ledger=ledger,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert any(CODE_APPROVAL_NOT_EFFECTIVE in item for item in reasons)
     assert any("digest" in item for item in reasons)
@@ -257,12 +285,22 @@ def test_effectiveness_is_derived_and_never_stored():
     )
     extended = ledger.append(revoked)
     reasons = approval_ineffectiveness_reasons(
-        record, configuration=configuration, proposal=proposal, ledger=extended
+        record,
+        configuration=configuration,
+        proposal=proposal,
+        ledger=extended,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert any("revoked by" in item for item in reasons)
     assert (
         approval_effective(
-            revoked, configuration=configuration, proposal=proposal, ledger=extended
+            revoked,
+            configuration=configuration,
+            proposal=proposal,
+            ledger=extended,
+            requirements=load("requirements"),
+            project=load("project"),
         )
         is False
     )
@@ -279,7 +317,11 @@ def test_proposal_errors_make_an_approval_ineffective():
     blocked = build_proposal(configuration=configuration, requirements=None)
     assert blocked["state"] == "blocked"
     reasons = approval_ineffectiveness_reasons(
-        record, configuration=configuration, proposal=blocked
+        record,
+        configuration=configuration,
+        proposal=blocked,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert any("not the analysed proposal" in item for item in reasons)
 
@@ -293,7 +335,11 @@ def test_acknowledgement_mismatch_is_a_derived_reason():
         project={"project_id": "demo_shop", "status": "archived"},
     )
     reasons = approval_ineffectiveness_reasons(
-        record, configuration=configuration, proposal=widened
+        record,
+        configuration=configuration,
+        proposal=widened,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert any("not the analysed proposal" in item for item in reasons)
 
@@ -303,7 +349,11 @@ def test_acknowledgement_mismatch_is_a_derived_reason():
 
     re_acknowledged["digest"] = digest_of(re_acknowledged)
     reasons = approval_ineffectiveness_reasons(
-        re_acknowledged, configuration=configuration, proposal=proposal
+        re_acknowledged,
+        configuration=configuration,
+        proposal=proposal,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert any(CODE_ACKNOWLEDGEMENT_MISMATCH in item for item in reasons)
 
@@ -315,7 +365,11 @@ def test_registry_drift_invalidates_without_writing_anything(monkeypatch):
         approvals, "component_reference_errors", lambda components: ["drift: retired"]
     )
     reasons = approval_ineffectiveness_reasons(
-        record, configuration=configuration, proposal=proposal
+        record,
+        configuration=configuration,
+        proposal=proposal,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     assert any("no longer admits the approved references" in item for item in reasons)
     assert json.dumps(record, sort_keys=True) == snapshot
@@ -405,6 +459,8 @@ def test_audit_view_is_deterministic_and_ordered():
         decided_at=DECIDED_AT,
         reason="not acceptable yet",
         predecessor=granted,
+        requirements=load("requirements"),
+        project=load("project"),
     )
     ledger = ApprovalLedger.load("demo_shop", [granted, rejected])
     resolve = _resolver(configuration, proposal)
