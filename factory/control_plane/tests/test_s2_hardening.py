@@ -226,9 +226,9 @@ def test_requirements_and_configuration_substitution_fail_even_when_redigested()
         if current_fingerprint != zero_fingerprint
         else "sha256:" + "1" * 64
     )
-    tampered_input_fingerprint["inputs"]["registry_fingerprint"] = (
-        replacement_fingerprint
-    )
+    tampered_input_fingerprint["inputs"][
+        "registry_fingerprint"
+    ] = replacement_fingerprint
     tampered_input_fingerprint = _redigest(tampered_input_fingerprint)
     problems = proposals.verify_proposal_version(
         tampered_input_fingerprint,
