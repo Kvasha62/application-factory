@@ -1,12 +1,12 @@
 # F-5 Work Item — Runtime Dependency Enforcement
 
-- **Status:** Proposed — revision 2 awaits a new owner approval gate
+- **Status:** Approved — revision 2, approved by the owner on 2026-10-05 (permanent PR #138 comment `5992205274`) at the exact SHA `8bc54ccf0cfac1d0643814f90a578ac93d4eee8b`
 - **Revision:** 2 — corrected for owner decisions D-A / P1 / P2 (PR #138 comment `5991426192`). Governance/documentation correction only; no implementation.
-- **Approval history:** Revision 1 was approved by the owner on 2026-10-05 (commit `2d01c00`). That approval covered the pre-correction text and **does not carry over to revision 2**, whose scope differs.
+- **Approval history:** Revision 1 was approved by the owner on 2026-10-05 (commit `2d01c00`); that approval covered the pre-correction text and did **not** carry over to revision 2, whose scope differs. Revision 2 was then approved by the owner on 2026-10-05 (PR #138 comment `5992205274`), limited to the exact text at SHA `8bc54ccf0cfac1d0643814f90a578ac93d4eee8b`. Sections §1–§5 below are byte-identical to that SHA; only this governance record was edited afterwards.
 - **Governance basis:** ADR-0017 §44
 - **Decision basis:** ADR-0021 (ratified 2026-10-05)
 - **Owner-selected decisions:** D1=A, D2=B; D-A / P1 / P2 recorded in PR #138 comment `5991426192`
-- **Implementation authorization:** None for revision 2 until the owner explicitly approves this revision
+- **Implementation authorization:** Granted for revision 2 by PR #138 comment `5992205274`, only within the boundary of §2/§3 and the acceptance criteria of §4. It does **not** extend to the identity `0.4.0` cascade — see §6.1. Merge requires a separate owner authorization.
 
 ## 1. Objective
 
@@ -87,11 +87,26 @@ The registry / catalog / documentation / Platform Instance artifacts arising fro
 
 ## 6. Governance gate
 
-Revision 1 of this work item was **Approved** by the owner on 2026-10-05 (commit `2d01c00`). Revision 2 is **Proposed**: it is the separate implementation authorization required by ADR-0017 §44, corrected for owner decisions D-A / P1 / P2.
+Revision 1 of this work item was **Approved** by the owner on 2026-10-05 (commit `2d01c00`); that approval covered the pre-correction text and did not carry over to revision 2.
 
-**The revision-1 approval does not carry over to revision 2. No implementation, merge, or release action is authorized until the owner explicitly approves revision 2.**
+**Revision 2 is Approved.** The owner approved it on 2026-10-05 in permanent PR #138 comment `5992205274`, limited to the exact revision at SHA `8bc54ccf0cfac1d0643814f90a578ac93d4eee8b`. Implementation is authorized **only** within the boundary of §2/§3 and the acceptance criteria of §4, and remains subject to the ADR-0017 §31 chain: implementation/verification → Quality Gate → independent review → owner approval → merge. This approval is not a merge authorization.
 
-After approval, implementation must remain bounded by this document and ADR-0021. Any material scope expansion requires a new owner decision or separately approved change.
+Implementation must remain bounded by this document and ADR-0021. Any material scope expansion requires a new owner decision or separately approved change.
+
+### 6.1 The identity `0.4.0` cascade is outside this work item's boundary
+
+The `identity 0.3.0 → 0.4.0` cascade carried in PR #150 is **not** part of revision 2's approved boundary. Sections §1–§5 of this document authorize no component-version change, no change to another component's declared dependency range, no digest-lock change and no Control-Plane artifact change; §1 and §4.11 require component identity/version/digest **semantics** to be preserved, which is a rule about the mechanism, not an authorization to re-pin versions.
+
+That cascade is authorized by its own explicit owner decisions in permanent PR #138, recorded here for traceability — not by this work item:
+
+| Owner decision | What it authorizes |
+|---|---|
+| `5993694601` | `SELECT: Bump identity 0.3.0 → 0.4.0 (full cascade)` — `COMPONENT_VERSION`, the canonical registry, the derived catalog, the identity contract, the golden bundle, the composer example request, the affected control-plane configs/fixtures, and the component digest lock |
+| `5998321766` (G1) | byte-changing exactly four previously frozen Slice-1 artifacts |
+| `5998764930` (G2 = Option A) | the in-place amendment of the immutable version recorded as a dated one-off owner exception, additive-only, in `factory/control_plane/README.md` |
+| `5999402241` (G3) | the Slice-2 contract digest and fingerprint re-pins, `SLICE1_V1_DIGEST`, the five dependent ranges, the required derived artifacts and the required test expectations/pins |
+
+No part of that cascade is authorized by revision 2 alone, and this work item's boundary is not broadened by recording it. D2=B remains out of scope (§3) and unapproved.
 
 ## 7. References
 
