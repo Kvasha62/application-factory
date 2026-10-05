@@ -831,7 +831,7 @@ class TestProvisioning:
         window = manifest_for(
             components=[
                 {"component_id": COMPONENT_ID, "component_version": COMPONENT_VERSION},
-                {"component_id": "identity", "component_version": "0.3.0"},
+                {"component_id": "identity", "component_version": "0.3.1"},
             ],
             root=root,
             manifest_id="deployment-platform-two-components",
@@ -1683,12 +1683,24 @@ class TestOwnershipBoundary:
             "__future__",
             "argparse",
             "ast",
+            # Standard library only: the provider-side listener serves the
+            # component's ASGI contract on its declared endpoint (ADR-0021 §3).
+            # No third-party transport is introduced by this slice.
+            "asyncio",
             "collections",
+            # Published Factory validation surface: the canonical version-range
+            # semantics. Like `platform_manifest` and `platform_instance`, this
+            # is a Factory capability and not one of the deployed components,
+            # and reusing it is what keeps range meaning single-sourced
+            # (ADR-0021 §3).
+            "component_registry",
             "dataclasses",
             "datetime",
             "deployment_operations",
             "fastapi",
             "hashlib",
+            # Provider-side listener: `http.server` only (ADR-0021 §3).
+            "http",
             "importlib",
             "json",
             "os",
@@ -1704,6 +1716,8 @@ class TestOwnershipBoundary:
             "sys",
             "time",
             "typing",
+            # Percent-decoding of a request target into an ASGI path.
+            "urllib",
         }
     )
 

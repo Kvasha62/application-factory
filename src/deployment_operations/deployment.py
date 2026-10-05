@@ -810,12 +810,16 @@ def deploy(
         # The platform's runtime elements are started here and only here: the
         # earlier stages materialize and migrate, they do not run the platform.
         recorder.stage("starting", STAGE_IN_PROGRESS)
+        order = start_order(bound_elements)
         _start_elements(recorder, adapter, bound_elements, handles)
         recorder.running(True)
         recorder.stage(
             "starting",
             STAGE_COMPLETED,
-            detail={"started": sorted(handles)},
+            # `started_in` is the dependency-derived order actually used, so the
+            # evidence shows that a provider was started before the consumers
+            # that reach its endpoint (ADR-0021 §3).
+            detail={"started": sorted(handles), "started_in": list(order)},
         )
 
         # -- health_check --------------------------------------------------
@@ -1067,13 +1071,68 @@ def _start_element(
     return handle
 
 
+def start_order(elements: Mapping[str, RuntimeElement]) -> tuple[str, ...]:
+    """The order in which the platform's runtime elements are started.
+
+    A runtime dependency is a network reach from one component to another
+    component's published endpoint, so a provider must be serving its declared
+    endpoint before a consumer that reaches it is started (ADR-0021 §3; owner
+    decision P2). The order is derived from the endpoints the environment
+    binding declares, because nothing else in the deployment knows which
+    component serves which endpoint — and starting in alphabetical order is not
+    a dependency order: ``identity`` sorts before ``tenant_authority``.
+
+    The result is a topological order with a deterministic tie-break on the
+    component id, so the same instance in the same environment always starts in
+    the same order. A dependency on a component this deployment does not
+    contain is skipped here, not repaired: the environment binding is validated
+    before anything is provisioned, so it can only be absent for an element set
+    that was never validated.
+
+    A cycle is a fail-closed rejection. No start order satisfies it, and
+    starting anyway and hoping a retry connects later would make the retry a
+    substitute for the dependency the binding declared — which ADR-0021 §3
+    forbids.
+    """
+    unresolved_deps: dict[str, set[str]] = {
+        component_id: set() for component_id in elements
+    }
+    for component_id, element in elements.items():
+        for declared in element.binding.dependency_endpoints:
+            if declared.component_id in elements:
+                unresolved_deps[component_id].add(declared.component_id)
+
+    ready = sorted(
+        component_id for component_id, deps in unresolved_deps.items() if not deps
+    )
+    order: list[str] = []
+    while ready:
+        component_id = ready.pop(0)
+        order.append(component_id)
+        for other, deps in unresolved_deps.items():
+            if component_id in deps:
+                deps.discard(component_id)
+                if not deps:
+                    ready.append(other)
+        ready.sort()
+    if len(order) != len(elements):
+        cyclic = sorted(set(elements) - set(order))
+        message = (
+            "the environment binding declares a runtime dependency cycle among "
+            f"{cyclic}; no start order satisfies it, and a retry is not a "
+            "substitute for the declared dependency"
+        )
+        raise StartupFailed([message])
+    return tuple(order)
+
+
 def _start_elements(
     recorder: _Recorder,
     adapter: RuntimeAdapter,
     elements: Mapping[str, RuntimeElement],
     handles: dict[str, RuntimeHandle],
 ) -> None:
-    for component_id in sorted(elements):
+    for component_id in start_order(elements):
         _start_element(recorder, adapter, elements[component_id], handles)
 
 

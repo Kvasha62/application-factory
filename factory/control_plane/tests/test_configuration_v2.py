@@ -37,7 +37,7 @@ from composer import (
 #: never allowed to change (a v1 document is immutable and its digest is its
 #: identity).
 SLICE1_V1_DIGEST = (
-    "sha256:aea14d93a45b15728dff91ceb4fd32bc810d73196feffda9a7624b4c3983a07a"
+    "sha256:a90582a84ee6ae0dae59c750a317e27f2931e5b7762c21c7d26a254e8c7f41f1"
 )
 
 COMPOSER_PAYLOAD_KEYS = frozenset(
@@ -117,7 +117,7 @@ def test_v2_satisfies_the_existing_composition_request():
         "manifest_version": "1.0.0",
     }
     assert payload["components"] == [
-        {"component_id": "identity", "component_version": "0.3.0"},
+        {"component_id": "identity", "component_version": "0.3.1"},
         {"component_id": "tenant_authority", "component_version": "0.1.0"},
     ]
     assert validate_request_document(payload, root=REPOSITORY_ROOT) == []

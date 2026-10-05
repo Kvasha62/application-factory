@@ -11,7 +11,7 @@
   "components": [
     {
       "component_id": "identity",
-      "component_version": "0.3.0"
+      "component_version": "0.3.1"
     },
     {
       "component_id": "tenant_authority",
@@ -28,7 +28,7 @@
     }
   },
   "configuration_id": "demo_shop/configurations/1",
-  "digest": "sha256:aea14d93a45b15728dff91ceb4fd32bc810d73196feffda9a7624b4c3983a07a",
+  "digest": "sha256:a90582a84ee6ae0dae59c750a317e27f2931e5b7762c21c7d26a254e8c7f41f1",
   "extensions": {
     "checkout": {
       "enable_express_pay": true

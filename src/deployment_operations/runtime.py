@@ -79,6 +79,54 @@ OP_MIGRATE = "migrate"
 OP_PROBE = "probe"
 OP_STOP = "stop"
 
+#: The environment-binding variable carrying the endpoint a component serves.
+#: A runtime process learns where to listen from the authoritative environment
+#: binding; it never chooses an address, and nothing is allocated dynamically
+#: (ADR-0021 §3, owner decision P1).
+PUBLISHED_ENDPOINT_ENV = "FACTORY_PUBLISHED_ENDPOINT"
+#: Prefix of the variables carrying one declared dependency's endpoint and its
+#: declared version range. The component id is upper-cased and reduced to
+#: alphanumerics, so ``tenant_authority`` becomes
+#: ``FACTORY_DEPENDENCY_TENANT_AUTHORITY_ENDPOINT``.
+DEPENDENCY_ENDPOINT_PREFIX = "FACTORY_DEPENDENCY_"
+
+
+def dependency_endpoint_env(component_id: str) -> str:
+    """The environment-binding variable naming one dependency's endpoint."""
+    return f"{DEPENDENCY_ENDPOINT_PREFIX}{_env_key(component_id)}_ENDPOINT"
+
+
+def dependency_version_range_env(component_id: str) -> str:
+    """The environment-binding variable naming one dependency's version range."""
+    return f"{DEPENDENCY_ENDPOINT_PREFIX}{_env_key(component_id)}_VERSION_RANGE"
+
+
+def _env_key(component_id: str) -> str:
+    return "".join(char if char.isalnum() else "_" for char in component_id).upper()
+
+
+def endpoint_environment(binding: ComponentRuntimeBinding) -> dict[str, str]:
+    """The declared endpoints of one element, as process environment.
+
+    Endpoints are operational inputs of the environment binding, not component
+    configuration: they are injected here, at the process boundary, exactly like
+    a secret (ADR-0016 §12; ADR-0021 §3). Only declared values are exported — an
+    empty slot is absent, never an empty string a component could mistake for a
+    real address.
+    """
+    environment: dict[str, str] = {}
+    if binding.published_endpoint:
+        environment[PUBLISHED_ENDPOINT_ENV] = binding.published_endpoint
+    for declared in binding.dependency_endpoints:
+        if not declared.endpoint:
+            continue
+        environment[dependency_endpoint_env(declared.component_id)] = declared.endpoint
+        if declared.version_range:
+            environment[dependency_version_range_env(declared.component_id)] = (
+                declared.version_range
+            )
+    return environment
+
 
 @dataclass(frozen=True)
 class BoundModule:
@@ -863,6 +911,12 @@ class LocalProcessRuntime:
         system_root = os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT")
         if system_root:
             environment["SystemRoot"] = system_root
+        # The declared endpoints reach the process the same way a secret does —
+        # at the boundary, from the environment binding — because they are
+        # operational inputs and not component configuration. A component
+        # therefore cannot publish an endpoint of its own choosing, and it can
+        # only reach a provider this environment declared (ADR-0021 §3).
+        environment.update(endpoint_environment(element.binding))
         # Secrets are operational inputs injected at the boundary: they reach
         # the component process and are never written anywhere (ADR-0016 §12).
         environment.update({key: value for key, value in element.secrets.items()})

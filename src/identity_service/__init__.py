@@ -13,5 +13,5 @@ unchanged, and the context read grants nothing by itself.
 """
 
 COMPONENT_ID = "identity"
-COMPONENT_VERSION = "0.3.0"
+COMPONENT_VERSION = "0.3.1"
 COMPONENT_CLASS = "platform_service"

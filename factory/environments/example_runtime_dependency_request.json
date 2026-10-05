@@ -1,0 +1,14 @@
+{
+  "$schema": "factory/composer/schema/composition_request.schema.json",
+  "components": [
+    { "component_id": "identity", "component_version": "0.3.1" }
+  ],
+  "configuration": {
+    "identity": { "current_platform_id": "f5-runtime-dependency" },
+    "tenant_authority": { "platform_id": "f5-runtime-dependency" }
+  },
+  "manifest": {
+    "manifest_id": "f5-runtime-dependency",
+    "manifest_version": "1.0.0"
+  }
+}

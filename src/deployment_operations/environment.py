@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from component_registry.validation import parse_version_range, range_admits
 from deployment_operations.verification import InstanceVerification, canonical_digest
 from platform_manifest.validation import is_floating_selector
 
@@ -52,6 +53,35 @@ IDENTITY_CONFIGURATION_KEYS = ("platform_id", "current_platform_id")
 
 _DOTTED_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+#: A static ``host:port`` endpoint. Deliberately not a URL: the environment
+#: declares where a published contract is served, not how it is addressed by a
+#: discovery mechanism — service discovery is out of scope (ADR-0021 §3). This
+#: is the one declaration of what an endpoint is inside this capability, so the
+#: provider-side listener and this validation cannot drift apart.
+ENDPOINT_RE = re.compile(r"^(?P<host>[A-Za-z0-9._-]+):(?P<port>[0-9]{1,5})$")
+
+
+@dataclass(frozen=True)
+class DependencyEndpoint:
+    """The statically declared endpoint of one declared runtime dependency.
+
+    ADR-0021 §3 fixes the endpoint source as the environment binding, and owner
+    decision P1 fixes it as **statically and explicitly declared** there: this
+    capability never allocates an endpoint dynamically. ``version_range`` is the
+    declared dependency range the target must satisfy; when it is declared, a
+    target outside it is a fail-closed rejection, never a substitution.
+    """
+
+    component_id: str
+    endpoint: str
+    version_range: str = ""
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "component_id": self.component_id,
+            "endpoint": self.endpoint,
+            "version_range": self.version_range,
+        }
 
 
 @dataclass(frozen=True)
@@ -80,6 +110,15 @@ class ComponentRuntimeBinding:
     deployment_factory: str
     migrations: MigrationBinding | None = None
     import_paths: tuple[Path, ...] = ()
+    published_endpoint: str = ""
+    dependency_endpoints: tuple[DependencyEndpoint, ...] = ()
+
+    def dependency_endpoint(self, component_id: str) -> DependencyEndpoint | None:
+        """The statically declared endpoint of one declared dependency."""
+        for declared in self.dependency_endpoints:
+            if declared.component_id == component_id:
+                return declared
+        return None
 
     def document(self) -> dict[str, Any]:
         document: dict[str, Any] = {
@@ -88,6 +127,10 @@ class ComponentRuntimeBinding:
             "deployment_factory": self.deployment_factory,
             "import_paths": [str(path) for path in self.import_paths],
             "migrations": self.migrations.document() if self.migrations else None,
+            "published_endpoint": self.published_endpoint,
+            "dependency_endpoints": [
+                declared.document() for declared in self.dependency_endpoints
+            ],
         }
         return document
 
@@ -235,13 +278,63 @@ def load_environment(
                 resolved = _path(item, base_dir)
                 if resolved is not None:
                     import_paths.append(resolved)
+        published_endpoint = entry.get("published_endpoint", "")
+        if not isinstance(published_endpoint, str):
+            message = (
+                f"bindings[{entry.get('component_id', '')}].published_endpoint "
+                "must be a string"
+            )
+            raise DeploymentStateError(message)
+
+        component_id = str(entry.get("component_id", ""))
+        prefix = f"bindings[{component_id}].dependency_endpoints"
+        raw_dependencies = entry.get("dependency_endpoints", {})
+        if not isinstance(raw_dependencies, Mapping):
+            message = f"{prefix} must be an object keyed by component_id"
+            raise DeploymentStateError(message)
+        dependencies: list[DependencyEndpoint] = []
+        for dependency_id, declared in raw_dependencies.items():
+            if isinstance(declared, str):
+                dependencies.append(
+                    DependencyEndpoint(
+                        component_id=str(dependency_id), endpoint=declared
+                    )
+                )
+                continue
+            if not isinstance(declared, Mapping):
+                message = (
+                    f"{prefix}[{dependency_id}]: must be an endpoint string or an "
+                    "object with an 'endpoint'"
+                )
+                raise DeploymentStateError(message)
+            endpoint = declared.get("endpoint", "")
+            if not isinstance(endpoint, str) or not endpoint.strip():
+                message = (
+                    f"{prefix}[{dependency_id}].endpoint is required and must be "
+                    "a non-empty string"
+                )
+                raise DeploymentStateError(message)
+            version_range = declared.get("version_range", "")
+            if not isinstance(version_range, str):
+                message = f"{prefix}[{dependency_id}].version_range must be a string"
+                raise DeploymentStateError(message)
+            dependencies.append(
+                DependencyEndpoint(
+                    component_id=str(dependency_id),
+                    endpoint=endpoint,
+                    version_range=version_range,
+                )
+            )
+
         bindings.append(
             ComponentRuntimeBinding(
-                component_id=str(entry.get("component_id", "")),
+                component_id=component_id,
                 deployment_module=str(entry.get("deployment_module", "")),
                 deployment_factory=str(entry.get("deployment_factory", "")),
                 migrations=migrations,
                 import_paths=tuple(import_paths),
+                published_endpoint=published_endpoint,
+                dependency_endpoints=tuple(dependencies),
             )
         )
 
@@ -325,7 +418,175 @@ def _binding_errors(environment: DeploymentEnvironment) -> list[str]:
                     f"{prefix}.migrations.attribute: "
                     f"{binding.migrations.attribute!r} is not an attribute name"
                 )
+        errors.extend(_endpoint_errors(binding))
 
+    published: dict[str, str] = {}
+    for binding in environment.bindings:
+        if not binding.published_endpoint:
+            continue
+        owner = published.get(binding.published_endpoint)
+        if owner is not None:
+            errors.append(
+                f"bindings[{binding.component_id!r}].published_endpoint: "
+                f"{binding.published_endpoint!r} is already published by "
+                f"{owner!r}; one endpoint resolves to one deployed component"
+            )
+        else:
+            published[binding.published_endpoint] = binding.component_id
+
+    return errors
+
+
+def _endpoint_errors(binding: ComponentRuntimeBinding) -> list[str]:
+    """A published endpoint is a concrete host and port, or it is nothing.
+
+    ADR-0021 §2.1/§3 binds the endpoint statically in the environment
+    document. A floating selector, a URL scheme, a path suffix or a port
+    outside the usable range would make the declared endpoint something the
+    consumer cannot reach, and substituting a plausible value is exactly the
+    endpoint substitution that decision forbids.
+    """
+    errors: list[str] = []
+    prefix = f"bindings[{binding.component_id!r}]"
+
+    if binding.published_endpoint:
+        errors.extend(
+            _endpoint_format_errors(
+                f"{prefix}.published_endpoint", binding.published_endpoint
+            )
+        )
+
+    endpoints = {binding.published_endpoint} if binding.published_endpoint else set()
+    for dependency in binding.dependency_endpoints:
+        errors.extend(
+            _endpoint_format_errors(
+                f"{prefix}.dependency_endpoints[{dependency.component_id!r}]",
+                dependency.endpoint,
+            )
+        )
+        if dependency.endpoint and dependency.endpoint in endpoints:
+            errors.append(
+                f"{prefix}.dependency_endpoints[{dependency.component_id!r}]: "
+                "the dependency endpoint is the component's own published "
+                "endpoint, which is not a dependency on a deployed component"
+            )
+        if dependency.version_range and not dependency.version_range.strip():
+            errors.append(
+                f"{prefix}.dependency_endpoints[{dependency.component_id!r}].version_"
+                "range: an empty string is not a declared range"
+            )
+    return errors
+
+
+def _endpoint_format_errors(label: str, endpoint: str) -> list[str]:
+    match = ENDPOINT_RE.fullmatch(endpoint)
+    if not match:
+        message = (
+            f"{label}: {endpoint!r} must be '<host>:<port>' with no scheme, "
+            "path or whitespace; the endpoint is declared statically by the "
+            "environment document"
+        )
+        return [message]
+    host = match.group("host")
+    if is_floating_selector(host):
+        message = (
+            f"{label}: {host!r} is a floating selector, not the address of a "
+            "deployed component"
+        )
+        return [message]
+    port = int(match.group("port"))
+    if not 1 <= port <= 65535:
+        return [f"{label}: port {port} is outside 1..65535"]
+    return []
+
+
+def _dependency_endpoint_errors(
+    environment: DeploymentEnvironment,
+    verification: InstanceVerification,
+) -> list[str]:
+    """A declared dependency must correspond to a deployed provider exactly.
+
+    ADR-0021 §3 binds the dependency's endpoint to the environment binding and
+    its version to the exact declared range. Three mismatches are therefore
+    fail-closed, never repairable by substitution:
+
+    * a dependency on a component the accepted instance does not declare, or
+      one this environment gives no runtime binding — there is no provider to
+      reach;
+    * an endpoint that differs from the provider's own published endpoint — the
+      document would describe a topology the deployment does not create, and
+      reaching "something else" is endpoint substitution;
+    * a declared range the provider's pinned version does not satisfy, or a
+      range that is not a range at all — compatibility must be decided by the
+      canonical range semantics before the component is started, not discovered
+      at runtime (ADR-0021 §2.1, §3).
+    """
+    errors: list[str] = []
+    instance_components = set(verification.component_ids)
+    published = {
+        binding.component_id: binding.published_endpoint
+        for binding in environment.bindings
+    }
+    declared = {binding.component_id for binding in environment.bindings}
+
+    for binding in environment.bindings:
+        prefix = f"bindings[{binding.component_id!r}]"
+        for dependency in binding.dependency_endpoints:
+            path = f"{prefix}.dependency_endpoints[{dependency.component_id!r}]"
+            provider = dependency.component_id
+            if not provider:
+                errors.append(f"{path}: a dependency must name a component_id")
+                continue
+            if is_floating_selector(provider):
+                errors.append(f"{path}: a floating selector is not a provider identity")
+            if provider == binding.component_id:
+                errors.append(
+                    f"{path}: a component does not depend on itself; the endpoint is "
+                    "its own published endpoint"
+                )
+                continue
+            if provider not in instance_components:
+                errors.append(
+                    f"{path}: the accepted instance does not declare component "
+                    f"{provider!r}, so there is no provider to reach"
+                )
+                continue
+            if provider not in declared:
+                errors.append(
+                    f"{path}: this environment provides no runtime binding for "
+                    f"provider {provider!r}; the dependency cannot be satisfied here"
+                )
+                continue
+
+            actual = published.get(provider, "")
+            if not actual:
+                errors.append(
+                    f"{path}: provider {provider!r} declares no "
+                    "published_endpoint, so the dependency has no network "
+                    "address; an in-process substitute is not permitted"
+                )
+            elif dependency.endpoint != actual:
+                errors.append(
+                    f"{path}: {dependency.endpoint!r} does not correspond to "
+                    f"provider {provider!r}'s published endpoint {actual!r}; "
+                    "substituting an endpoint is forbidden"
+                )
+
+            if dependency.version_range:
+                if parse_version_range(dependency.version_range) is None:
+                    errors.append(
+                        f"{path}.version_range: {dependency.version_range!r} is "
+                        "not a version range"
+                    )
+                    continue
+                provider_binding = verification.component(provider)
+                version = provider_binding.component_version if provider_binding else ""
+                if not range_admits(dependency.version_range, version):
+                    errors.append(
+                        f"{path}.version_range: provider {provider!r} is pinned at "
+                        f"{version!r}, which the declared range "
+                        f"{dependency.version_range!r} does not admit"
+                    )
     return errors
 
 
@@ -359,6 +620,8 @@ def validate_environment(
             "accepted instance does not declare; provisioning never introduces "
             "undocumented components"
         )
+
+    errors.extend(_dependency_endpoint_errors(environment, verification))
 
     needs_artifact_source = any(
         binding.has_published_artifact for binding in verification.components

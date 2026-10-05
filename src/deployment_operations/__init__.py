@@ -79,6 +79,7 @@ from deployment_operations.deployment import (
 from deployment_operations.environment import (
     IDENTITY_CONFIGURATION_KEYS,
     ComponentRuntimeBinding,
+    DependencyEndpoint,
     DeploymentEnvironment,
     MigrationBinding,
     load_environment,
@@ -234,6 +235,7 @@ __all__ = [
     "ComponentObservation",
     "ComponentRecord",
     "ComponentRuntimeBinding",
+    "DependencyEndpoint",
     "Deployment",
     "DeploymentEnvironment",
     "DeploymentEvent",

@@ -47,3 +47,6 @@ htmlcov/
 # Docker
 
 *.pid
+
+# Deployment runtime workspaces of the example environment binding
+factory/environments/runtime/

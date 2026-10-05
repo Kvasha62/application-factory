@@ -49,7 +49,7 @@
         "pinned": false
       },
       "component_id": "identity",
-      "component_version": "0.3.0"
+      "component_version": "0.3.1"
     },
     {
       "artifact": {
@@ -93,9 +93,9 @@
     }
   },
   "golden_bundle": null,
-  "instance_digest": "sha256:128a08ffee281565386d700cbb798bfe269e2a4cd852104d582bec3ba3d27b68",
+  "instance_digest": "sha256:a8a8ee172e15ee3b95b17d0a82afb1bb26e5822e983fd8e708045b9e09cb1e22",
   "manifest": {
-    "manifest_digest": "sha256:1509279ae1b07e1d7dc1cafedd316163408686098c00f4426d7cea78553d09b8",
+    "manifest_digest": "sha256:5338c007296d7c892b87a35f76cc3d0faf84987c84b4d6d75c54115ac025dfc8",
     "manifest_id": "example-platform",
     "manifest_version": "1.0.0"
   },

@@ -19,6 +19,7 @@ from composer import compose_request_document
 from composer.request import build_request_document
 from deployment_operations import (
     ComponentRuntimeBinding,
+    DependencyEndpoint,
     DeploymentEnvironment,
     DeploymentRequest,
     InstanceReference,
@@ -118,8 +119,16 @@ def binding(
     factory: str = "build_deployment",
     migrations: MigrationBinding | None = None,
     import_fixtures: bool = False,
+    published_endpoint: str = "",
+    dependency_endpoints: tuple[DependencyEndpoint, ...] = (),
 ) -> ComponentRuntimeBinding:
-    """A runtime binding of the canonical component in a test environment."""
+    """A runtime binding of the canonical component in a test environment.
+
+    ``published_endpoint`` and ``dependency_endpoints`` carry the statically
+    declared endpoints of a runtime dependency (ADR-0021 §3); both default to
+    "declares nothing", so a binding that is not about a network dependency is
+    unaffected by them.
+    """
     if module == "tenant_authority.deployment":
         import_paths: tuple[Path, ...] = ()
     else:
@@ -130,6 +139,8 @@ def binding(
         deployment_factory=factory,
         migrations=migrations,
         import_paths=import_paths,
+        published_endpoint=published_endpoint,
+        dependency_endpoints=dependency_endpoints,
     )
 
 

@@ -103,8 +103,14 @@ COMPONENT_VERSION_DIGESTS: dict[tuple[str, str], str] = {
     ("idempotency", "0.1.0"): (
         "sha256:7980398597cd4cbab1052c09c8c1efc05424c637ac1c3fb819aae5c6bd308988"
     ),
-    ("identity", "0.3.0"): (
-        "sha256:e0d77dbeefff0a07dd0605555334dfed81714b7b6b5154d5d29c667f3817c40c"
+    # 0.3.1 adds the composition-internal deployment entrypoint and the network
+    # TenantAuthorityPort (ADR-0021 §3). The published API is unchanged, so no
+    # minor is required by the contract's `additive-minor-breaking-major`
+    # policy, and the five components that declare `identity` at
+    # `>=0.3.0,<0.4.0` keep their declared range. This lock covers exactly the
+    # registered inventory: a superseded version's entry is dropped with it.
+    ("identity", "0.3.1"): (
+        "sha256:5d58c289cf8f26824f9c3705f9c4688b7287de03ca60aafaf7f6d8a4059213c9"
     ),
     ("learning", "0.3.0"): (
         "sha256:e7c28a27d50ef5a99110aa9e02a68126e2316cc1a3687ae44b7fd3c8502bc82c"

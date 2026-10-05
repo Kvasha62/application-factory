@@ -1999,6 +1999,6 @@ def test_manifest_rejects_dependency_outside_required_version_range(
     assert any(
         "component 'authorization'" in error
         and "requires 'identity' in range '>=0.4.0,<0.5.0'" in error
-        and "manifest selects '0.3.0'" in error
+        and "manifest selects '0.3.1'" in error
         for error in errors
     )

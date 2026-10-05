@@ -37,7 +37,7 @@
     },
     {
       "component_id": "identity",
-      "component_version": "0.3.0",
+      "component_version": "0.3.1",
       "class": "platform_service",
       "scs_id": null,
       "maturity_level": "level_0_modular_monolith",
@@ -60,7 +60,7 @@
         "openapi": "components/identity/contract/openapi.yaml"
       },
       "summary": null,
-      "entry_digest": "sha256:406898878db7f553a040a7010829e1c26bdd4162d301888ddf36d2db50bc9ca6"
+      "entry_digest": "sha256:6cb2839e892e36270262cc8a2048238818ef48f43f2c9c5a247ec3bcf1b8c459"
     },
     {
       "component_id": "tenant_authority",
