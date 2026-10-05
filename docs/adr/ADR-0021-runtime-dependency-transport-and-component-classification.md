@@ -1,6 +1,6 @@
 # ADR-0021 — Runtime Dependency Transport and Component Classification for F-5
 
-- **Status:** Proposed — awaiting owner ratification
+- **Status:** Ratified — owner approved on 2026-10-05
 - **Date:** 2026-10-05
 - **Decision scope:** F-5 prerequisite governance
 - **Related decisions:** D1=A, D2=B
@@ -188,6 +188,6 @@ After ratification, the F-5 implementation remains bounded by the scope and acce
 
 **Owner-selected decisions:** D1=A, D2=B.
 
-**ADR state:** Proposed, awaiting explicit owner ratification.
+**ADR state:** Ratified by the owner on 2026-10-05.
 
-**Implementation state:** Not started and not authorized until ratification.
+**Implementation state:** Not started. Ratification permits preparation/opening of the separate F-5 work item; implementation remains subject to that work item's approval and quality gates.
