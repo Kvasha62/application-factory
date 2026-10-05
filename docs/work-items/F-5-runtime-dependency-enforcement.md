@@ -1,10 +1,10 @@
 # F-5 Work Item — Runtime Dependency Enforcement
 
-- **Status:** Proposed — awaiting owner approval
+- **Status:** Approved — owner approved on 2026-10-05
 - **Governance basis:** ADR-0017 §44
 - **Decision basis:** ADR-0021 (ratified 2026-10-05)
 - **Owner-selected decisions:** D1=A, D2=B
-- **Implementation authorization:** None until this work item is explicitly approved by the owner
+- **Implementation authorization:** Approved by the owner on 2026-10-05; implementation may begin within this work item's boundaries
 
 ## 1. Objective
 
@@ -81,7 +81,7 @@ The F-5 implementation is acceptable only if all are demonstrated:
 
 ## 6. Governance gate
 
-This work item is **Proposed**. It is the separate implementation authorization required by ADR-0017 §44.
+This work item is **Approved** by the owner on 2026-10-05. It is the separate implementation authorization required by ADR-0017 §44.
 
 **No implementation, merge, or release action is authorized until the owner explicitly approves this work item.**
 
