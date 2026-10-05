@@ -170,7 +170,7 @@ def test_the_addition_is_additive_and_versioned():
     """0.2.0 -> 0.3.0: a new operation, no change to the existing ones."""
     instance = monolith()
     http = instance.identity_client()
-    assert COMPONENT_VERSION == "0.3.1"
+    assert COMPONENT_VERSION == "0.4.0"
     assert (
         http.get(
             "/api/v1/me", headers={"Authorization": "Bearer token-human-a"}

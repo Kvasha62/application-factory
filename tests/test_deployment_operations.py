@@ -831,7 +831,7 @@ class TestProvisioning:
         window = manifest_for(
             components=[
                 {"component_id": COMPONENT_ID, "component_version": COMPONENT_VERSION},
-                {"component_id": "identity", "component_version": "0.3.1"},
+                {"component_id": "identity", "component_version": "0.4.0"},
             ],
             root=root,
             manifest_id="deployment-platform-two-components",

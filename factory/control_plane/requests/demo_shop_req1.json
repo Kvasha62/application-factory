@@ -4,11 +4,11 @@
   "project_ref": "demo_shop",
   "configuration_ref": {
     "configuration_id": "demo_shop/configurations/1",
-    "digest": "sha256:51dcc09098ee12cc26e67ded3aa7ed069da5dab068adf4349ddaf09d3e5ef262"
+    "digest": "sha256:c58eafbcbd07b8624c912f6d1c5175ee3a2cf79d2f6a77f0795a4d53d0602257"
   },
   "approval_ref": {
     "approval_id": "demo_shop/approvals/1",
-    "digest": "sha256:db9449029487d6e5d868218468e5659558841a81cff53f1191d2959b4f201398"
+    "digest": "sha256:adeb2ac3a86e6cf50532fbb241c635eab04a149daebddd4f7d3dca62afc51cac"
   },
   "generator_version": "control-plane/composition-requests/v1",
   "request": {
@@ -20,7 +20,7 @@
     "components": [
       {
         "component_id": "identity",
-        "component_version": "0.3.1"
+        "component_version": "0.4.0"
       },
       {
         "component_id": "tenant_authority",
@@ -36,5 +36,5 @@
       }
     }
   },
-  "digest": "sha256:9830e2769720eefb63e71c01f825bc8ce53fd21ea35b20f7a245514dd44fd828"
+  "digest": "sha256:1ac2aea744af4a488908be8023657598eec16303fefcfad58d1748e08ac65d4f"
 }

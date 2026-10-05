@@ -1970,7 +1970,7 @@ def test_manifest_rejects_dependency_outside_required_version_range(
         for dependency in authorization_entry["dependencies"]
         if dependency["component_id"] == "identity"
     )
-    identity_dependency["version_range"] = ">=0.4.0,<0.5.0"
+    identity_dependency["version_range"] = ">=0.5.0,<0.6.0"
 
     modified_registry = Registry(
         document=registry_document,
@@ -1998,7 +1998,7 @@ def test_manifest_rejects_dependency_outside_required_version_range(
 
     assert any(
         "component 'authorization'" in error
-        and "requires 'identity' in range '>=0.4.0,<0.5.0'" in error
-        and "manifest selects '0.3.1'" in error
+        and "requires 'identity' in range '>=0.5.0,<0.6.0'" in error
+        and "manifest selects '0.4.0'" in error
         for error in errors
     )

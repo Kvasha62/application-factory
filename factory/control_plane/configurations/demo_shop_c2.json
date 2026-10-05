@@ -16,7 +16,7 @@
   "components": [
     {
       "component_id": "identity",
-      "component_version": "0.3.1"
+      "component_version": "0.4.0"
     },
     {
       "component_id": "tenant_authority",
@@ -41,5 +41,5 @@
     "release": null
   },
   "predecessor": null,
-  "digest": "sha256:51dcc09098ee12cc26e67ded3aa7ed069da5dab068adf4349ddaf09d3e5ef262"
+  "digest": "sha256:c58eafbcbd07b8624c912f6d1c5175ee3a2cf79d2f6a77f0795a4d53d0602257"
 }

@@ -33,11 +33,15 @@ from composer import (
     validate_request_document,
 )
 
-#: The Slice 1 demonstration digest — recorded at the merge of PR #145 and
-#: never allowed to change (a v1 document is immutable and its digest is its
-#: identity).
+#: The Slice 1 demonstration digest — a v1 document is immutable and its digest
+#: is its identity, so this value has changed exactly once, on 2026-10-05, under
+#: explicit owner authorization (PR #138 comments `5998321766` / `5998764930` /
+#: `5999402241`): the ratified identity `0.4.0` cascade forced
+#: `configurations/demo_shop_c1.json` to be amended in place, an exception
+#: recorded in `factory/control_plane/README.md`. It is not an update path — the
+#: value must not change again without a new owner decision.
 SLICE1_V1_DIGEST = (
-    "sha256:a90582a84ee6ae0dae59c750a317e27f2931e5b7762c21c7d26a254e8c7f41f1"
+    "sha256:d9a0d3a5b2e7d0d153dc5c7a28dff036fbe9c8a78a8c2c9930f90c163b553132"
 )
 
 COMPOSER_PAYLOAD_KEYS = frozenset(
@@ -117,7 +121,7 @@ def test_v2_satisfies_the_existing_composition_request():
         "manifest_version": "1.0.0",
     }
     assert payload["components"] == [
-        {"component_id": "identity", "component_version": "0.3.1"},
+        {"component_id": "identity", "component_version": "0.4.0"},
         {"component_id": "tenant_authority", "component_version": "0.1.0"},
     ]
     assert validate_request_document(payload, root=REPOSITORY_ROOT) == []

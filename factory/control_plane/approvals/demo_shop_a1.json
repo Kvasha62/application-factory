@@ -5,11 +5,11 @@
   "decision": "granted",
   "configuration_ref": {
     "configuration_id": "demo_shop/configurations/1",
-    "digest": "sha256:51dcc09098ee12cc26e67ded3aa7ed069da5dab068adf4349ddaf09d3e5ef262"
+    "digest": "sha256:c58eafbcbd07b8624c912f6d1c5175ee3a2cf79d2f6a77f0795a4d53d0602257"
   },
   "proposal_ref": {
     "proposal_id": "demo_shop/proposals/1",
-    "digest": "sha256:06162dc0b48f7fb7fdb61f59e1f1e81fbca689a36615be7126bccc245c5c25d3"
+    "digest": "sha256:4d23090cfb237053bbab14d5e17f7bbe651ef17ccf9cb1b2eb72b006de22f50d"
   },
   "requirements_ref": {
     "requirements_id": "demo_shop/requirements/1",
@@ -27,5 +27,5 @@
   "reason": "Accept the resolved configuration; the open requirement is acknowledged.",
   "revokes": null,
   "predecessor": null,
-  "digest": "sha256:db9449029487d6e5d868218468e5659558841a81cff53f1191d2959b4f201398"
+  "digest": "sha256:adeb2ac3a86e6cf50532fbb241c635eab04a149daebddd4f7d3dca62afc51cac"
 }

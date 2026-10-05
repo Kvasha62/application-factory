@@ -47,7 +47,7 @@ def build_v2(**overrides: Any) -> dict[str, Any]:
         "manifest_id": "demo_shop_platform",
         "manifest_version": "1.0.0",
         "components": [
-            {"component_id": "identity", "component_version": "0.3.1"},
+            {"component_id": "identity", "component_version": "0.4.0"},
             {"component_id": "tenant_authority", "component_version": "0.1.0"},
         ],
         "configuration": {

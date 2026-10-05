@@ -9,7 +9,7 @@
         "pinned": false
       },
       "component_id": "identity",
-      "component_version": "0.3.1"
+      "component_version": "0.4.0"
     },
     {
       "artifact": {
@@ -31,9 +31,9 @@
     }
   },
   "golden_bundle": null,
-  "instance_digest": "sha256:354dd5aff7a5608579e39d61fb7506110159d5cd79d49473053db8a7630f3b2f",
+  "instance_digest": "sha256:416acda079b27137a3769909209e216450471227aba9370242a87b14734a08e6",
   "manifest": {
-    "manifest_digest": "sha256:5dd864179d44a2881086534b69e4d1c2fde24ab5a32114732547d00dec91978d",
+    "manifest_digest": "sha256:446058d8c2a06075333ec9132ce5bfe2f188eb2e5c2d28e528a45810be939ec6",
     "manifest_id": "f5-runtime-dependency",
     "manifest_version": "1.0.0"
   },

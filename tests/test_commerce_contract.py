@@ -198,7 +198,7 @@ def test_contract_declares_the_dependencies_on_published_contracts():
     assert Path(idempotency["contract"]).exists()
     identity = by_component["identity"]
     assert identity["kind"] == "api"
-    assert identity["version_range"] == ">=0.3.0,<0.4.0"
+    assert identity["version_range"] == ">=0.3.0,<0.5.0"
     assert Path(identity["contract"]).exists()
 
 

@@ -1,7 +1,7 @@
 {
   "$schema": "factory/composer/schema/composition_request.schema.json",
   "components": [
-    { "component_id": "identity", "component_version": "0.3.1" }
+    { "component_id": "identity", "component_version": "0.4.0" }
   ],
   "configuration": {
     "identity": { "current_platform_id": "f5-runtime-dependency" },

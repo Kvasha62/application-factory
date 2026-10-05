@@ -8,11 +8,11 @@
   },
   "configuration_ref": {
     "configuration_id": "demo_shop/configurations/1",
-    "digest": "sha256:51dcc09098ee12cc26e67ded3aa7ed069da5dab068adf4349ddaf09d3e5ef262"
+    "digest": "sha256:c58eafbcbd07b8624c912f6d1c5175ee3a2cf79d2f6a77f0795a4d53d0602257"
   },
   "inputs": {
     "validator_set": "control-plane/validators/v1",
-    "registry_fingerprint": "sha256:513a45b31660b5aba1e5bf0d9ec78c42af843d6a2063ca2b6dcf2f94bdb2bae1"
+    "registry_fingerprint": "sha256:02dbe16577a2d09794f062710d75b53833f997f9f0ddae3b3a4b43da774cd9c2"
   },
   "findings": [
     {
@@ -39,5 +39,5 @@
   ],
   "state": "ready",
   "predecessor": null,
-  "digest": "sha256:06162dc0b48f7fb7fdb61f59e1f1e81fbca689a36615be7126bccc245c5c25d3"
+  "digest": "sha256:4d23090cfb237053bbab14d5e17f7bbe651ef17ccf9cb1b2eb72b006de22f50d"
 }
