@@ -5,7 +5,7 @@
 - **Decision scope:** F-5 prerequisite governance
 - **Related decisions:** D1=A, D2=B
 - **Supersedes:** None
-- **Implementation authorization:** None until this ADR is ratified by the owner
+- **Implementation authorization:** Not granted by this ADR. Ratification permits the F-5 work item to be prepared/opened; implementation requires that work item's own owner approval (ADR-0017 §44)
 
 ## 1. Context
 
@@ -170,11 +170,16 @@ The implementation slice opened after ratification MUST demonstrate at minimum:
 
 ## 9. Governance and ratification
 
-This ADR is **Proposed** and is not itself ratified.
+This ADR is **Ratified**: the owner ratified it on 2026-10-05, selecting **D1=A** and **D2=B** (permanent PR #138 comment `5988274862`; the record is repeated in §11).
 
-Per ADR-0017 §44, this document does not pre-approve implementation merely by defining the decision. The owner must explicitly ratify ADR-0021 before the F-5 implementation work item begins.
+Ratification is a decision act, not an implementation authorization. Per ADR-0017 §44 this document does not pre-approve implementation merely by defining the decision. Two approval gates remain outside it:
 
-After ratification, the F-5 implementation remains bounded by the scope and acceptance criteria in §5 and §8 and must proceed through the repository's normal review and merge gates.
+- the **F-5 implementation slice** requires its own approved work item and acceptance criteria — `docs/work-items/F-5-runtime-dependency-enforcement.md`;
+- the **D2=B change set** (§4) requires its own separate Level-C work item — `docs/work-items/D2B-library-reclassification.md`, which is **not approved**.
+
+This ADR neither grants nor withdraws either approval. The current state of each is recorded in the work item that owns it, and that document — not this ADR — is authoritative for it.
+
+Ratification does not relax §5 or §8. The F-5 implementation remains bounded by that scope and those acceptance criteria and must proceed through the repository's normal review and merge gates (ADR-0017 §31: implementation/verification → Quality Gate → independent review → owner approval → merge).
 
 ## 10. Normative references
 
@@ -190,4 +195,4 @@ After ratification, the F-5 implementation remains bounded by the scope and acce
 
 **ADR state:** Ratified by the owner on 2026-10-05.
 
-**Implementation state:** Not started. Ratification permits preparation/opening of the separate F-5 work item; implementation remains subject to that work item's approval and quality gates.
+**Implementation state (recorded 2026-10-05):** the F-5 implementation slice exists at `30e570de23a7466d18a7e9e28caea26bd14b3c8f` and is carried, together with the separately owner-ratified `identity 0.4.0` cascade, in draft PR #150 — **HOLD / NOT MERGE**. Its merge remains subject to the ADR-0017 §31 chain, and the approval state of the F-5 work item is recorded in `docs/work-items/F-5-runtime-dependency-enforcement.md` §6, not here.
