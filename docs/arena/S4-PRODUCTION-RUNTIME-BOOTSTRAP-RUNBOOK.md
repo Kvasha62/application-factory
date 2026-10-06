@@ -187,7 +187,9 @@ The member runtime protocol implementation may be the shipped `deployment_operat
 | 8 | Branding | `<PLATFORM_STATE_DIR>/branding.json`; absence recorded explicitly (`state:"ABSENT"`), never omitted | new Layer R capability |
 | 9 | Extensions | `<PLATFORM_STATE_DIR>/extensions.json`; no component contract exposes an extension point, so absence must still be recorded explicitly | new Layer R capability |
 
-**What the producer categorically never receives from Layer O or expected state:** the Platform Instance document or its `instance_digest`; the Manifest document; expected component bindings; expected configuration; expected Golden Bundle; expected branding/extensions; the `DeploymentRecord`; the deployment request; the evaluation handle or any part of it (the handle is an opaque per-evaluation nonce — `ev-` + 32 hex characters, `deployment.py:194-213`; it carries no expected identity, no digest prefix and no position, and nothing is read out of it); `platform_id`, `environment_id`, `attempt`; any path under `<RUNTIME_ROOT>`; any credential. Its entire input per evaluation is `{"op":"observe","handle":"<H>"}`.
+**Two values that must never be confused.** The *deployment id* is the durable, expected-derived record identity — `dep-{platform_id}-{environment_id}-{first 12 hex of instance_digest}-a{attempt}` (`state.py:146-165`) — and the *binding basis* is the evaluating side's own note of which record a binding was derived from (`deployment-record:<deployment_id>`, `deployment.py:254-256`). Both are expected-derived, both stay on the Layer O side, and **neither is a correlation value**. The *evaluation handle* H is a different value in a different role: a fresh opaque random nonce — `ev-` + 32 hex characters = 128 bits (`deployment.py:194-213`) — issued by the evaluating operation for exactly one evaluation. H names no platform, no environment and no attempt, carries no digest or digest prefix, states no position and is never parsed to derive one. **H is the only correlation value that crosses this seam.**
+
+**What the producer categorically never receives from Layer O or expected state:** the deployment id, the binding basis, or any expected-derived value, or any part or derivative of these; the Platform Instance document or its `instance_digest`; the Manifest document; expected component bindings; expected configuration; expected Golden Bundle; expected branding/extensions; the `DeploymentRecord`; the deployment request; `platform_id`, `environment_id`, `attempt`; any path under `<RUNTIME_ROOT>`; any credential. Its entire input per evaluation is `{"op":"observe","handle":"<H>"}` — the handle of §8 and nothing else — and its answer must state that same handle in its `correlation` statement (§10 step 11).
 
 ---
 
@@ -216,8 +218,8 @@ Two verified facts make this Level A:
 
 | Property | Rule |
 |---|---|
-| Fresh handle | The adapter generates a new random handle per evaluation (≥128 bits), caches nothing, re-observes every time |
-| Correlation | The producer states, as its own facts, the binding identity it answered (handle, scope, sequence, target) and its attribution (authority, basis, instant); the adapter stops a document whose statement contradicts the binding it answered, and D&O establishes correspondence in-band (`require_correlated_evidence`) |
+| Fresh handle | The evaluating operation issues a new opaque random handle per evaluation (≥128 bits — `ev-` + 32 hex characters, `deployment.py:194-213`), caches nothing and re-observes every time; the owner-side adapter transports the handle unchanged and must never substitute, reuse, pre-issue, extend or derive one |
+| Correlation | The producer states, as its own facts, the binding identity it answered (handle, scope, sequence, target) and its attribution (authority, basis, instant); the owner-side adapter stops a document whose handle statement is missing, foreign or not the handle it transported — it holds no expected values and is therefore never the seam's authority — and D&O establishes the full correspondence in-band (`require_correlated_evidence`) |
 | Foreign rejection | An answer stating another handle, another binding space, another position or another platform ⇒ refusal; a handle the evaluation never issued can never establish correspondence |
 | Stale rejection | An answer for an earlier binding (an earlier attempt or position), `freshness_current=false`, or an incomplete correlation ⇒ refusal (ADR-0019 §26; ADR-0020 §18) |
 | Freshness | `freshness_current=true` only for the observation taken under the current handle |
@@ -383,7 +385,7 @@ One JSON object per evaluation, mirroring the field set the existing owner-surfa
   "extensions":     {"state": "ABSENT"},  "branding": {"state": "ABSENT"}
 }
 ```
-The producer must refuse to emit, and the adapter refuse to accept, any document containing `instance_digest` or `expected_instance` (`running_platform/owner_state.py:72`). The `correlation` statement is the producer's own fact: the request carries nothing but the handle, so no expected identity can be echoed back into it.
+**The `handle` in the request is the opaque per-evaluation handle H of §8 — never the deployment id and never the binding basis.** The producer receives H (§6: it is the only correlation value crossing this seam) and must return it in `correlation.token` as an echo, stating alongside it its own binding identity (`scope`, `sequence`, `target`) and its attribution (`authority`, `basis`, `established_at`); D&O refuses the answer as `UNAVAILABLE` unless that statement agrees with the binding the evaluation established (`require_correlated_evidence`, `platform_identity.py:339`) — an equal handle alone establishes nothing. The producer must refuse to emit, and the adapter refuse to accept, any document containing `instance_digest`, `expected_instance`, the deployment id or any expected-derived material (`running_platform/owner_state.py:72`). The `correlation` statement is the producer's own fact: the request carries nothing but H, so no expected identity can be echoed back into it.
 
 ### Step 12 — negative control (must fail closed)
 Run the composition root with the S4 seam unavailable (producer stopped or answering a foreign handle). Expected: `IdentityVerificationFailed: identity/version/digest verification failed; the platform is not deployed` — **and Layer R must still be running afterwards** (check `systemctl status` and re-ask the producer). This proves a failed orchestration attempt destroys nothing it does not own.
@@ -494,7 +496,7 @@ Implementation of Issue #128 stays blocked while any of these holds:
 6. The membership scope is defined wider than the cell's own member registry (AG-4) ⇒ Level C ADR first.
 7. The provenance pattern is finer than "one class for all nine" without moving to the S5 seam (AG-3) ⇒ Level C ADR first.
 8. Any §9 trigger fires — sealed artifact, certified Golden Bundle, Manifest publication lookup ⇒ Level C ADR first.
-9. The producer can read `<RUNTIME_ROOT>`, or receives the token, expected state, a secret or any expected-derived value (ADR-0019 §36; ADR-0020 §6).
+9. The producer can read `<RUNTIME_ROOT>`, or receives the deployment id, the binding basis, expected state, a secret, any expected-derived value, or any part or derivative of these (ADR-0019 §36; ADR-0020 §6). The opaque per-evaluation handle of §8 is the **only** correlation value that crosses this seam, and it is the only thing the producer receives per evaluation (§6, §10 step 11).
 10. Any design makes Layer O, `DeploymentRecord`, the deployment request, the runtime spec or the CLI the source of actual identity (ADR-0020 §4).
 11. A second digest, canonicalization or identity authority appears anywhere in the cell.
 12. Any statement or step in this runbook is read as making `deploy()` the creator or owner of the runtime — §0.4 governs.
