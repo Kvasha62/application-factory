@@ -155,6 +155,16 @@ def derive_deployment_id(
     and the attempt number — never from time or randomness — so the same
     deployment input always names the same operation. ``attempt`` keeps the
     attempt history of ADR-0016 §9 honest instead of overwriting it.
+
+    This is the *record's* durable identity, and it stays that: it is what the
+    state store, the journal and the signals name. It is **not** the evaluation
+    handle. Because it is derived from expected identity (the platform, the
+    environment, a prefix of the expected digest, the attempt), it must never
+    cross an owner-side boundary as the handle of an evaluation: the handle is
+    an opaque per-evaluation nonce
+    (:func:`deployment_operations.deployment.new_evaluation_handle`), and the
+    binding basis that refers to this identity stays on the evaluating side
+    (``deployment_record_basis``).
     """
     digest_part = "unverified"
     if isinstance(instance_digest, str) and instance_digest:
@@ -299,7 +309,7 @@ class ReconciliationRecord:
       diverged, so drift is attributable instead of being flattened into a
       generic failure;
     * ``evidence`` records the normative provenance of the actual evidence and
-      that its freshness was current; the opaque owner-side correlation token is
+      that its freshness was current; the owner-side correlation statement is
       not copied here;
     * ``errors`` carries the fail-closed reason of an ``unverifiable``
       observation.

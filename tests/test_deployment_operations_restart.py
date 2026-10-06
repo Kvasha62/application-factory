@@ -64,11 +64,13 @@ from _deployment_helpers import (
     COMPONENT_ID,
     COMPONENT_VERSION,
     FIXTURE_PATH,
+    HANDLE_PREFIX,
     PLATFORM_ID,
     ROOT,
     environment_for,
     instance_for,
     manifest_for,
+    producer_correlation,
     request_for,
 )
 
@@ -377,6 +379,25 @@ class FakeRuntime:
         }
 
 
+def _assert_opaque_handle(token: object, record: Any) -> None:
+    """The handle of one attempt: opaque, and nobody's identifier.
+
+    It carries no structure at all — no deployment or environment identity, no
+    prefix of the expected digest, and no binding position: the attempt's
+    ``sequence`` is established by the operation, never read out of the handle.
+    """
+
+    assert isinstance(token, str)
+    assert token.startswith(HANDLE_PREFIX)
+    body = token.removeprefix(HANDLE_PREFIX)
+    assert len(body) == 32
+    assert all(character in "0123456789abcdef" for character in body)
+    assert record.deployment_id not in token
+    assert record.environment_id not in token
+    assert str(record.instance_digest).removeprefix("sha256:")[:12] not in token
+    assert "#" not in token
+
+
 class _OwnerSource:
     """Test double of the Running Platform owner's observation surface.
 
@@ -429,7 +450,9 @@ def _snapshot(
         extensions=IdentityField.absent(),
         branding=IdentityField.absent(),
         provenance=EvidenceProvenance.MEASURED,
-        correlation_token=binding.token,
+        correlation=producer_correlation(
+            binding, target=str(instance.document["platform_id"])
+        ),
         freshness_current=True,
     )
 
@@ -1364,7 +1387,10 @@ class TestIdentityPreservation:
         result = platform.restart()
 
         tokens = [binding.token for binding in platform.owner.bindings]
-        assert tokens == [f"{platform.record.deployment_id}#restart:1"]
+        # One attempt, one handle: opaque, fresh, and carrying no identity
+        # material and no position (the position is the attempt's own).
+        _assert_opaque_handle(tokens[0], platform.record)
+        assert platform.owner.bindings[0].context.sequence == 1
         detail = result.attempt.phase("identity_verification").detail
         assert detail["binding_token"] == tokens[0]
         assert detail["instance_digest"] == platform.record.instance_digest
@@ -2055,10 +2081,40 @@ class TestRetryAndConcurrency:
         assert record.restarts[1].restart_id == second_id
         assert (record.running, record.ready, record.deployed) == (True, True, True)
         assert record.restarted is True
-        assert platform.owner.bindings[-1].token == (
-            f"{record.deployment_id}#restart:2"
-        ), "the retry was verified under a binding of its own attempt"
+        # The retry asked under a handle of its own: an opaque handle that
+        # states no position — the attempt's sequence is established by the
+        # operation, and this attempt is the second one.
+        assert (
+            len(platform.owner.bindings) == 1
+        ), "the failed attempt never reached the identity confirmation"
+        _assert_opaque_handle(platform.owner.bindings[-1].token, record)
+        assert platform.owner.bindings[-1].context.sequence == 2
+        assert record.restarts[1].restart_id == second_id
         assert derive_restart_id(platform.deployment).endswith("#attempt:3")
+
+    def test_each_attempt_asks_under_a_fresh_handle_of_its_own(
+        self, platform: SyntheticPlatform
+    ) -> None:
+        """Two attempts, two handles: a handle describes no attempt."""
+
+        first = platform.restart()
+        second = platform.restart()
+
+        tokens = [binding.token for binding in platform.owner.bindings]
+        assert len(tokens) == 2
+        for token in tokens:
+            _assert_opaque_handle(token, platform.record)
+        assert tokens[0] != tokens[1], "a replayable handle is not a fresh one"
+        assert [binding.context.sequence for binding in platform.owner.bindings] == [
+            1,
+            2,
+        ]
+        assert first.attempt.sequence == 1
+        assert second.attempt.sequence == 2
+        assert [
+            result.attempt.phase("identity_verification").detail["binding_token"]
+            for result in (first, second)
+        ] == tokens
 
     def test_a_finished_attempt_id_names_a_finished_attempt(
         self, platform: SyntheticPlatform
@@ -2583,7 +2639,8 @@ class TestDesiredStateAndDrift:
         assert attempt.identity["components"][0]["component_version"] == (
             COMPONENT_VERSION
         )
-        assert platform.owner.bindings[-1].token.endswith("#restart:1")
+        _assert_opaque_handle(platform.owner.bindings[-1].token, platform.record)
+        assert platform.owner.bindings[-1].context.sequence == 1
 
 
 # ---------------------------------------------------------------------------
@@ -2728,7 +2785,9 @@ class _RunningPlatformOwner:
             extensions=IdentityField.absent(),
             branding=IdentityField.absent(),
             provenance=EvidenceProvenance.MEASURED,
-            correlation_token=binding.token,
+            correlation=producer_correlation(
+                binding, target=str(self.instance.document["platform_id"])
+            ),
             freshness_current=True,
         )
 

@@ -1,0 +1,27 @@
+# Deployment & Operations side of the local stack.
+#
+# LOCAL DOCKER / NON-PRODUCTION. This image carries the repository itself and
+# installs the dependencies the deployment operation needs to run the
+# repository's own components; it holds no identity state and no credentials.
+# Identity evidence is obtained only across the transport boundary (see
+# local/compose.yaml).
+
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/opt/application-factory/src
+
+WORKDIR /opt/application-factory
+
+COPY . .
+
+# fastapi / pydantic are the project's declared runtime dependencies
+# (pyproject.toml); httpx2 is the HTTP client the component runtime worker uses
+# to exercise a component's published ASGI contract during a probe.
+RUN pip install --no-cache-dir \
+    "fastapi>=0.115.0" \
+    "pydantic>=2.9.0" \
+    "httpx2>=2.13.1"
+
+ENTRYPOINT ["python"]

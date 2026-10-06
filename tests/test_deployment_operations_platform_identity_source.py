@@ -7,6 +7,8 @@ import pytest
 from deployment_operations.platform_identity import (
     ActualComponentIdentity,
     ActualIdentityUnavailable,
+    BindingEvaluationContext,
+    EvidenceCorrelation,
     EvidenceProvenance,
     IdentityField,
     PlatformIdentityBinding,
@@ -31,6 +33,35 @@ def component(component_id: str) -> ActualComponentIdentity:
     )
 
 
+def binding(token: str = "running-platform") -> PlatformIdentityBinding:
+    return PlatformIdentityBinding(
+        token,
+        BindingEvaluationContext(
+            authority="tests/evaluation",
+            basis="tests/deployment-record",
+            target="example-platform",
+            scope="test-environment",
+            sequence=1,
+            established_at="2026-09-16T00:00:00Z",
+        ),
+    )
+
+
+def correlation(**overrides: object) -> EvidenceCorrelation:
+    """The producer's own statement of the binding it observed."""
+    values: dict[str, object] = {
+        "token": "running-platform",
+        "scope": "test-environment",
+        "sequence": 1,
+        "target": "example-platform",
+        "authority": "tests/owner-side-identity-source",
+        "basis": "tests/owner-observation/1",
+        "established_at": "2026-09-16T00:00:00Z",
+    }
+    values.update(overrides)
+    return EvidenceCorrelation(**values)
+
+
 def snapshot(**overrides: object) -> ActualPlatformSnapshot:
     values: dict[str, object] = {
         "platform_id": "example-platform",
@@ -48,7 +79,7 @@ def snapshot(**overrides: object) -> ActualPlatformSnapshot:
         "extensions": IdentityField.absent(),
         "branding": IdentityField.absent(),
         "provenance": EvidenceProvenance.MEASURED,
-        "correlation_token": object(),
+        "correlation": correlation(),
         "freshness_current": True,
     }
     values.update(overrides)
@@ -69,9 +100,7 @@ def provider(value: ActualPlatformSnapshot):
 
 
 def test_provider_preserves_owner_supplied_actual_identity():
-    evidence = provider(snapshot()).observe_identity(
-        PlatformIdentityBinding("running-platform")
-    )
+    evidence = provider(snapshot()).observe_identity(binding())
     assert evidence.value.platform_id == "example-platform"
     assert evidence.value.components[0].value.component_id == "alpha"
 
@@ -83,7 +112,7 @@ def test_malformed_owner_snapshot_is_unavailable():
 
     with pytest.raises(ActualIdentityUnavailable, match="invalid snapshot"):
         OwnerSuppliedPlatformIdentityProvider(MalformedSource()).observe_identity(
-            PlatformIdentityBinding("running-platform")
+            binding()
         )
 
 
@@ -94,30 +123,29 @@ def test_owner_source_failure_is_unavailable():
 
     with pytest.raises(ActualIdentityUnavailable, match="invalid actual evidence"):
         OwnerSuppliedPlatformIdentityProvider(FailingSource()).observe_identity(
-            PlatformIdentityBinding("running-platform")
+            binding()
         )
 
 
 def test_incomplete_membership_is_unavailable():
     with pytest.raises(ActualIdentityUnavailable):
-        provider(snapshot(membership_established=False)).observe_identity(
-            PlatformIdentityBinding("running-platform")
-        )
+        provider(snapshot(membership_established=False)).observe_identity(binding())
 
 
 def test_duplicate_actual_members_are_unavailable():
     member = component("alpha")
     with pytest.raises(ActualIdentityUnavailable):
-        provider(snapshot(components=(member, member))).observe_identity(
-            PlatformIdentityBinding("running-platform")
-        )
+        provider(snapshot(components=(member, member))).observe_identity(binding())
+
+
+def test_snapshot_without_a_producer_correlation_is_unavailable():
+    with pytest.raises(ActualIdentityUnavailable, match="correlation"):
+        provider(snapshot(correlation=None)).observe_identity(binding())
 
 
 def test_stale_snapshot_is_unavailable():
     with pytest.raises(ActualIdentityUnavailable):
-        provider(snapshot(freshness_current=False)).observe_identity(
-            PlatformIdentityBinding("running-platform")
-        )
+        provider(snapshot(freshness_current=False)).observe_identity(binding())
 
 
 def test_expected_digest_is_not_part_of_snapshot_contract():
@@ -129,7 +157,7 @@ def test_expected_digest_is_not_part_of_snapshot_contract():
 def test_unknown_identity_field_is_unavailable():
     evidence = provider(
         snapshot(configuration=IdentityField.unknown())
-    ).observe_identity(PlatformIdentityBinding("running-platform"))
+    ).observe_identity(binding())
 
     with pytest.raises(ActualIdentityUnavailable, match="UNKNOWN"):
         project_actual_identity(evidence)

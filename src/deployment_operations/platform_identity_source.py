@@ -32,6 +32,11 @@ class ActualPlatformSnapshot:
 
     Components remain a tuple so multiplicity is preserved until validation.
     No expected Platform Instance or instance digest is part of this model.
+
+    ``correlation`` is the producer's own statement of the binding identity the
+    observation belongs to and of its attribution (authority, basis, instant).
+    The D&O side never authors it: it is checked, not constructed, by
+    :func:`deployment_operations.platform_identity.require_correlated_evidence`.
     """
 
     platform_id: str
@@ -45,7 +50,7 @@ class ActualPlatformSnapshot:
     extensions: IdentityField
     branding: IdentityField
     provenance: str
-    correlation_token: object
+    correlation: EvidenceCorrelation
     freshness_current: bool
 
 
@@ -70,7 +75,12 @@ class OwnerSuppliedPlatformIdentityProvider(PlatformIdentityProvider):
                 raise ActualIdentityUnavailable(
                     "owner identity source returned an invalid snapshot"
                 )
-            correlation = EvidenceCorrelation(snapshot.correlation_token)
+            correlation = snapshot.correlation
+            if not isinstance(correlation, EvidenceCorrelation):
+                raise ActualIdentityUnavailable(
+                    "owner identity source returned no producer-established "
+                    "correlation"
+                )
             freshness = EvidenceFreshness(snapshot.freshness_current)
             components = tuple(
                 ActualEvidence(

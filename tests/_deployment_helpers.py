@@ -26,6 +26,11 @@ from deployment_operations import (
     MigrationBinding,
     load_record,
 )
+from deployment_operations.platform_identity import (
+    BindingEvaluationContext,
+    EvidenceCorrelation,
+    PlatformIdentityBinding,
+)
 from platform_instance import Instance, assemble_document, discover_root
 from platform_manifest import compute_manifest_digest, validate_document
 
@@ -41,6 +46,73 @@ FIXTURE_PATH = Path(__file__).parent / "_runtime_fixtures"
 
 #: The Platform Instance name the canonical tests deploy.
 PLATFORM_ID = "deployment-platform"
+
+#: The prefix the evaluating side puts on one opaque evaluation handle
+#: (``deployment_operations.deployment.EVALUATION_HANDLE_PREFIX``).
+HANDLE_PREFIX = "ev-"
+
+
+def evaluation_handle(seed: str = "ab") -> str:
+    """A fixed, well-formed opaque evaluation handle.
+
+    Tests that need a *known* handle use this; tests that need the production
+    thing call ``deployment_operations.new_evaluation_handle()``. The handle is a
+    nonce: it names no platform, no environment, no attempt and no digest, and
+    nothing may be read out of it.
+    """
+
+    return HANDLE_PREFIX + (seed * 16)[:32]
+
+
+#: The authority the owner-side test doubles declare for their observations.
+OWNER_AUTHORITY = "tests/owner-side-identity-source"
+#: How the owner-side test doubles ground an observation.
+OWNER_BASIS = "tests/owner-observation/1"
+#: A deterministic instant for producer-established attribution.
+OBSERVED_AT = "2026-09-16T00:00:00Z"
+
+
+def producer_correlation(
+    binding: PlatformIdentityBinding,
+    *,
+    token: object | None = None,
+    scope: str | None = None,
+    sequence: int | None = None,
+    target: str | None = None,
+    authority: str = OWNER_AUTHORITY,
+    basis: str = OWNER_BASIS,
+    established_at: str = OBSERVED_AT,
+) -> EvidenceCorrelation:
+    """The correlation an owner-side double states for the binding it answered.
+
+    A producer answers for exactly the binding it was given, so by default the
+    double states that binding's identity. ``target`` is the platform the double
+    says it observed, and it is always stated by the caller: the target is the
+    producer's own fact, never the evaluation's. Tests override the parts they
+    want to contradict (another platform, another sequence, another handle) to
+    prove the refusals.
+    """
+
+    context = binding.context
+    resolved_scope = scope
+    if resolved_scope is None:
+        resolved_scope = (
+            context.scope if isinstance(context, BindingEvaluationContext) else ""
+        )
+    resolved_sequence = sequence
+    if resolved_sequence is None:
+        resolved_sequence = (
+            context.sequence if isinstance(context, BindingEvaluationContext) else 0
+        )
+    return EvidenceCorrelation(
+        token=binding.token if token is None else token,
+        scope=resolved_scope,
+        sequence=resolved_sequence,
+        target=target or "",
+        authority=authority,
+        basis=basis,
+        established_at=established_at,
+    )
 
 
 def validated(

@@ -7,11 +7,26 @@ from deployment_operations.errors import IdentityVerificationFailed
 from deployment_operations.platform_identity import (
     ActualEvidence,
     ActualIdentityUnavailable,
+    BindingEvaluationContext,
     IdentityCorrespondenceResult,
     PlatformIdentityBinding,
 )
 
 EXPECTED = {"instance_digest": "sha256:" + "a" * 64}
+
+#: The binding the adapter tests evaluate: one evaluation of one target.
+CONTEXT = BindingEvaluationContext(
+    authority="tests/evaluation",
+    basis="tests/deployment-record",
+    target="example-platform",
+    scope="test-environment",
+    sequence=1,
+    established_at="2026-09-16T00:00:00Z",
+)
+
+
+def _binding(token: object = "opaque-deployment-evaluation") -> PlatformIdentityBinding:
+    return PlatformIdentityBinding(token, CONTEXT)
 
 
 class RecordingProvider:
@@ -28,9 +43,12 @@ def test_identity_adapter_receives_only_an_opaque_binding(monkeypatch) -> None:
     provider = RecordingProvider()
     observed: dict[str, object] = {}
 
-    def fake_correspondence(expected: object, evidence: object) -> str:
+    def fake_correspondence(
+        expected: object, evidence: object, *, binding: object = None
+    ) -> str:
         observed["expected"] = expected
         observed["evidence"] = evidence
+        observed["binding"] = binding
         return IdentityCorrespondenceResult.MATCH
 
     monkeypatch.setattr(
@@ -42,18 +60,22 @@ def test_identity_adapter_receives_only_an_opaque_binding(monkeypatch) -> None:
     token = object()
     evidence = object()
     provider.result = evidence
+    binding = _binding(token)
 
     deployment._verify_running_platform_identity(
         provider,
         EXPECTED,
-        binding_token=token,
+        binding=binding,
     )
 
-    assert provider.bindings == [PlatformIdentityBinding(token)]
+    assert provider.bindings == [binding]
     assert provider.bindings[0].token is token
     assert provider.bindings[0].token is not EXPECTED["instance_digest"]
+    assert provider.bindings[0].context is CONTEXT
     assert observed["expected"] is EXPECTED
     assert observed["evidence"] is evidence
+    # the correspondence is established against this very binding
+    assert observed["binding"] is binding
 
 
 def test_identity_adapter_does_not_forward_expected_digest_in_binding(
@@ -73,17 +95,20 @@ def test_identity_adapter_does_not_forward_expected_digest_in_binding(
     monkeypatch.setattr(
         deployment,
         "establish_identity_correspondence",
-        lambda expected, evidence: IdentityCorrespondenceResult.MATCH,
+        lambda expected, evidence, *, binding=None: IdentityCorrespondenceResult.MATCH,
     )
 
     deployment._verify_running_platform_identity(
         provider,
         EXPECTED,
-        binding_token="opaque-deployment-evaluation",
+        binding=_binding(),
     )
 
     assert provider.received is not None
     assert provider.received.token == "opaque-deployment-evaluation"
+    # the binding carries the binding semantics and no expected document
+    assert provider.received.context is CONTEXT
+    assert not hasattr(provider.received.context, "instance_digest")
 
 
 def test_identity_adapter_converts_unavailable_evidence_to_deployment_failure() -> None:
@@ -95,7 +120,7 @@ def test_identity_adapter_converts_unavailable_evidence_to_deployment_failure() 
         deployment._verify_running_platform_identity(
             UnavailableProvider(),
             EXPECTED,
-            binding_token=object(),
+            binding=_binding(object()),
         )
 
     assert (
@@ -113,7 +138,7 @@ def test_identity_adapter_converts_provider_crash_to_deployment_failure() -> Non
         deployment._verify_running_platform_identity(
             BrokenProvider(),
             EXPECTED,
-            binding_token=object(),
+            binding=_binding(object()),
         )
 
     assert (
@@ -134,12 +159,14 @@ def test_identity_adapter_never_treats_non_match_as_success(result: str) -> None
     provider = RecordingProvider(object())
     original = deployment.establish_identity_correspondence
     try:
-        deployment.establish_identity_correspondence = lambda expected, evidence: result
+        deployment.establish_identity_correspondence = (
+            lambda expected, evidence, *, binding=None: result
+        )
         with pytest.raises(IdentityVerificationFailed):
             deployment._verify_running_platform_identity(
                 provider,
                 EXPECTED,
-                binding_token=object(),
+                binding=_binding(object()),
             )
     finally:
         deployment.establish_identity_correspondence = original

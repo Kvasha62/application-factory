@@ -8,6 +8,8 @@ import pytest
 from deployment_operations.platform_identity import (
     ActualComponentIdentity,
     ActualIdentityUnavailable,
+    BindingEvaluationContext,
+    EvidenceCorrelation,
     EvidenceProvenance,
     IdentityField,
     PlatformIdentityBinding,
@@ -27,7 +29,32 @@ from running_platform.owner_state import (
     RunningPlatformOwnerState,
 )
 
-BINDING = PlatformIdentityBinding("evaluation-1")
+BINDING = PlatformIdentityBinding(
+    "evaluation-1",
+    BindingEvaluationContext(
+        authority="tests/evaluation",
+        basis="tests/deployment-record",
+        target="example-platform",
+        scope="test-environment",
+        sequence=1,
+        established_at="2026-09-16T00:00:00Z",
+    ),
+)
+
+
+def correlation(**overrides: object) -> EvidenceCorrelation:
+    """The owner's own correlation statement for one observation."""
+    values: dict[str, object] = {
+        "token": "evaluation-1",
+        "scope": "test-environment",
+        "sequence": 1,
+        "target": "example-platform",
+        "authority": "tests/owner-side-identity-source",
+        "basis": "tests/owner-observation/1",
+        "established_at": "2026-09-16T00:00:00Z",
+    }
+    values.update(overrides)
+    return EvidenceCorrelation(**values)
 
 
 def component(component_id: str = "authorization") -> ActualComponentIdentity:
@@ -62,7 +89,7 @@ def state(**overrides: object) -> RunningPlatformOwnerState:
         "extensions": IdentityField.absent(),
         "branding": IdentityField.absent(),
         "provenance": EvidenceProvenance.MEASURED,
-        "correlation_token": "evaluation-1",
+        "correlation": correlation(),
         "freshness_current": True,
     }
     values.update(overrides)
@@ -95,7 +122,7 @@ def test_snapshot_source_composes_the_existing_snapshot_contract() -> None:
     assert snapshot.manifest["manifest_id"] == "example-manifest"
     assert snapshot.components == (component(),)
     assert snapshot.membership_established is True
-    assert snapshot.correlation_token == "evaluation-1"
+    assert snapshot.correlation == correlation()
     assert snapshot.freshness_current is True
 
 
@@ -141,7 +168,7 @@ def test_snapshot_source_contains_no_expected_identity() -> None:
 def test_snapshot_source_observes_owner_state_once_per_evaluation() -> None:
     first = state()
     replacement = state(
-        correlation_token="evaluation-2",
+        correlation=correlation(token="evaluation-2", sequence=2),
         membership=ActualMembership(True, (component("booking"),)),
     )
 
@@ -157,7 +184,7 @@ def test_snapshot_source_observes_owner_state_once_per_evaluation() -> None:
     snapshot = OwnerStateSnapshotSource(reader).observe(BINDING)
 
     assert reader.calls == 1
-    assert snapshot.correlation_token == "evaluation-1"
+    assert snapshot.correlation == correlation()
     assert snapshot.components == (component(),)
 
 
@@ -180,7 +207,17 @@ def test_complete_owner_state_reaches_existing_provider() -> None:
     assert evidence.value.components[0].value.component_id == "authorization"
 
 
-def _surface_document(token: object) -> dict[str, object]:
+def _surface_document(token: object = "evaluation-1", **correlation_overrides) -> dict:
+    statement = {
+        "token": token,
+        "scope": "test-environment",
+        "sequence": 1,
+        "target": "example-platform",
+        "authority": "tests/owner-side-identity-source",
+        "basis": "tests/owner-observation/1",
+        "established_at": "2026-09-16T00:00:00Z",
+    }
+    statement.update(correlation_overrides)
     return {
         "platform_id": "example-platform",
         "membership_established": True,
@@ -211,7 +248,7 @@ def _surface_document(token: object) -> dict[str, object]:
         "extensions": {"state": "ABSENT"},
         "branding": {"state": "ABSENT"},
         "provenance": "MEASURED",
-        "correlation_token": token,
+        "correlation": statement,
         "freshness_current": True,
     }
 
@@ -227,7 +264,7 @@ def test_file_reader_accepts_independent_actual_identity_surface(tmp_path) -> No
 
     assert observed.platform_id == "example-platform"
     assert observed.membership.components[0].component_id == "authorization"
-    assert observed.correlation_token == "evaluation-1"
+    assert observed.correlation == correlation()
 
 
 def test_file_reader_rejects_expected_identity_contamination(tmp_path) -> None:
@@ -248,6 +285,39 @@ def test_file_reader_rejects_foreign_correlation(tmp_path) -> None:
     )
 
     with pytest.raises(ActualIdentityUnavailable, match="stale or foreign"):
+        FileRunningPlatformOwnerStateReader(path).read(BINDING)
+
+
+def test_file_reader_rejects_a_surface_without_a_correlation_statement(
+    tmp_path,
+) -> None:
+    document = _surface_document()
+    del document["correlation"]
+    path = tmp_path / "running_platform_identity.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ActualIdentityUnavailable, match="states no correlation"):
+        FileRunningPlatformOwnerStateReader(path).read(BINDING)
+
+
+def test_file_reader_rejects_an_incomplete_correlation_statement(tmp_path) -> None:
+    document = _surface_document()
+    del document["correlation"]["authority"]
+    path = tmp_path / "running_platform_identity.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ActualIdentityUnavailable, match="does not state its"):
+        FileRunningPlatformOwnerStateReader(path).read(BINDING)
+
+
+def test_file_reader_rejects_a_correlation_that_contradicts_the_surface(
+    tmp_path,
+) -> None:
+    document = _surface_document(target="another-platform")
+    path = tmp_path / "running_platform_identity.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ActualIdentityUnavailable, match="contradicts its platform"):
         FileRunningPlatformOwnerStateReader(path).read(BINDING)
 
 

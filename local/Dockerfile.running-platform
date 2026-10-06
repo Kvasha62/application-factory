@@ -1,0 +1,22 @@
+# Local Running Platform identity producer (owner side).
+#
+# LOCAL DOCKER / NON-PRODUCTION. This image carries the owner-side producer and
+# nothing else: no Deployment & Operations code, no expected deployment state,
+# no credentials or secrets. Its authoritative identity state is mounted at
+# /var/lib/running-platform (written by local/tools/prepare_local_platform.py).
+
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /opt/running-platform
+
+# The producer is stdlib-only by design, so the owner-side image needs no
+# third-party dependency and no network access at build time beyond the base
+# image.
+COPY src/running_platform/local_identity_service.py ./local_identity_service.py
+
+EXPOSE 8080
+
+ENTRYPOINT ["python", "local_identity_service.py"]

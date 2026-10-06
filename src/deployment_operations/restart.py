@@ -87,6 +87,9 @@ from deployment_operations.deployment import (
     Deployment,
     _probe,
     _verify_running_platform_identity,
+    deployment_record_basis,
+    evaluation_binding,
+    new_evaluation_handle,
 )
 from deployment_operations.errors import (
     DeploymentInputRejected,
@@ -116,7 +119,10 @@ from deployment_operations.health import (
     evaluate_health,
     verify_identity,
 )
-from deployment_operations.platform_identity import PlatformIdentityProvider
+from deployment_operations.platform_identity import (
+    PlatformIdentityBinding,
+    PlatformIdentityProvider,
+)
 from deployment_operations.platform_identity_source import (
     OwnerSuppliedPlatformIdentityProvider,
 )
@@ -197,6 +203,10 @@ EXECUTION_CHECKS: tuple[str, ...] = (
 #: done twice, and no uncontrolled runtime element can be left behind.
 _ATTEMPT_GUARD = threading.Lock()
 _ATTEMPT_LOCKS: dict[Path, threading.Lock] = {}
+
+
+#: The authority that establishes the binding of one restart attempt.
+AUTHORITY_RESTART = "deployment-operations/restart"
 
 
 @dataclass(frozen=True)
@@ -1076,6 +1086,9 @@ class _Attempt:
         self.up = set(self.current) if self.record.running else set()
         self.phases = [RestartPhaseRecord(name=name) for name in RESTART_PHASES]
         self.attempt_number = len(self.record.restarts) + 1
+        # The handle of this attempt, issued once: the seam and the journal of
+        # the attempt name the same evaluation, and it is nobody's earlier one.
+        self.handle = new_evaluation_handle()
 
     # -- the identity of this attempt ---------------------------------------
     @property
@@ -1084,15 +1097,38 @@ class _Attempt:
         return self.attempt_number
 
     @property
-    def binding_token(self) -> str:
-        """The opaque evaluation binding of *this* attempt.
+    def evaluation_binding(self) -> PlatformIdentityBinding:
+        """The binding of *this* attempt, with its established semantics.
 
-        Evidence correlated to the deployment itself, or to an earlier attempt,
-        is evidence of another evaluation: the owner-side boundary is asked
-        freshly, under a binding of this attempt, exactly as reconciliation asks
-        under a binding of its own observation (ADR-0019/0020).
+        The binding is not an opaque string: it states which authority
+        established it (this restart operation), the durable record it is
+        derived from, the identity-bearing platform it is for, the binding space
+        (this environment) and this attempt's position in it, and the instant it
+        was established. Only its handle crosses the owner-side boundary.
         """
-        return f"{self.record.deployment_id}#restart:{self.sequence}"
+        return evaluation_binding(
+            authority=AUTHORITY_RESTART,
+            token=self.binding_token,
+            basis=deployment_record_basis(self.record.deployment_id),
+            target=str(self.record.platform_id),
+            scope=self.record.environment_id,
+            sequence=self.sequence,
+            established_at=self.now(),
+        )
+
+    @property
+    def binding_token(self) -> str:
+        """The opaque evaluation handle of *this* attempt.
+
+        A fresh handle, issued for this attempt and for no other: it names no
+        platform, no environment, no attempt number and no digest, and nothing
+        is read out of it. Evidence correlated to the deployment itself, or to
+        an earlier attempt, is evidence of another evaluation — an answer to a
+        handle this attempt never issued — so the owner-side boundary is asked
+        freshly, under a handle of this attempt, exactly as reconciliation asks
+        under a handle of its own observation (ADR-0019/0020).
+        """
+        return self.handle
 
     def identity_evidence(self) -> dict[str, Any]:
         return _identity_evidence(self.record, self.elements)
@@ -1404,7 +1440,7 @@ class _Attempt:
                 _verify_running_platform_identity(
                     self.provider,
                     {"instance_digest": self.record.instance_digest},
-                    binding_token=self.binding_token,
+                    binding=self.evaluation_binding,
                 )
             except IdentityVerificationFailed as error:
                 errors.extend(error.errors or [str(error)])

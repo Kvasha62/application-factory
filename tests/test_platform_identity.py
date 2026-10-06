@@ -6,6 +6,7 @@ Test doubles supply actual evidence. They are not a production provider.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from hashlib import sha256
 
 import pytest
@@ -14,6 +15,7 @@ from deployment_operations.platform_identity import (
     ActualComponentIdentity,
     ActualEvidence,
     ActualIdentityUnavailable,
+    BindingEvaluationContext,
     EvidenceCorrelation,
     EvidenceFreshness,
     EvidenceProvenance,
@@ -25,6 +27,7 @@ from deployment_operations.platform_identity import (
     compute_actual_digest,
     establish_identity_correspondence,
     project_actual_identity,
+    require_correlated_evidence,
     validate_actual_evidence,
     validate_actual_surface,
 )
@@ -36,15 +39,74 @@ from deployment_operations.state import (
 )
 from platform_instance.instance import compute_instance_digest
 
+#: The binding space the contract tests evaluate in.
+SCOPE = "test-environment"
+#: The platform the contract tests evaluate.
+TARGET = "example-platform"
+#: The producer authority the contract tests declare.
+AUTHORITY = "tests/owner-side-identity-source"
+#: How the contract tests ground an observation.
+BASIS = "tests/owner-observation/1"
+#: A deterministic instant.
+ESTABLISHED_AT = "2026-09-16T00:00:00Z"
+
+
+def _binding(
+    *,
+    token: object = "evaluation-1",
+    target: str = TARGET,
+    scope: str = SCOPE,
+    sequence: int = 1,
+) -> PlatformIdentityBinding:
+    """One evaluation binding with the semantics the evaluation established."""
+
+    return PlatformIdentityBinding(
+        token=token,
+        context=BindingEvaluationContext(
+            authority="tests/evaluation",
+            basis="tests/deployment-record",
+            target=target,
+            scope=scope,
+            sequence=sequence,
+            established_at=ESTABLISHED_AT,
+        ),
+    )
+
+
+def _correlation(
+    *,
+    token: object = "evaluation-1",
+    target: str = TARGET,
+    scope: str = SCOPE,
+    sequence: int = 1,
+    authority: str = AUTHORITY,
+    basis: str = BASIS,
+    established_at: str = ESTABLISHED_AT,
+) -> EvidenceCorrelation:
+    """One producer-established correlation statement."""
+
+    return EvidenceCorrelation(
+        token=token,
+        scope=scope,
+        sequence=sequence,
+        target=target,
+        authority=authority,
+        basis=basis,
+        established_at=established_at,
+    )
+
 
 def _component(
     component_id: str = "authorization",
     version: str = "0.1.0",
     *,
     token: object = "evaluation-1",
+    scope: str = SCOPE,
+    sequence: int = 1,
     current: bool = True,
     execution_digest: str | None = None,
     artifact: dict[str, object] | None = None,
+    target: str = TARGET,
 ) -> ActualEvidence:
     if artifact is None:
         artifact = {
@@ -60,7 +122,9 @@ def _component(
     return ActualEvidence(
         value=ActualComponentIdentity(component_id, version, artifact),
         provenance=EvidenceProvenance.MEASURED,
-        correlation=EvidenceCorrelation(token),
+        correlation=_correlation(
+            token=token, target=target, scope=scope, sequence=sequence
+        ),
         freshness=EvidenceFreshness(current),
     )
 
@@ -85,7 +149,9 @@ def _surface(
             "manifest_digest": "sha256:" + "00" * 32,
         },
         manifest_state=manifest_state,
-        components=components if components is not None else (_component(),),
+        components=(
+            components if components is not None else (_component(target=platform_id),)
+        ),
         membership_established=membership_established,
         configuration=(
             configuration
@@ -107,11 +173,29 @@ def _evidence(
     provenance: EvidenceProvenance = EvidenceProvenance.MEASURED,
     current: bool = True,
     token: object = "evaluation-1",
+    scope: str = SCOPE,
+    sequence: int = 1,
+    target: str | None = None,
+    authority: str = AUTHORITY,
+    basis: str = BASIS,
 ) -> ActualEvidence:
+    """One observation whose correlation states the platform it observed.
+
+    ``target`` defaults to the surface's own ``platform_id``: the producer states
+    what it actually observed, and never the evaluation's expectation.
+    """
+
     return ActualEvidence(
         value=surface,
         provenance=provenance,
-        correlation=EvidenceCorrelation(token),
+        correlation=_correlation(
+            token=token,
+            target=surface.platform_id if target is None else target,
+            scope=scope,
+            sequence=sequence,
+            authority=authority,
+            basis=basis,
+        ),
         freshness=EvidenceFreshness(current),
     )
 
@@ -134,18 +218,34 @@ class _RecordingProvider:
 
 
 def test_platform_identity_binding_carries_no_expected_identity() -> None:
-    binding = PlatformIdentityBinding(token=object())
+    binding = _binding(token=object())
 
-    assert set(binding.__dataclass_fields__) == {"token"}
+    assert set(binding.__dataclass_fields__) == {"token", "context"}
     assert not hasattr(binding, "instance_digest")
     assert not hasattr(binding, "manifest")
     assert not hasattr(binding, "components")
 
 
+def test_binding_context_carries_no_expected_document() -> None:
+    context = _binding().context
+
+    assert context is not None
+    assert set(context.__dataclass_fields__) == {
+        "authority",
+        "basis",
+        "target",
+        "scope",
+        "sequence",
+        "established_at",
+    }
+    assert not hasattr(context, "instance_digest")
+    assert not hasattr(context, "components")
+
+
 def test_provider_protocol_is_consumer_side_only() -> None:
     provider: PlatformIdentityProvider = _RecordingProvider(_evidence(_surface()))
 
-    observed = provider.observe_identity(PlatformIdentityBinding(token="bound"))
+    observed = provider.observe_identity(_binding(token="bound"))
 
     assert observed.value.platform_id == "example-platform"
     assert not hasattr(provider, "deploy")
@@ -171,7 +271,7 @@ def test_missing_provenance_is_unavailable() -> None:
     evidence = ActualEvidence(
         value=_surface(),
         provenance=None,  # type: ignore[arg-type]
-        correlation=EvidenceCorrelation("evaluation-1"),
+        correlation=_correlation(),
         freshness=EvidenceFreshness(True),
     )
 
@@ -183,7 +283,7 @@ def test_ambiguous_provenance_is_unavailable() -> None:
     evidence = ActualEvidence(
         value=_surface(),
         provenance=("MEASURED", "ATTESTED"),  # type: ignore[arg-type]
-        correlation=EvidenceCorrelation("evaluation-1"),
+        correlation=_correlation(),
         freshness=EvidenceFreshness(True),
     )
 
@@ -207,7 +307,7 @@ def test_non_normative_provenance_is_unavailable() -> None:
     evidence = ActualEvidence(
         value=_surface(),
         provenance="DERIVED",  # type: ignore[arg-type]
-        correlation=EvidenceCorrelation("evaluation-1"),
+        correlation=_correlation(),
         freshness=EvidenceFreshness(True),
     )
 
@@ -277,7 +377,9 @@ def test_extra_actual_component_is_mismatch() -> None:
     actual = _surface(components=expected_surface.components + (extra,))
 
     assert (
-        establish_identity_correspondence(expected, _evidence(actual))
+        establish_identity_correspondence(
+            expected, _evidence(actual), binding=_binding()
+        )
         is IdentityCorrespondenceResult.MISMATCH
     )
 
@@ -290,22 +392,34 @@ def test_missing_expected_component_is_mismatch() -> None:
     actual = _surface(components=(_component("authorization"),))
 
     assert (
-        establish_identity_correspondence(expected, _evidence(actual))
+        establish_identity_correspondence(
+            expected, _evidence(actual), binding=_binding()
+        )
         is IdentityCorrespondenceResult.MISMATCH
     )
 
 
 def test_expected_digest_echo_is_not_actual_identity() -> None:
+    """An observation of another platform is refused before any digest compare.
+
+    Its handle is the evaluation's and its content digests differently, but the
+    producer states another ``target``, so the correlation is not established and
+    the result is UNAVAILABLE — a stronger refusal than a digest mismatch.
+    """
     expected = _expected_from_surface(_surface())
     other = _surface(platform_id="another-platform")
 
     assert compute_actual_digest(_evidence(other)) != expected["instance_digest"]
     assert (
-        establish_identity_correspondence(expected, _evidence(other))
-        is IdentityCorrespondenceResult.MISMATCH
+        establish_identity_correspondence(
+            expected, _evidence(other), binding=_binding()
+        )
+        is IdentityCorrespondenceResult.UNAVAILABLE
     )
     assert (
-        establish_identity_correspondence(expected, _evidence(_surface()))
+        establish_identity_correspondence(
+            expected, _evidence(_surface()), binding=_binding()
+        )
         is IdentityCorrespondenceResult.MATCH
     )
 
@@ -328,6 +442,7 @@ def test_stale_evidence_is_unavailable() -> None:
         establish_identity_correspondence(
             expected,
             _evidence(_surface(), current=False),
+            binding=_binding(),
         )
         is IdentityCorrespondenceResult.UNAVAILABLE
     )
@@ -354,7 +469,9 @@ def test_valid_execution_digest_does_not_establish_platform_identity() -> None:
     assert "execution_digest" not in projected["components"][0]["artifact"]
     assert compute_actual_digest(_evidence(actual)) != execution_digest
     assert (
-        establish_identity_correspondence(expected, _evidence(actual))
+        establish_identity_correspondence(
+            expected, _evidence(actual), binding=_binding()
+        )
         is IdentityCorrespondenceResult.MISMATCH
     )
 
@@ -441,14 +558,16 @@ def test_invalid_expected_digest_is_unavailable_not_mismatch() -> None:
     expected = {"instance_digest": "not-a-sha256-digest"}
 
     assert (
-        establish_identity_correspondence(expected, _evidence(_surface()))
+        establish_identity_correspondence(
+            expected, _evidence(_surface()), binding=_binding()
+        )
         is IdentityCorrespondenceResult.UNAVAILABLE
     )
 
 
 def test_missing_expected_digest_is_unavailable_not_match() -> None:
     assert (
-        establish_identity_correspondence({}, _evidence(_surface()))
+        establish_identity_correspondence({}, _evidence(_surface()), binding=_binding())
         is IdentityCorrespondenceResult.UNAVAILABLE
     )
 
@@ -493,7 +612,7 @@ def test_incomplete_artifact_absence_is_unavailable() -> None:
         validate_actual_evidence(_evidence(surface))
     assert (
         establish_identity_correspondence(
-            _expected_from_surface(_surface()), _evidence(surface)
+            _expected_from_surface(_surface()), _evidence(surface), binding=_binding()
         )
         is IdentityCorrespondenceResult.UNAVAILABLE
     )
@@ -764,3 +883,235 @@ def test_no_second_digest_type_is_defined() -> None:
         "ActualPlatformDigest",
     ):
         assert not hasattr(identity, forbidden)
+
+
+# ---------------------------------------------------------------------------
+# The correlation rule: binding -> producer-established binding identity ->
+# correlated actual evidence -> current Running Platform identity -> D_actual.
+# Equal handles are never a proof of correspondence (ADR-0019 §26,
+# ADR-0020 §18).
+# ---------------------------------------------------------------------------
+
+#: One attempt's evaluation handle. A handle is a nonce: it names no platform,
+#: no environment, no attempt and no digest, and nothing is read out of it —
+#: including the position, which the evaluation context establishes.
+ATTEMPT_ONE = "ev-" + "1a" * 16
+#: The next evaluation's handle: the same platform, a later binding, another
+#: nonce. The handles are not related to each other in any way.
+ATTEMPT_TWO = "ev-" + "2b" * 16
+
+
+def _component_of_binding(
+    component_id: str, binding: PlatformIdentityBinding
+) -> ActualEvidence:
+    """One component observation the producer attributes to this binding."""
+
+    context = binding.context
+    assert isinstance(context, BindingEvaluationContext)
+    return _component(
+        component_id,
+        token=binding.token,
+        scope=context.scope,
+        sequence=context.sequence,
+    )
+
+
+def _surface_of_binding(
+    binding: PlatformIdentityBinding, *, manifest_state: str = "validated"
+) -> PlatformIdentitySurface:
+    """One actual surface whose component observations state this binding."""
+
+    return _surface(
+        manifest_state=manifest_state,
+        components=(_component_of_binding("authorization", binding),),
+    )
+
+
+def _evidence_of_binding(
+    binding: PlatformIdentityBinding,
+    surface: PlatformIdentitySurface | None = None,
+) -> ActualEvidence:
+    """One observation the producer attributes to exactly this binding."""
+
+    context = binding.context
+    assert isinstance(context, BindingEvaluationContext)
+    return _evidence(
+        _surface_of_binding(binding) if surface is None else surface,
+        token=binding.token,
+        scope=context.scope,
+        sequence=context.sequence,
+    )
+
+
+def test_equal_handles_of_two_bindings_do_not_establish_correspondence() -> None:
+    """An echo of the handle is not the identity of the binding."""
+
+    evidence = _evidence_of_binding(_binding(token=ATTEMPT_ONE))
+
+    # The echo holds: this observation is labelled with exactly this handle.
+    assert evidence.correlation.echoes(ATTEMPT_ONE) is True
+
+    for other in (
+        _binding(token=ATTEMPT_ONE, scope="another-environment"),
+        _binding(token=ATTEMPT_ONE, target="another-platform"),
+        _binding(token=ATTEMPT_ONE, sequence=7),
+    ):
+        with pytest.raises(
+            ActualIdentityUnavailable, match="another identity-bearing binding"
+        ):
+            require_correlated_evidence(other, evidence)
+        assert (
+            establish_identity_correspondence(
+                _expected_from_surface(_surface()), evidence, binding=other
+            )
+            is IdentityCorrespondenceResult.UNAVAILABLE
+        )
+
+
+def test_an_observation_of_an_earlier_binding_is_unavailable() -> None:
+    """An earlier binding's observation is not evidence for this one."""
+
+    earlier = _evidence_of_binding(_binding(token=ATTEMPT_ONE, sequence=1))
+
+    # The evaluation was re-established: another attempt, a later position.
+    with pytest.raises(ActualIdentityUnavailable, match="token does not agree"):
+        require_correlated_evidence(_binding(token=ATTEMPT_TWO, sequence=2), earlier)
+
+    # Even under the same handle, an earlier position is another binding.
+    same_handle_earlier = _evidence_of_binding(_binding(token=ATTEMPT_TWO, sequence=1))
+    with pytest.raises(ActualIdentityUnavailable, match="sequence does not agree"):
+        require_correlated_evidence(
+            _binding(token=ATTEMPT_TWO, sequence=2), same_handle_earlier
+        )
+    assert (
+        establish_identity_correspondence(
+            _expected_from_surface(_surface()),
+            same_handle_earlier,
+            binding=_binding(token=ATTEMPT_TWO, sequence=2),
+        )
+        is IdentityCorrespondenceResult.UNAVAILABLE
+    )
+
+
+def test_component_evidence_of_another_binding_is_unavailable() -> None:
+    """Component observations of two bindings cannot be mixed."""
+
+    authorization = _component("authorization", token="evaluation-1")
+    reporting = _component(
+        "reporting", token="evaluation-1", scope="another-environment"
+    )
+    surface = _surface(components=(authorization, reporting))
+
+    # The handles look equal; the binding identities are not.
+    assert reporting.correlation.token == authorization.correlation.token
+    assert (
+        reporting.correlation.binding_identity()
+        != authorization.correlation.binding_identity()
+    )
+    with pytest.raises(ActualIdentityUnavailable, match="component correlation"):
+        validate_actual_evidence(_evidence(surface, token="evaluation-1"))
+    with pytest.raises(ActualIdentityUnavailable, match="component correlation"):
+        require_correlated_evidence(
+            _binding(token="evaluation-1"), _evidence(surface, token="evaluation-1")
+        )
+
+
+def test_correlation_cannot_be_manufactured_from_expected_deployment_state() -> None:
+    """The evaluating side owns the expectation, never a correlation."""
+
+    binding = _binding(token=ATTEMPT_TWO, sequence=2)
+    context = binding.context
+    assert isinstance(context, BindingEvaluationContext)
+    expected = _expected_from_surface(_surface())
+    # The expectation carries no correlation to copy: that is the producer's fact.
+    assert "correlation" not in expected
+
+    produced = _evidence_of_binding(binding)
+    # Everything the evaluation established about the binding is its own; a
+    # correlation assembled from it states no producing authority, basis or
+    # instant, so nothing attributes the observation and it is refused.
+    manufactured = replace(
+        produced,
+        correlation=EvidenceCorrelation(
+            token=binding.token,
+            scope=context.scope,
+            sequence=context.sequence,
+            target=context.target,
+        ),
+    )
+    with pytest.raises(
+        ActualIdentityUnavailable,
+        match="does not state its authority, basis, established_at",
+    ):
+        require_correlated_evidence(binding, manufactured)
+    assert (
+        establish_identity_correspondence(expected, manufactured, binding=binding)
+        is IdentityCorrespondenceResult.UNAVAILABLE
+    )
+
+    # Nor does a manufactured attribution supply identity: D_actual is computed
+    # from the observation alone, and the observation's content is what the
+    # expectation is compared with.
+    attributed = replace(
+        produced,
+        correlation=EvidenceCorrelation(
+            token=binding.token,
+            scope=context.scope,
+            sequence=context.sequence,
+            target=context.target,
+            authority=context.authority,
+            basis=context.basis,
+            established_at=context.established_at,
+        ),
+    )
+    assert compute_actual_digest(attributed) == compute_actual_digest(produced)
+    assert (
+        establish_identity_correspondence(
+            _expected_from_surface(_surface(manifest_state="approved")),
+            attributed,
+            binding=binding,
+        )
+        is IdentityCorrespondenceResult.MISMATCH
+    )
+
+
+def test_the_producer_established_correlation_path_establishes_correspondence() -> None:
+    """The whole chain, in order, with every step stated from its own side."""
+
+    binding = _binding(token=ATTEMPT_TWO, sequence=2)
+    context = binding.context
+    assert isinstance(context, BindingEvaluationContext)
+    surface = _surface_of_binding(binding)
+    evidence = _evidence_of_binding(binding, surface)
+
+    # 1. the producer's statement of the binding it observed is established.
+    correlation = require_correlated_evidence(binding, evidence)
+    assert correlation.binding_identity() == context.binding_identity(binding.token)
+    # The producer states its own attribution; it is not required to equal the
+    # evaluation's, and here it does not.
+    assert correlation.authority == AUTHORITY
+    assert correlation.authority != context.authority
+
+    # 2. the identity comes from the observation, and from nothing else.
+    projected = project_actual_identity(evidence)
+    assert projected["platform_id"] == surface.platform_id
+    assert "instance_digest" not in projected
+    assert surface.platform_id == context.target
+
+    # 3. D_actual is computed from that projection and compared with D_expected.
+    expected = _expected_from_surface(_surface())
+    assert compute_actual_digest(evidence) == expected["instance_digest"]
+    assert (
+        establish_identity_correspondence(expected, evidence, binding=binding)
+        is IdentityCorrespondenceResult.MATCH
+    )
+
+    # 4. same binding, different observation: content decides, not the binding.
+    other = _evidence_of_binding(
+        binding, _surface_of_binding(binding, manifest_state="approved")
+    )
+    assert compute_actual_digest(other) != expected["instance_digest"]
+    assert (
+        establish_identity_correspondence(expected, other, binding=binding)
+        is IdentityCorrespondenceResult.MISMATCH
+    )

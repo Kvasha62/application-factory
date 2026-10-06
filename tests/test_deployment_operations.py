@@ -111,6 +111,7 @@ from deployment_operations import (
 )
 from deployment_operations.platform_identity import (
     ActualComponentIdentity,
+    EvidenceCorrelation,
     IdentityField,
     PlatformIdentityBinding,
 )
@@ -124,8 +125,28 @@ from platform_manifest import compute_manifest_digest, validate_document
 
 
 class _CanonicalTestIdentitySource:
+    """Owner-side double of the canonical platform's actual identity.
+
+    It answers for exactly the binding it was given and states, as its own
+    correlation fact, the platform identity it observed, the binding space of
+    this request's environment and this attempt's position in it. The expected
+    Platform Instance is never part of that statement.
+    """
+
     def __init__(self, request: DeploymentRequest) -> None:
         self.request = request
+
+    def correlation(self, binding: PlatformIdentityBinding) -> EvidenceCorrelation:
+        """The correlation this double states for the binding it answered."""
+        return EvidenceCorrelation(
+            token=binding.token,
+            scope=self.request.environment.environment_id,
+            sequence=self.request.attempt,
+            target=str(self.request.instance_document["platform_id"]),
+            authority="tests/owner-side-identity-source",
+            basis="tests/owner-observation/1",
+            established_at="2026-09-16T00:00:00Z",
+        )
 
     def observe(self, binding: PlatformIdentityBinding) -> ActualPlatformSnapshot:
         components = []
@@ -159,7 +180,7 @@ class _CanonicalTestIdentitySource:
             extensions=IdentityField.absent(),
             branding=IdentityField.absent(),
             provenance="MEASURED",
-            correlation_token=binding.token,
+            correlation=self.correlation(binding),
             freshness_current=True,
         )
 
@@ -268,6 +289,36 @@ def _cli_env() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # AC1 — exact Platform Instance identity
 # ---------------------------------------------------------------------------
+
+
+class _RecordingIdentitySource:
+    """One owner-side double that records the bindings it was asked under."""
+
+    def __init__(self, inner: _CanonicalTestIdentitySource) -> None:
+        self.inner = inner
+        self.bindings: list[PlatformIdentityBinding] = []
+
+    def observe(self, binding: PlatformIdentityBinding) -> ActualPlatformSnapshot:
+        self.bindings.append(binding)
+        return self.inner.observe(binding)
+
+
+class _ReplayingIdentitySource:
+    """One double that answers a later evaluation with an earlier observation.
+
+    The observation is genuine — a real producer produced it, for the binding it
+    states — and it is offered under another evaluation's handle. Content and
+    correlation both look complete; only the correlation rule can refuse it, and
+    it must.
+    """
+
+    def __init__(self, captured: ActualPlatformSnapshot) -> None:
+        self.captured = captured
+        self.bindings: list[PlatformIdentityBinding] = []
+
+    def observe(self, binding: PlatformIdentityBinding) -> ActualPlatformSnapshot:
+        self.bindings.append(binding)
+        return self.captured
 
 
 class TestExactInstanceIdentity:
@@ -667,6 +718,105 @@ class TestIdentityAcceptanceGate:
             verified = names.index("identity_verified")
             realized = names.index("deployment_realized")
             assert ready < verified < realized
+
+    def test_the_evaluation_handle_is_opaque_and_never_the_deployment_id(
+        self, tmp_path, instance, manifest
+    ):
+        """The handle of a real deployment operation, inspected end to end.
+
+        The operation's *record* identity is derived from expected identity
+        (``dep-<platform>-<environment>-<12 hex of D_expected>-a<attempt>``) and
+        stays on the evaluating side (it is the durable basis). The handle that
+        crosses the boundary is an unrelated nonce: no part of it is expected
+        identity, and nothing about the evaluation can be read out of it.
+        """
+
+        request = self.request(tmp_path, instance, manifest)
+        recording = _RecordingIdentitySource(_CanonicalTestIdentitySource(request))
+        with _deployment_operations.deploy(
+            request, identity_provider=OwnerSuppliedPlatformIdentityProvider(recording)
+        ) as deployment:
+            record = deployment.record
+
+        assert len(recording.bindings) == 1
+        binding = recording.bindings[0]
+        handle = binding.token
+        assert isinstance(handle, str)
+        assert handle.startswith("ev-")
+        body = handle.removeprefix("ev-")
+        assert len(body) == 32
+        assert all(character in "0123456789abcdef" for character in body)
+        assert handle != record.deployment_id
+        for forbidden in (
+            str(instance.document["platform_id"]),
+            str(request.environment.environment_id),
+            str(instance.instance_digest).removeprefix("sha256:")[:12],
+            record.deployment_id,
+            "dep-",
+            "#",
+        ):
+            assert forbidden not in handle, forbidden
+        # The position is the operation's own fact, established in the context.
+        assert binding.context is not None
+        assert binding.context.sequence == request.attempt
+
+    def test_two_operations_of_the_same_instance_issue_different_handles(
+        self, tmp_path, instance, manifest
+    ):
+        """Freshness is the handle's freshness: it is issued per evaluation."""
+
+        handles = []
+        for name in ("first", "second"):
+            request = self.request(tmp_path / name, instance, manifest)
+            recording = _RecordingIdentitySource(_CanonicalTestIdentitySource(request))
+            with _deployment_operations.deploy(
+                request,
+                identity_provider=OwnerSuppliedPlatformIdentityProvider(recording),
+            ):
+                handles.append(recording.bindings[0].token)
+
+        assert handles[0] != handles[1]
+        assert all(handle.startswith("ev-") for handle in handles)
+
+    def test_a_replayed_answer_is_refused_for_the_next_operation(
+        self, tmp_path, instance, manifest
+    ):
+        """An answer produced for one evaluation is not evidence for another.
+
+        The producer here answers with the *same* observation envelope it
+        produced for the first operation, under the second operation's handle:
+        a reused observation can not be made evidence for a new evaluation by
+        relabelling it.
+        """
+
+        first = self.request(tmp_path / "first", instance, manifest)
+        first_source = _CanonicalTestIdentitySource(first)
+        recording = _RecordingIdentitySource(first_source)
+        with _deployment_operations.deploy(
+            first, identity_provider=OwnerSuppliedPlatformIdentityProvider(recording)
+        ):
+            pass
+        # The observation exactly as it was produced, for the handle it states.
+        captured = first_source.observe(recording.bindings[0])
+
+        second = self.request(tmp_path / "second", instance, manifest)
+        replaying = _ReplayingIdentitySource(captured)
+        with pytest.raises(IdentityVerificationFailed):
+            _deployment_operations.deploy(
+                second,
+                identity_provider=OwnerSuppliedPlatformIdentityProvider(replaying),
+            )
+        assert replaying.bindings, "the operation asked under its own handle"
+        assert replaying.bindings[0].token != captured.correlation.token
+        record = read_state(second.environment, instance)
+        assert record.identity_verified is False
+        assert record.deployed is False
+        assert record.failure is not None
+        assert record.failure.stage == "ready"
+        assert record.failure.reason == "identity/version/digest verification failed"
+        assert any(
+            "unavailable" in error for error in record.failure.errors
+        ), "a replayed observation establishes nothing: UNAVAILABLE, not MATCH"
 
 
 class TestHonestDeployedClaim:
@@ -1709,6 +1859,9 @@ class TestOwnershipBoundary:
             "platform_manifest",
             "re",
             "running_platform",
+            # The evaluation handle is a nonce: 128 bits of randomness per
+            # evaluation, generated from the standard library.
+            "secrets",
             "threading",
             "shutil",
             "subprocess",
@@ -2167,10 +2320,28 @@ class TestDeploymentStateScenarios:
 # ---------------------------------------------------------------------------
 
 
+#: The handle an ambient, statically published owner surface states. A surface
+#: written before an operation cannot echo that operation's handle: it is a
+#: nonce, and an answer for it has to be produced *for it*.
+AMBIENT_HANDLE = "ev-" + "0f" * 16
+
+
 class TestCommandLine:
     """One deployment operation is runnable, and reports its outcome."""
 
-    def test_command_line_deployment_succeeds(self, tmp_path, instance, manifest):
+    def test_command_line_deployment_refuses_an_ambient_owner_surface(
+        self, tmp_path, instance, manifest
+    ):
+        """The ambient surface is read, and refused: it answers no handle.
+
+        The command line can only use the default file source, and a document
+        published before the operation cannot echo the opaque handle this
+        operation issued — it is evidence of another evaluation (ADR-0020 §18).
+        The operation therefore fails closed instead of accepting it, and the
+        shipped way to give the operation a correlation it can establish is an
+        identity provider over a boundary that receives the handle (the S4
+        adapter path), which the command line deliberately cannot construct.
+        """
         manifest_path = tmp_path / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         instance_path = tmp_path / "instance.json"
@@ -2205,12 +2376,19 @@ class TestCommandLine:
                     "extensions": {"state": "ABSENT"},
                     "branding": {"state": "ABSENT"},
                     "provenance": "MEASURED",
-                    "correlation_token": derive_deployment_id(
-                        PLATFORM_ID,
-                        instance.instance_digest,
-                        "local-cli",
-                        1,
-                    ),
+                    # The ambient surface must state its own correlation; it
+                    # cannot state the handle of the operation about to run, so
+                    # the operation refuses it. The token is opaque on purpose:
+                    # no expected identity material is written into it.
+                    "correlation": {
+                        "token": AMBIENT_HANDLE,
+                        "scope": "local-cli",
+                        "sequence": 1,
+                        "target": PLATFORM_ID,
+                        "authority": "tests/owner-side-identity-source",
+                        "basis": "tests/owner-observation/1",
+                        "established_at": "2026-09-16T00:00:00Z",
+                    },
                     "freshness_current": True,
                 },
                 indent=2,
@@ -2260,9 +2438,15 @@ class TestCommandLine:
             env=_cli_env(),
             check=False,
         )
-        assert completed.returncode == 0, completed.stderr
-        assert "deployed=True" in completed.stdout
-        assert '"lifecycle": "realized"' in completed.stdout
+        assert completed.returncode == 1
+        assert "identity/version/digest verification failed" in completed.stderr
+        assert "stale or foreign correlation" in completed.stderr
+        written = list((runtime_root / "operations").glob("*.json"))
+        assert written, "the failed operation is recorded where it happened"
+        record = json.loads(written[0].read_text(encoding="utf-8"))
+        assert record["lifecycle"] == "failed"
+        assert record["conditions"]["deployed"] is False
+        assert record["conditions"]["identity_verified"] is False
 
     def test_command_line_reports_failure_with_a_nonzero_exit(
         self, tmp_path, instance, manifest
