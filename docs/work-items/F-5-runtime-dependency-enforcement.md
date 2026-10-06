@@ -1,6 +1,6 @@
 # F-5 Work Item — Runtime Dependency Enforcement
 
-- **Status:** Approved — revision 2, approved by the owner on 2026-10-05 (permanent PR #138 comment `5992205274`) at the exact SHA `8bc54ccf0cfac1d0643814f90a578ac93d4eee8b`
+- **Status:** Approved — revision 2, approved by the owner on 2026-10-05 (permanent PR #138 comment `5992205274`) at the exact SHA `8bc54ccf0cfac1d0643814f90a578ac93d4eee8b`; **implementation complete** after PR #150 merged at `42ca157ae1a825223df8adcea024017085cbfc04` on 2026-10-06 (closure evidence in §6.2)
 - **Revision:** 2 — corrected for owner decisions D-A / P1 / P2 (PR #138 comment `5991426192`). Governance/documentation correction only; no implementation.
 - **Approval history:** Revision 1 was approved by the owner on 2026-10-05 (commit `2d01c00`); that approval covered the pre-correction text and did **not** carry over to revision 2, whose scope differs. Revision 2 was then approved by the owner on 2026-10-05 (PR #138 comment `5992205274`), limited to the exact text at SHA `8bc54ccf0cfac1d0643814f90a578ac93d4eee8b`. Sections §1–§5 below are byte-identical to that SHA; only this governance record was edited afterwards.
 - **Governance basis:** ADR-0017 §44
@@ -106,7 +106,27 @@ That cascade is authorized by its own explicit owner decisions in permanent PR #
 | `5998764930` (G2 = Option A) | the in-place amendment of the immutable version recorded as a dated one-off owner exception, additive-only, in `factory/control_plane/README.md` |
 | `5999402241` (G3) | the Slice-2 contract digest and fingerprint re-pins, `SLICE1_V1_DIGEST`, the five dependent ranges, the required derived artifacts and the required test expectations/pins |
 
-No part of that cascade is authorized by revision 2 alone, and this work item's boundary is not broadened by recording it. D2=B remains out of scope (§3) and unapproved.
+No part of that cascade is authorized by revision 2 alone, and this work item's boundary is not broadened by recording it. D2=B remains out of scope (§3); its separate Level-C change set was subsequently owner-approved in PR #138 comment `6011355240` and merged via PR #151 (head `e59180227a527f6770c11da50e9bdaf2925b4568`, merge commit `795f3bd26ea844eae96521eb77305c21241a597a`). That separate closure does not add D2=B to this work item’s scope or deliverables.
+
+### 6.2 Implementation closure evidence
+
+**F-5 implementation status: COMPLETE and MERGED.** Revision 2 remains the exact owner-approved
+work-item text at SHA `8bc54ccf0cfac1d0643814f90a578ac93d4eee8b` (PR #138 comment `5992205274`).
+Sections §1–§5 above remain byte-identical to that approved revision. This closure record adds
+outcome evidence only; it does not broaden or retroactively amend the approved scope. The separately
+authorized identity `0.4.0` cascade remains distinct under §6.1.
+
+| Gate / outcome | Evidence |
+|---|---|
+| Independent review | PR #138 comment `6001427278` reviewed PR #150 at `26ebae2be336f1a0b6539c56510bae195d856276`: F-5 technical acceptance **PASS**, overall **PASS WITH FINDINGS**. The F-1/S4 governance findings were subsequently dispositioned by the owner in comment `6010112046` and recorded closed in `6010183919`; the remaining documentation closures were recorded in `6010901930`. |
+| Owner approval | Revision 2 implementation authorization: PR #138 comment `5992205274`, limited to the exact SHA above. Separate owner approval to merge PR #150 after the completed review and checks: comment `6010966700`. |
+| PR #150 merge | PR #150 head `b0ea954c4df5e42b5030b363a24911b5a4c65356` merged on 2026-10-06 at `42ca157ae1a825223df8adcea024017085cbfc04`. |
+| Quality Gate / CI | Post-merge Quality Gate run `37425867742` at merge SHA `42ca157…`: **success**, including compile, dependency check, Ruff, Black, root tests, and Control Plane tests. |
+| Deterministic artifact build and publication | Publish component artifacts run `37425867719` at `42ca157…`: **success**; the deterministic build/verification job and GHCR publish-by-digest job both completed successfully. |
+| Post-publication immutable-content verification | Read-only run `37428180050` (`workflow_dispatch`, head `42ca157…`): **success**; job “Fetch + independent SHA-256 of 9 digest-addressed artifacts” completed successfully. |
+
+These records establish implementation, CI, artifact publication, and post-publication verification;
+they do **not** assert that a production runtime bootstrap or deployment was performed.
 
 ## 7. References
 
