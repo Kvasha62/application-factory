@@ -175,9 +175,9 @@ This ADR is **Ratified**: the owner ratified it on 2026-10-05, selecting **D1=A*
 Ratification is a decision act, not an implementation authorization. Per ADR-0017 §44 this document does not pre-approve implementation merely by defining the decision. Two approval gates remain outside it:
 
 - the **F-5 implementation slice** requires its own approved work item and acceptance criteria — `docs/work-items/F-5-runtime-dependency-enforcement.md`;
-- the **D2=B change set** (§4) requires its own separate Level-C work item — `docs/work-items/D2B-library-reclassification.md`, which is **not approved**.
+- the **D2=B change set** (§4) requires its own separate Level-C work item — `docs/work-items/D2B-library-reclassification.md`. At the time this ADR was ratified, that work item was **not approved**; the owner subsequently approved it in permanent PR #138 comment `6011355240`, and its implementation was merged via PR #151 into `main` at `795f3bd26ea844eae96521eb77305c21241a597a` on 2026-10-06. This later implementation does not change D1=A / D2=B or expand the F-5 work-item boundary.
 
-This ADR neither grants nor withdraws either approval. The current state of each is recorded in the work item that owns it, and that document — not this ADR — is authoritative for it.
+This ADR did not grant implementation authorization at ratification. The F-5 work item’s owner-approved scope remains recorded there; its implementation closure is recorded in `docs/work-items/F-5-runtime-dependency-enforcement.md` §6.2. D2=B followed its own Level-C work-item and merge chain. These subsequent implementation states neither change the ratified decision nor make the F-5 work item the authority for D2=B.
 
 Ratification does not relax §5 or §8. The F-5 implementation remains bounded by that scope and those acceptance criteria and must proceed through the repository's normal review and merge gates (ADR-0017 §31: implementation/verification → Quality Gate → independent review → owner approval → merge).
 
@@ -195,4 +195,6 @@ Ratification does not relax §5 or §8. The F-5 implementation remains bounded b
 
 **ADR state:** Ratified by the owner on 2026-10-05.
 
-**Implementation state (recorded 2026-10-05):** the F-5 implementation slice exists at `30e570de23a7466d18a7e9e28caea26bd14b3c8f` and is carried, together with the separately owner-ratified `identity 0.4.0` cascade, in draft PR #150 — **HOLD / NOT MERGE**. Its merge remains subject to the ADR-0017 §31 chain, and the approval state of the F-5 work item is recorded in `docs/work-items/F-5-runtime-dependency-enforcement.md` §6, not here.
+**Implementation state (recorded 2026-10-05):** at that time, the F-5 implementation slice existed at `30e570de23a7466d18a7e9e28caea26bd14b3c8f` and was carried, together with the separately owner-ratified `identity 0.4.0` cascade, in draft PR #150 — **HOLD / NOT MERGE**. This is a time-bounded historical status, not the current state.
+
+**Implementation closure (recorded 2026-10-06):** the owner-approved F-5 work item revision remains the exact text at SHA `8bc54ccf0cfac1d0643814f90a578ac93d4eee8b`. After independent review, the owner separately approved the merge (PR #138 comment `6010966700`), and PR #150 was merged at `42ca157ae1a825223df8adcea024017085cbfc04`. The F-5 implementation is complete; its review, approval, CI, publication, and post-publication verification evidence is recorded in `docs/work-items/F-5-runtime-dependency-enforcement.md` §6.2. The separately authorized identity `0.4.0` cascade remains governed by that work item’s §6.1 and does not expand Revision 2.
