@@ -47,12 +47,27 @@ FLOATING_SELECTOR_TOKENS = frozenset(
 )
 
 DATA_SCOPES = frozenset({"tenant-scoped", "platform-scoped", "system-scoped"})
+
+#: The component class of a shared in-process library (ADR-0021 §2.2 decision
+#: D2=B). A library may be a declared dependency of a member, but it is never
+#: an independently deployed member of a Platform Instance: its consumers
+#: import its published surface in-process, and it is never a composition,
+#: Platform Manifest or Platform Instance member.
+SHARED_LIBRARY_CLASS = "shared_library"
+
+#: The one dependency mechanism through which a shared library is reached:
+#: the consumer imports the published library surface in-process. A library is
+#: never the target of a network/API, event or data-export dependency
+#: (ADR-0021 §2.2 D2=B consequences 3–4).
+SHARED_LIBRARY_DEPENDENCY_KIND = "internal-consumer-surface"
+
 COMPONENT_CLASSES = frozenset(
     {
         "business_system",
         "platform_service",
         "computational_service",
         "streaming_pipeline",
+        SHARED_LIBRARY_CLASS,
     }
 )
 DEPENDENCY_KINDS = frozenset(
@@ -189,6 +204,17 @@ def range_admits(version_range: object, version: object) -> bool:
 
 def _is_mapping(value: object) -> bool:
     return isinstance(value, Mapping)
+
+
+def is_shared_library(entry: object) -> bool:
+    """True when a registry entry is classified as a shared in-process library.
+
+    The single public predicate for ADR-0021 §2.2 decision D2=B: a library is
+    not an independently deployable platform member, so composition membership,
+    Platform Instance membership and runtime binding requirements never apply
+    to it.
+    """
+    return _is_mapping(entry) and entry.get("class") == SHARED_LIBRARY_CLASS
 
 
 # --------------------------------------------------------------------------
@@ -625,6 +651,21 @@ def _dependency_errors(
         elif kind not in DEPENDENCY_KINDS:
             errors.append(
                 f"{item}.kind: {kind!r} is not a declared dependency mechanism"
+            )
+        elif (
+            isinstance(target, str)
+            and is_shared_library(registered.get(target))
+            and kind != SHARED_LIBRARY_DEPENDENCY_KIND
+        ):
+            # ADR-0021 §2.2 D2=B: a shared in-process library is reached only
+            # through the in-process consumer surface. Declaring it as a
+            # network/API, event or data-export dependency would re-introduce
+            # it as an independently deployable runtime target.
+            errors.append(
+                f"{item}.kind: {kind!r} is not a mechanism a shared in-process library "
+                f"can be reached by; {target!r} is classified {SHARED_LIBRARY_CLASS} "
+                f"(ADR-0021 §2.2 D2=B) and is consumed only as "
+                f"{SHARED_LIBRARY_DEPENDENCY_KIND!r}"
             )
 
         dependency_contract = dependency.get("contract")

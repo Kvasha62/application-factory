@@ -1,6 +1,6 @@
 # Saga / Workflow Consistency Boundary (IS-006)
 
-**Класс:** B — Platform Service
+**Класс:** E — Shared In-process Library (ADR-0021 §2.2, решение D2=B; ранее — Platform Service)
 **Уровень:** Level 0 — Modular Monolith
 **Версия компонента:** 0.1.0
 **Владелец данных:** `saga` (логическая схема `saga` — только состояние workflow)
@@ -18,6 +18,10 @@ IS-006 доказывает минимальную границу саги, тр
 планировщика, внешнего движка, распределённого координатора, распределённых
 блокировок и event bus: один ограниченный in-memory store состояния workflow и
 один детерминированный in-process executor.
+
+Компонент не является независимо развёртываемым членом Platform Instance и не
+публикует network-поверхность: его in-process состояние workflow и executor
+используются потребителями в процессе (ADR-0021 §2.2, решение D2=B).
 
 ## Что именно доказывается
 

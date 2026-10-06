@@ -33,7 +33,12 @@ from pathlib import Path
 
 import pytest
 
-from component_registry import REGISTRY_PATH, load_registry
+from component_registry import (
+    REGISTRY_PATH,
+    SHARED_LIBRARY_CLASS,
+    is_shared_library,
+    load_registry,
+)
 from composer import (
     EXAMPLE_REQUEST_PATH,
     EXTENSION_MECHANISMS,
@@ -63,7 +68,10 @@ from composer.resolution import (
     Resolution,
 )
 from composer.schema import load_schema
-from composer.verification import verify_dependency_compatibility
+from composer.verification import (
+    verify_dependency_compatibility,
+    verify_membership,
+)
 from golden_bundle import build_bundle_document, compute_bundle_digest
 from platform_manifest import compute_manifest_digest
 
@@ -79,8 +87,32 @@ EXPECTED_INVENTORY = (
     "booking",
 )
 
+#: The shared in-process libraries of the canonical registry (ADR-0021 §2.2
+#: decision D2=B). They are registered components but never independently
+#: deployed platform members.
+SHARED_LIBRARY_IDS = ("idempotency", "saga")
+
+#: The registered inventory that is composable as independently deployed
+#: members: the registry minus the shared in-process libraries.
+DEPLOYABLE_INVENTORY = tuple(sorted(set(EXPECTED_INVENTORY) - set(SHARED_LIBRARY_IDS)))
+
 #: The declared dependency closure of ``learning`` in the canonical registry.
+#: ``learning`` declares a dependency on the shared library ``idempotency``,
+#: but a shared in-process library is not a composition member: its declared
+#: range is validated against the authoritative registry version instead
+#: (ADR-0021 §2.2 D2=B).
 LEARNING_CLOSURE = (
+    "authorization",
+    "identity",
+    "learning",
+    "tenant_authority",
+)
+
+#: The same closure as presented by the unit-test stub registries, which
+#: declare no component classes at all: without a classification a component is
+#: an ordinary deployable member, so the stub closure still carries
+#: ``idempotency`` and reaches it as a member rather than as a library.
+STUB_LEARNING_CLOSURE = (
     "authorization",
     "idempotency",
     "identity",
@@ -164,9 +196,30 @@ def registry_document(root: Path) -> dict:
 
 
 def certified_bundle_document(root: Path, component_ids: Sequence[str]) -> dict:
-    """Build a certified bundle pinning ``component_ids`` and their edges."""
+    """Build a certified bundle pinning ``component_ids`` and their edges.
+
+    The pinned set is closed over the shared in-process libraries the
+    components declare: a certified bundle pins the library versions its
+    components import in-process, while the composition assembled from that
+    bundle never carries a library as an independently deployed member
+    (ADR-0021 §2.2 D2=B).
+    """
     registry = load_registry(root)
-    pinned = sorted(component_ids)
+    pinned_set = set(component_ids)
+    frontier = list(pinned_set)
+    while frontier:
+        current = frontier.pop()
+        for dependency in registry.dependencies(current):
+            dependency_id = dependency.get("component_id")
+            if (
+                isinstance(dependency_id, str)
+                and dependency_id not in pinned_set
+                and dependency_id in registry.component_ids
+                and is_shared_library(registry.entry(dependency_id))
+            ):
+                pinned_set.add(dependency_id)
+                frontier.append(dependency_id)
+    pinned = sorted(pinned_set)
     components = [
         {
             "component_id": component_id,
@@ -534,7 +587,12 @@ class TestRegistryAvailability:
         broken["components"][0]["version_range"] = ">=9.0.0,<10.0.0"
         rejects(broken, root, "never substitutes or invents versions")
 
-    def test_registered_inventory_is_composable(self, root: Path, registry) -> None:
+    def test_registered_deployable_inventory_is_composable(
+        self, root: Path, registry
+    ) -> None:
+        """Every registered component that is an independently deployable
+        platform member composes; the shared in-process libraries do not
+        (ADR-0021 §2.2 D2=B)."""
         document = build_request_document(
             manifest_id="full-inventory",
             manifest_version="1.0.0",
@@ -544,10 +602,43 @@ class TestRegistryAvailability:
                     "component_version": entry["component_version"],
                 }
                 for entry in registry.entries
+                if not is_shared_library(entry)
             ],
         )
         composition = composes(document, root)
-        assert composition.component_ids == tuple(sorted(EXPECTED_INVENTORY))
+        assert composition.component_ids == DEPLOYABLE_INVENTORY
+
+    def test_registered_shared_libraries_are_not_composable(
+        self, root: Path, registry
+    ) -> None:
+        """A shared in-process library is never a composition member, not even
+        when a request names it explicitly (ADR-0021 §2.2 D2=B)."""
+        for component_id in SHARED_LIBRARY_IDS:
+            entry = registry.entry(component_id)
+            assert entry["class"] == SHARED_LIBRARY_CLASS
+            document = build_request_document(
+                manifest_id=f"{component_id}-platform",
+                manifest_version="1.0.0",
+                components=[
+                    {
+                        "component_id": component_id,
+                        "component_version": entry["component_version"],
+                    }
+                ],
+            )
+            rejects(document, root, "shared in-process library")
+
+    def test_registered_library_dependency_is_not_a_composition_member(
+        self, root: Path, registry, learning_request
+    ) -> None:
+        """A declared dependency on a library is enforced against the
+        authoritative registry version and never queued as a member."""
+        composition = composes(learning_request, root)
+        assert "idempotency" not in composition.component_ids
+        assert composition.component_ids == LEARNING_CLOSURE
+        resolution = composition.resolution
+        assert verify_membership(registry, resolution) == []
+        assert verify_dependency_compatibility(registry, resolution) == []
 
     def test_missing_registry_fails_closed(self, tmp_path: Path) -> None:
         root = materialize(tmp_path)
@@ -619,13 +710,15 @@ class TestResolution:
         assert by_id["learning"]["required_by"] == []
         for component_id in (
             "authorization",
-            "idempotency",
             "identity",
             "tenant_authority",
         ):
             assert by_id[component_id]["selected_as"] == SELECTED_AS_DEPENDENCY
             assert by_id[component_id]["required_by"], component_id
         assert by_id["identity"]["required_by"] == ["authorization", "learning"]
+        # A shared in-process library is a declared dependency but no member:
+        # it never appears as a composition decision (ADR-0021 §2.2 D2=B).
+        assert "idempotency" not in by_id
 
     def test_resolution_is_deterministic(self, root: Path, example_request) -> None:
         first = composes(example_request, root)
@@ -646,11 +739,14 @@ class TestResolution:
             "authorization",
             "booking",
             "commerce",
-            "idempotency",
             "identity",
             "learning",
             "tenant_authority",
         )
+        # The three business systems import the shared in-process library
+        # `idempotency`; it is not an independently deployed member
+        # (ADR-0021 §2.2 D2=B).
+        assert "idempotency" not in composition.component_ids
 
     def test_artifact_identity_is_repeated_from_the_registry(
         self, root: Path, registry, learning_request
@@ -695,13 +791,15 @@ class TestResolution:
         # A component with no declared dependency stays alone: resolution never
         # discovers an undeclared edge.
         document = build_request_document(
-            manifest_id="idempotency-platform",
+            manifest_id="authority-platform",
             manifest_version="1.0.0",
-            components=[{"component_id": "idempotency", "component_version": "0.1.0"}],
+            components=[
+                {"component_id": "tenant_authority", "component_version": "0.1.0"}
+            ],
         )
         composition = composes(document, root)
-        assert composition.component_ids == ("idempotency",)
-        assert registry.dependencies("idempotency") == ()
+        assert composition.component_ids == ("tenant_authority",)
+        assert registry.dependencies("tenant_authority") == ()
 
 
 # ---------------------------------------------------------------------------
@@ -876,14 +974,79 @@ class TestConfiguration:
         )
         rejects(document, root, "expected constant 'authz-svc-token-'")
 
-    def test_configuration_minimum_is_enforced(self, root: Path) -> None:
+    def test_configuration_minimum_is_enforced(self, tmp_path: Path) -> None:
+        """A value below a published bound is rejected.
+
+        The canonical contracts publish no numeric bound on a deployable
+        component — the only bound lived on `saga`, which is a shared
+        in-process library and never a composition member (ADR-0021 §2.2
+        D2=B) — so the bound is published on an admissible component in a
+        throwaway root; the validator path under test is the canonical one.
+        """
+        root = materialize(tmp_path)
+        contract_path = (
+            root
+            / "components"
+            / "tenant_authority"
+            / "contract"
+            / "component_contract.json"
+        )
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["configuration_schema"]["properties"]["refresh_interval_seconds"] = {
+            "type": "integer",
+            "minimum": 5,
+        }
+        contract_path.write_text(
+            json.dumps(contract, indent=2) + "\n", encoding="utf-8"
+        )
+
         document = build_request_document(
-            manifest_id="saga-platform",
+            manifest_id="authority-platform",
             manifest_version="1.0.0",
-            components=[{"component_id": "saga", "component_version": "0.1.0"}],
-            configuration={"saga": {"max_sagas": 0}},
+            components=[
+                {"component_id": "tenant_authority", "component_version": "0.1.0"}
+            ],
+            configuration={
+                "tenant_authority": {
+                    "platform_id": "example-authority",
+                    "refresh_interval_seconds": 1,
+                }
+            },
         )
         rejects(document, root, "below minimum")
+
+    def test_configuration_schema_less_component_rejects_every_key(
+        self, tmp_path: Path
+    ) -> None:
+        """A component that publishes no configuration keys accepts none.
+
+        Every deployable component of the canonical registry publishes keys, so
+        the empty declaration is published in a throwaway root; the validator
+        path under test is the canonical one.
+        """
+        root = materialize(tmp_path)
+        contract_path = (
+            root
+            / "components"
+            / "tenant_authority"
+            / "contract"
+            / "component_contract.json"
+        )
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["configuration_schema"] = {}
+        contract_path.write_text(
+            json.dumps(contract, indent=2) + "\n", encoding="utf-8"
+        )
+
+        document = build_request_document(
+            manifest_id="authority-platform",
+            manifest_version="1.0.0",
+            components=[
+                {"component_id": "tenant_authority", "component_version": "0.1.0"}
+            ],
+            configuration={"tenant_authority": {"anything": 1}},
+        )
+        rejects(document, root, "unknown configuration key")
 
     def test_configuration_for_a_component_outside_the_composition_is_rejected(
         self, root: Path
@@ -900,10 +1063,12 @@ class TestConfiguration:
         self, root: Path
     ) -> None:
         document = build_request_document(
-            manifest_id="idempotency-platform",
+            manifest_id="authority-platform",
             manifest_version="1.0.0",
-            components=[{"component_id": "idempotency", "component_version": "0.1.0"}],
-            configuration={"idempotency": {"anything": 1}},
+            components=[
+                {"component_id": "tenant_authority", "component_version": "0.1.0"}
+            ],
+            configuration={"tenant_authority": {"anything": 1}},
         )
         rejects(document, root, "unknown configuration key")
 
@@ -1168,7 +1333,7 @@ class TestCompatibilityRules:
         resolution = stub_resolution(stub, ["learning"])
         # The declared incompatible dependency is neither silently upgraded nor
         # dropped: the registered versions stay exactly as published.
-        assert resolution.component_ids == LEARNING_CLOSURE
+        assert resolution.component_ids == STUB_LEARNING_CLOSURE
         assert {
             component.component_id: component.component_version
             for component in resolution.selected
@@ -1468,7 +1633,7 @@ class TestGoldenBundleEvidence:
             manifest_version="1.0.0",
             components=[
                 {"component_id": "learning", "component_version": "0.3.0"},
-                {"component_id": "saga", "component_version": "0.1.0"},
+                {"component_id": "records", "component_version": "0.1.0"},
             ],
             golden_bundle=bundle_reference(document, relative),
         )
@@ -1478,7 +1643,7 @@ class TestGoldenBundleEvidence:
         self, certified_root
     ) -> None:
         root, _document, _relative = certified_root
-        replacement = certified_bundle_document(root, EXPECTED_INVENTORY)
+        replacement = certified_bundle_document(root, DEPLOYABLE_INVENTORY)
         relative = "factory/golden_bundle/full_inventory.json"
         write_bundle(root, replacement, relative)
         request = build_request_document(

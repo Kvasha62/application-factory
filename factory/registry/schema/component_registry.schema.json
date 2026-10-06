@@ -94,9 +94,10 @@
             "business_system",
             "platform_service",
             "computational_service",
-            "streaming_pipeline"
+            "streaming_pipeline",
+            "shared_library"
           ],
-          "description": "Component class (ARCHITECTURE.md §3)."
+          "description": "Component class (ARCHITECTURE.md §3; ADR-0021 §2.2 D2=B). `shared_library` is the shared in-process library class: such a component is not an independently deployable platform member, is reached only through an `internal-consumer-surface` dependency, and never appears as a composition or Platform Instance member."
         },
         "maturity_level": {
           "type": [

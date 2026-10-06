@@ -379,7 +379,7 @@
     {
       "component_id": "saga",
       "component_version": "0.1.0",
-      "class": "platform_service",
+      "class": "shared_library",
       "maturity_level": "level_0_modular_monolith",
       "scs_id": null,
       "owner": "@Kvasha62",
@@ -451,7 +451,7 @@
     {
       "component_id": "idempotency",
       "component_version": "0.1.0",
-      "class": "platform_service",
+      "class": "shared_library",
       "maturity_level": "level_0_modular_monolith",
       "scs_id": null,
       "owner": "@Kvasha62",

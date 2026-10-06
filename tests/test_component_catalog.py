@@ -393,8 +393,19 @@ def test_discovery_by_component_class(catalog: Catalog) -> None:
         "booking",
     )
     platform = catalog.filter(component_class="platform_service")
-    assert len(platform) == 6
-    assert len(business) + len(platform) == 9
+    assert tuple(entry["component_id"] for entry in platform) == (
+        "authorization",
+        "identity",
+        "tenant_authority",
+        "records",
+    )
+    assert len(business) + len(platform) == 7
+    library = catalog.filter(component_class="shared_library")
+    assert tuple(entry["component_id"] for entry in library) == (
+        "saga",
+        "idempotency",
+    )
+    assert len(business) + len(platform) + len(library) == 9
 
 
 def test_discovery_by_data_scope(catalog: Catalog) -> None:

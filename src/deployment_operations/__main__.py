@@ -1,7 +1,7 @@
 """Run one deployment operation from the command line.
 
     python -m deployment_operations \\
-        --instance factory/platform_instance/example_instance.json \\
+        --instance factory/platform_instance/example_instance_without_shared_libraries.json \\
         --manifest path/to/platform_manifest.json \\
         --environment path/to/environment.json
 

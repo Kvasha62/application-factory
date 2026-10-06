@@ -84,7 +84,10 @@ OIDC, CDC, RLS, SemVer).
 `authorization`, `identity`, `tenant_authority`, `records`,
 `learning` (SCS-001, Slices 1–4), `saga`, `idempotency`,
 `commerce` (SCS-002, Stage 2 skeleton — Issue #55),
-`booking` (SCS-003, MVP — Issue #57, ADR-0014)
+`booking` (SCS-003, MVP — Issue #57, ADR-0014).
+`saga` и `idempotency` — Shared In-process Library (ADR-0021 §2.2, решение
+D2=B): они не являются независимо развёртываемыми членами Platform Instance
+и потребляются in-process.
 (`src/`, контракты в `components/*/contract/`, поведенческие и
 contract-тесты в `tests/`).
 

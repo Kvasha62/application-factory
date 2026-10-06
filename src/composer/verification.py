@@ -42,7 +42,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from component_registry import parse_version_range, range_admits
+from component_registry import (
+    SHARED_LIBRARY_CLASS,
+    is_shared_library,
+    parse_version_range,
+    range_admits,
+)
 from composer.request import FORBIDDEN_DEPENDENCY_KINDS
 from composer.resolution import Resolution
 from golden_bundle import validate_document as validate_bundle_document
@@ -125,13 +130,48 @@ def _type_matches(value: object, expected: object) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def verify_membership(registry: Any, resolution: Resolution) -> list[str]:
+    """Verify that no shared in-process library is a composition member.
+
+    ADR-0021 §2.2 decision D2=B separates the two roles a component can have:
+    an independently deployable platform member, and a shared in-process
+    library. A library is never the former, so a composition — and therefore
+    any Platform Manifest, Platform Instance or deployment input derived from
+    it — must not carry one as a member. The check is applied to the
+    resolution itself, so it holds for every caller of this surface,
+    including Platform Instance validation re-checking a manifest's
+    composition.
+    """
+    errors: list[str] = []
+    for component in resolution.selected:
+        component_id = component.component_id
+        if component_id not in registry.component_ids:
+            continue
+        if is_shared_library(registry.entry(component_id)):
+            errors.append(
+                f"$.compositions.{component_id}: {component_id!r} is classified "
+                f"{SHARED_LIBRARY_CLASS} (ADR-0021 §2.2 D2=B); a shared in-process library is "
+                f"not an independently deployable platform member and cannot be a composition "
+                f"member"
+            )
+    return errors
+
+
 def verify_dependency_compatibility(registry: Any, resolution: Resolution) -> list[str]:
-    """Verify every declared dependency of every composed component."""
+    """Verify every declared dependency of every composed component.
+
+    A dependency on a shared in-process library is validated against the
+    authoritative registry version instead of composition membership: the
+    library is not deployed, so it is absent from the composition by design,
+    but the registry version must still satisfy the declared range
+    (ADR-0021 §2.2 D2=B).
+    """
     errors: list[str] = []
     versions = {
         component.component_id: component.component_version
         for component in resolution.selected
     }
+    registered = set(registry.component_ids)
 
     for component in resolution.selected:
         component_id = component.component_id
@@ -151,6 +191,32 @@ def verify_dependency_compatibility(registry: Any, resolution: Resolution) -> li
                     f"contracts only"
                 )
 
+            version_range = dependency.get("version_range")
+            library_target = dependency_id in registered and is_shared_library(
+                registry.entry(dependency_id)
+            )
+
+            if library_target:
+                # Not a member: the in-process library is not deployed, so it
+                # is not part of the composition. Its version is the
+                # authoritative registry version; a range the registry cannot
+                # satisfy is a deterministic refusal, never a substitution.
+                library_version = registry.version(dependency_id)
+                if parse_version_range(version_range) is None:
+                    errors.append(
+                        f"{path}.version_range: {version_range!r} is not an explicit version "
+                        f"range"
+                    )
+                elif not range_admits(version_range, library_version):
+                    errors.append(
+                        f"{path}: incompatible dependency — {component_id} requires "
+                        f"{dependency_id} {version_range!r}, but the authoritative registry "
+                        f"publishes {dependency_id} {library_version}; the in-process library "
+                        f"dependency is never dropped, substituted or re-pointed "
+                        f"(ADR-0021 §2.2 D2=B)"
+                    )
+                continue
+
             if dependency_id not in versions:
                 errors.append(
                     f"{path}: {component_id} declares a dependency on {dependency_id}, which is "
@@ -159,7 +225,6 @@ def verify_dependency_compatibility(registry: Any, resolution: Resolution) -> li
                 )
                 continue
 
-            version_range = dependency.get("version_range")
             selected = versions[dependency_id]
             if parse_version_range(version_range) is None:
                 errors.append(
@@ -608,8 +673,21 @@ def verify_golden_bundle(
         component.component_id: component.component_version
         for component in resolution.selected
     }
-    missing = sorted(set(pinned) - set(selected))
-    extra = sorted(set(selected) - set(pinned))
+    # A certified bundle may pin shared in-process libraries as part of its
+    # certified set, while a composition never contains them as members
+    # (ADR-0021 §2.2 D2=B, and the membership rule of
+    # ``verify_membership``). The two sides are therefore compared over the
+    # deployable members only; a library pin is not an extra pin and its
+    # absence from the composition is not a missing member. Every other
+    # difference is still a deterministic refusal.
+    library_ids = {
+        component_id
+        for component_id in set(pinned) | set(selected)
+        if component_id in registry.component_ids
+        and is_shared_library(registry.entry(component_id))
+    }
+    missing = sorted(set(pinned) - set(selected) - library_ids)
+    extra = sorted(set(selected) - set(pinned) - library_ids)
     if missing:
         errors.append(
             f"$.golden_bundle.components: the certified bundle pins {missing!r}, which the "
@@ -622,7 +700,7 @@ def verify_golden_bundle(
             f"certified bundle does not pin; adding a component produces an uncertified "
             f"composition that must not claim the bundle's certification"
         )
-    for component_id in sorted(set(pinned) & set(selected)):
+    for component_id in sorted((set(pinned) & set(selected)) - library_ids):
         if pinned[component_id] != selected[component_id]:
             errors.append(
                 f"$.golden_bundle.components: {component_id} is pinned by the bundle at "
@@ -699,6 +777,7 @@ def verify_composition(
     contracts, errors = read_composed_contracts(root, registry, resolution)
     errors = [
         *errors,
+        *verify_membership(registry, resolution),
         *verify_dependency_compatibility(registry, resolution),
         *verify_contracts(registry, resolution, contracts),
         *verify_configuration(registry, resolution, configuration, contracts),
