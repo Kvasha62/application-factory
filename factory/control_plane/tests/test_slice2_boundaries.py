@@ -333,12 +333,12 @@ def _pairs(value):
 #: reviewed act — never a side effect of a refactor.
 EXAMPLE_DIGESTS = {
     "v2_version": "sha256:c58eafbcbd07b8624c912f6d1c5175ee3a2cf79d2f6a77f0795a4d53d0602257",
-    "proposal": "sha256:4d23090cfb237053bbab14d5e17f7bbe651ef17ccf9cb1b2eb72b006de22f50d",
-    "approval": "sha256:adeb2ac3a86e6cf50532fbb241c635eab04a149daebddd4f7d3dca62afc51cac",
-    "request": "sha256:1ac2aea744af4a488908be8023657598eec16303fefcfad58d1748e08ac65d4f",
+    "proposal": "sha256:5863be2852302a940796ad691e9b225ac5ed776da19df2ff74d7ea974fe2085f",
+    "approval": "sha256:82c362297584e91eed3e790baba8d011056953468f8cc1ff8bf754b932f47908",
+    "request": "sha256:5dbd79d07d910fd8c348731a4351a56b70a0070dd766bb795da7f5b974db2c59",
 }
 EXAMPLE_FINGERPRINT = (
-    "sha256:8ee6329df575a2342f57765de872473a8354278ac671694a5d8700e221fe5c1d"
+    "sha256:b4867763ec45b1558f84f5b4d5a0944672fb8c5e2bbca864c65dffc8519e41c7"
 )
 
 

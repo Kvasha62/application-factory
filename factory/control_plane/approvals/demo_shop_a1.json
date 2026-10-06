@@ -9,7 +9,7 @@
   },
   "proposal_ref": {
     "proposal_id": "demo_shop/proposals/1",
-    "digest": "sha256:4d23090cfb237053bbab14d5e17f7bbe651ef17ccf9cb1b2eb72b006de22f50d"
+    "digest": "sha256:5863be2852302a940796ad691e9b225ac5ed776da19df2ff74d7ea974fe2085f"
   },
   "requirements_ref": {
     "requirements_id": "demo_shop/requirements/1",
@@ -27,5 +27,5 @@
   "reason": "Accept the resolved configuration; the open requirement is acknowledged.",
   "revokes": null,
   "predecessor": null,
-  "digest": "sha256:adeb2ac3a86e6cf50532fbb241c635eab04a149daebddd4f7d3dca62afc51cac"
+  "digest": "sha256:82c362297584e91eed3e790baba8d011056953468f8cc1ff8bf754b932f47908"
 }

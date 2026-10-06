@@ -12,7 +12,7 @@
   },
   "inputs": {
     "validator_set": "control-plane/validators/v1",
-    "registry_fingerprint": "sha256:02dbe16577a2d09794f062710d75b53833f997f9f0ddae3b3a4b43da774cd9c2"
+    "registry_fingerprint": "sha256:3822f57b91a2e176e8a023167b2bfe721e8a3a8268a1c85b979bc9f3e8aeabee"
   },
   "findings": [
     {
@@ -39,5 +39,5 @@
   ],
   "state": "ready",
   "predecessor": null,
-  "digest": "sha256:4d23090cfb237053bbab14d5e17f7bbe651ef17ccf9cb1b2eb72b006de22f50d"
+  "digest": "sha256:5863be2852302a940796ad691e9b225ac5ed776da19df2ff74d7ea974fe2085f"
 }
