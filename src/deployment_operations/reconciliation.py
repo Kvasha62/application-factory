@@ -60,6 +60,7 @@ from deployment_operations.deployment import (
     Deployment,
     deployment_record_basis,
     evaluation_binding,
+    new_evaluation_handle,
 )
 from deployment_operations.errors import (
     DeploymentInputRejected,
@@ -285,20 +286,6 @@ def _default_identity_provider(deployment: Deployment) -> PlatformIdentityProvid
 AUTHORITY_RECONCILE = "deployment-operations/reconcile"
 
 
-def _binding_token(record: DeploymentRecord, sequence: int) -> str:
-    """The opaque binding of one observation — never of an earlier one.
-
-    The binding names the evaluation target the way the deployment path already
-    does — the deployment operation of this environment — extended with this
-    observation number. It carries no expected Platform Instance document and no
-    expected digest for the owner to confirm, and evidence is correlated by the
-    owner to the evaluation it was produced for: deployment-time evidence, or
-    evidence produced for a previous reconciliation, is therefore refused as
-    foreign correlation instead of being replayed as if it were current.
-    """
-    return f"{record.deployment_id}#observation:{sequence}"
-
-
 def _observe(
     provider: PlatformIdentityProvider,
     request: ReconciliationRequest,
@@ -312,13 +299,19 @@ def _observe(
     cannot be projected — produces an ``unverifiable`` observation. Unavailable
     evidence is never treated as health, and the expected identity is never
     consulted as a substitute (ADR-0016 §18, §20).
+
+    The observation is bound to this evaluation by a fresh opaque handle: this
+    observation's handle was issued by nobody before, so an answer produced for
+    an earlier observation — or for the deployment itself — is an answer to a
+    handle this evaluation never issued, and is refused as foreign correlation
+    instead of being replayed as if it were current.
     """
     record = request.deployment.record
     sequence = len(record.reconciliations) + 1
     occurred_at = utc_now()
     binding = evaluation_binding(
         authority=AUTHORITY_RECONCILE,
-        token=_binding_token(record, sequence),
+        token=new_evaluation_handle(),
         basis=deployment_record_basis(record.deployment_id),
         target=str(record.platform_id),
         scope=record.environment_id,

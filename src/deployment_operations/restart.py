@@ -89,6 +89,7 @@ from deployment_operations.deployment import (
     _verify_running_platform_identity,
     deployment_record_basis,
     evaluation_binding,
+    new_evaluation_handle,
 )
 from deployment_operations.errors import (
     DeploymentInputRejected,
@@ -1085,6 +1086,9 @@ class _Attempt:
         self.up = set(self.current) if self.record.running else set()
         self.phases = [RestartPhaseRecord(name=name) for name in RESTART_PHASES]
         self.attempt_number = len(self.record.restarts) + 1
+        # The handle of this attempt, issued once: the seam and the journal of
+        # the attempt name the same evaluation, and it is nobody's earlier one.
+        self.handle = new_evaluation_handle()
 
     # -- the identity of this attempt ---------------------------------------
     @property
@@ -1114,14 +1118,17 @@ class _Attempt:
 
     @property
     def binding_token(self) -> str:
-        """The opaque evaluation binding of *this* attempt.
+        """The opaque evaluation handle of *this* attempt.
 
-        Evidence correlated to the deployment itself, or to an earlier attempt,
-        is evidence of another evaluation: the owner-side boundary is asked
-        freshly, under a binding of this attempt, exactly as reconciliation asks
-        under a binding of its own observation (ADR-0019/0020).
+        A fresh handle, issued for this attempt and for no other: it names no
+        platform, no environment, no attempt number and no digest, and nothing
+        is read out of it. Evidence correlated to the deployment itself, or to
+        an earlier attempt, is evidence of another evaluation — an answer to a
+        handle this attempt never issued — so the owner-side boundary is asked
+        freshly, under a handle of this attempt, exactly as reconciliation asks
+        under a handle of its own observation (ADR-0019/0020).
         """
-        return f"{self.record.deployment_id}#restart:{self.sequence}"
+        return self.handle
 
     def identity_evidence(self) -> dict[str, Any]:
         return _identity_evidence(self.record, self.elements)

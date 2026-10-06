@@ -38,6 +38,7 @@ import argparse
 import http.client
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -70,6 +71,14 @@ SCENARIOS: dict[str, tuple[str, str]] = {
     "delay": ("refused", "TimeoutError"),
     "unavailable": ("refused", "HTTP 503"),
 }
+
+#: Patterns a positional, identifier-like handle would carry. An opaque handle
+#: is a nonce, so the transcript must show that none of them is present.
+_POSITION_PATTERNS = (
+    re.compile(r"-a\d+$"),
+    re.compile(r"#"),
+    re.compile(r"\d{12,}"),
+)
 
 #: Strings that must never cross the boundary as identity material. The token
 #: value is scanned separately (it is the one opaque handle that may cross).
@@ -359,7 +368,11 @@ def non_forwarding_report(
                     )
                     >= 0
                 ),
-                "contains_attempt_suffix": token.endswith("-a1"),
+                # A handle is a nonce: it describes no evaluation, so no attempt
+                # number, no position and no state can be read out of it.
+                "carries_no_binding_position": not any(
+                    pattern.search(token) for pattern in _POSITION_PATTERNS
+                ),
             }
         )
     if observations:

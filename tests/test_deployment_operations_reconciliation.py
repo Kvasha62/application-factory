@@ -44,6 +44,7 @@ from typing import Any
 
 import pytest
 from _deployment_helpers import (
+    HANDLE_PREFIX,
     ROOT,
     environment_for,
     instance_for,
@@ -343,9 +344,25 @@ def _digests(root: Path) -> dict[str, str]:
     return digests
 
 
-def _binding_token(record: Any, sequence: int = 1) -> str:
-    """The binding of one observation, as the boundary binds it."""
-    return f"{record.deployment_id}#observation:{sequence}"
+def _assert_opaque_handle(token: object, record: Any) -> None:
+    """The handle of one observation: opaque, fresh, and nobody's identifier.
+
+    An opaque evaluation handle carries no structure at all. In particular it
+    must contain no expected identity material — not the deployment's identity,
+    not the environment's, not a prefix of the expected digest — and no binding
+    position: the observation's ``sequence`` comes from the evaluation's own
+    context, never from the handle.
+    """
+
+    assert isinstance(token, str)
+    assert token.startswith(HANDLE_PREFIX)
+    body = token.removeprefix(HANDLE_PREFIX)
+    assert len(body) == 32
+    assert all(character in "0123456789abcdef" for character in body)
+    assert record.deployment_id not in token
+    assert record.environment_id not in token
+    assert str(record.instance_digest).removeprefix("sha256:")[:12] not in token
+    assert "#" not in token
 
 
 # ---------------------------------------------------------------------------
@@ -555,8 +572,7 @@ class TestIndependentActualObservation:
         assert len(source.bindings) == 1
         binding = source.bindings[0]
         assert isinstance(binding, PlatformIdentityBinding)
-        assert binding.token == _binding_token(record)
-        assert binding.token != record.instance_digest
+        _assert_opaque_handle(binding.token, record)
         assert not hasattr(binding, "instance_digest")
 
     def test_projection_consumes_observed_evidence_not_desired_state(
@@ -708,7 +724,7 @@ class TestIndependentActualObservation:
                     "branding": {"state": "ABSENT"},
                     "provenance": EvidenceProvenance.MEASURED,
                     "correlation": {
-                        "token": _binding_token(record),
+                        "token": f"{record.deployment_id}#observation:1",
                         "scope": record.environment_id,
                         "sequence": 1,
                         "target": record.platform_id,
@@ -721,8 +737,17 @@ class TestIndependentActualObservation:
             ),
             encoding="utf-8",
         )
-        result = reconcile(_request(deployment))
-        assert result.in_correspondence
+        # The ambient surface was read — and refused. A document published
+        # before this observation cannot echo the handle this observation
+        # issued, so it is evidence of another evaluation (ADR-0020 §18): the
+        # default source is the environment's surface, and the observation
+        # fails closed instead of accepting a stale document.
+        with pytest.raises(ReconciliationEvidenceUnavailable) as failure:
+            reconcile(_request(deployment))
+        assert "correlation" in "\n".join(failure.value.errors)
+        assert deployment.record.reconciliations[-1].outcome == (
+            RECONCILIATION_UNVERIFIABLE
+        )
 
 
 # ---------------------------------------------------------------------------

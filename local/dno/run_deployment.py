@@ -59,6 +59,7 @@ from deployment_operations.deployment import (
     AUTHORITY_DEPLOY,
     deployment_record_basis,
     evaluation_binding,
+    new_evaluation_handle,
 )
 from deployment_operations.platform_identity import (
     compute_actual_digest,
@@ -180,7 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # explicitly, shows the digest the shipped acceptance seam computed.
         binding = evaluation_binding(
             authority=AUTHORITY_DEPLOY,
-            token=record.deployment_id,
+            token=new_evaluation_handle(),
             basis=deployment_record_basis(record.deployment_id),
             target=str(record.platform_id),
             scope=record.environment_id,

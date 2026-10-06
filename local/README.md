@@ -28,8 +28,11 @@ no registry artifact.
   `HttpRunningPlatformOwnerStateReader` → `OwnerStateSnapshotSource` →
   `OwnerSuppliedPlatformIdentityProvider` — the shipped seams; no D&O contract
   is changed, and no ambient identity file is involved.
-* The boundary accepts exactly one opaque evaluation binding. A request that
-  carries anything else is refused and recorded.
+* The boundary accepts exactly one opaque evaluation handle — a per-evaluation
+  nonce (`ev-` + 32 hex characters) that names no platform, no environment, no
+  attempt and no digest, and that the owner side only echoes: nothing, including
+  the binding position, is read out of it. A request that carries anything else
+  is refused and recorded.
 * The declared bound (`--identity-timeout`) is enforced by the reader; a stalled
   producer leads to a refusal, never to acceptance.
 
@@ -79,7 +82,7 @@ to exercise foreign-identity refusal.
 | `correct` | serves its authoritative state | accepted (`MATCH`) |
 | `foreign` | serves another platform's state | refused (digest mismatch) |
 | `stale` | `freshness_current: false` | refused (stale surface) |
-| `wrong-correlation` | answers with another evaluation's token | refused (foreign correlation) |
+| `wrong-correlation` | echoes another evaluation's handle | refused (foreign correlation) |
 | `contradictory` | configuration contradicts the served `platform_id` | refused (contradiction) |
 | `delay` | stalls longer than the declared bound | refused within the bound |
 | `unavailable` | answers `503` | refused |

@@ -34,6 +34,7 @@ What the operation refuses to do is as much of the slice as what it does:
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -187,6 +188,31 @@ AUTHORITY_DEPLOY = "deployment-operations/deploy"
 AUTHORITY_ATTACH = "deployment-operations/attach"
 
 
+#: The prefix of one evaluation handle. The handle is a nonce (ADR-0020 §18:
+#: generation / nonce), not an identifier: it names no platform, no
+#: environment, no attempt and no digest, and nothing may be read out of it.
+EVALUATION_HANDLE_PREFIX = "ev-"
+
+
+def new_evaluation_handle() -> str:
+    """A fresh opaque handle for one evaluation.
+
+    The handle is the evaluation's own nonce: 128 bits of randomness with no
+    structure. It carries no expected identity material — no platform id, no
+    environment id, no manifest or instance digest, not even a prefix of one —
+    and no position: a reader that interpreted its structure would learn
+    nothing, because there is nothing in it to interpret. Freshness comes from
+    its being fresh per evaluation: an answer produced for an earlier handle is
+    refused, and equal handles of two different bindings establish nothing
+    (:func:`deployment_operations.platform_identity.require_correlated_evidence`).
+
+    A handle is not durable identity. The durable binding basis stays
+    :func:`deployment_record_basis`; the evaluation's position stays in
+    :class:`BindingEvaluationContext`, established by the operation itself.
+    """
+    return EVALUATION_HANDLE_PREFIX + secrets.token_hex(16)
+
+
 def evaluation_binding(
     *,
     authority: str,
@@ -200,12 +226,12 @@ def evaluation_binding(
     """The evaluation binding of one operation, with its established semantics.
 
     ``authority`` names the operation that established the binding, ``token``
-    the evaluation handle it established, ``basis`` the durable record the
-    binding identity is derived from, ``target`` the identity-bearing platform
-    the evaluation is for, ``scope`` the binding space in which that target is
-    unique (this environment), ``sequence`` this evaluation's position in that
-    space (attempt, observation or restart number), and ``established_at`` the
-    operation's own instant.
+    the opaque evaluation handle it issued (see :func:`new_evaluation_handle`),
+    ``basis`` the durable record the binding identity is derived from, ``target``
+    the identity-bearing platform the evaluation is for, ``scope`` the binding
+    space in which that target is unique (this environment), ``sequence`` this
+    evaluation's position in that space (attempt, observation or restart
+    number), and ``established_at`` the operation's own instant.
 
     Only the handle crosses an owner-side boundary; an owner-side producer's
     answer must state the binding identity it answered, and
@@ -960,7 +986,7 @@ def deploy(
                     request.instance_document,
                     binding=evaluation_binding(
                         authority=AUTHORITY_DEPLOY,
-                        token=deployment_id,
+                        token=new_evaluation_handle(),
                         basis=deployment_record_basis(deployment_id),
                         target=reference.platform_id,
                         scope=environment.environment_id,
@@ -1661,7 +1687,7 @@ def attach(
         request.instance_document,
         binding=evaluation_binding(
             authority=AUTHORITY_ATTACH,
-            token=deployment_id,
+            token=new_evaluation_handle(),
             basis=deployment_record_basis(deployment_id),
             target=reference.platform_id,
             scope=environment.environment_id,

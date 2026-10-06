@@ -37,7 +37,6 @@ import argparse
 import copy
 import hashlib
 import json
-import re
 import sys
 import time
 from collections.abc import Sequence
@@ -60,30 +59,34 @@ SCENARIOS = (
     "delay",
     "unavailable",
 )
-#: The token this producer answers with when it deliberately answers another
+#: The prefix of one evaluation handle, as the evaluating side issues it
+#: (``deployment_operations.deployment.EVALUATION_HANDLE_PREFIX``).
+EVALUATION_HANDLE_PREFIX = "ev-"
+
+#: The handle this producer answers with when it deliberately answers another
 #: evaluation (the ``wrong-correlation`` scenario).
-OTHER_EVALUATION_TOKEN = "rp-answer-for-another-evaluation-a1"
+OTHER_EVALUATION_HANDLE = "ev-rp-answer-for-another-evaluation"
 
-#: The binding position an evaluation handle states. This is the local
-#: producer's reading of the handle it was asked to answer: the production
-#: runbook's owner-side adapter issues the handle itself, so there the same fact
-#: is owner-established rather than read. A handle that states no position
-#: cannot be answered with evidence (fail closed).
-_BINDING_POSITION_PATTERNS = (
-    re.compile(r"-a(\d+)$"),
-    re.compile(r"#observation:(\d+)$"),
-    re.compile(r"#restart:(\d+)$"),
-)
+#: How many random hex characters one evaluation handle carries (128 bits).
+EVALUATION_HANDLE_HEX_LENGTH = 32
 
 
-def binding_position(token: str) -> int:
-    """The binding position the evaluation handle states; 0 when it states none."""
+def is_evaluation_handle(token: str) -> bool:
+    """True when the token has the shape of an opaque evaluation handle.
 
-    for pattern in _BINDING_POSITION_PATTERNS:
-        match = pattern.search(token)
-        if match:
-            return int(match.group(1))
-    return 0
+    The check is on the *shape* only, and shape is not semantics: a token that
+    looks like a handle says nothing about which evaluation it belongs to. The
+    handle is the evaluation's nonce — it names no platform, no environment, no
+    attempt and no digest, and this producer reads nothing out of it except that
+    it is opaque. In particular the position of an answer in the binding space
+    (``sequence``) is never derived from the handle: it comes from this
+    producer's own authoritative state, as every other fact in the answer does.
+    """
+
+    body = token.removeprefix(EVALUATION_HANDLE_PREFIX)
+    if len(body) != EVALUATION_HANDLE_HEX_LENGTH:
+        return False
+    return all(character in "0123456789abcdef" for character in body)
 
 
 MAX_REQUEST_BYTES = 65_536
@@ -181,8 +184,10 @@ class IdentityProducer:
 
         The answer states, as the owner's own facts, the correlation of the
         observation: the handle it answered (the echo), the binding space this
-        platform serves, the binding position the handle states, the platform
+        platform serves, this answer's position in that space, the platform
         identity it actually observed, and the attribution of the observation.
+        The handle is opaque and nothing is read out of it: the received token is
+        only recognised as a handle and echoed back.
         The evaluator checks that statement against the binding it established
         (:func:`deployment_operations.platform_identity.require_correlated_evidence`);
         this producer never receives an expected identity and never echoes one.
@@ -193,9 +198,8 @@ class IdentityProducer:
             message = "owner-side identity is deliberately unavailable"
             raise ProducerError(message)
 
-        position = binding_position(binding_token)
-        if position < 1:
-            message = "the evaluation handle states no binding position"
+        if not is_evaluation_handle(binding_token):
+            message = "the request carries no opaque evaluation handle"
             raise ProducerError(message)
 
         if self._scenario == "foreign":
@@ -219,6 +223,7 @@ class IdentityProducer:
         scope = document.get("binding_scope")
         authority = document.get("observation_authority")
         basis = document.get("observation_basis")
+        sequence = document.get("observation_sequence")
         for name, value in (
             ("binding_scope", scope),
             ("observation_authority", authority),
@@ -227,18 +232,23 @@ class IdentityProducer:
             if not isinstance(value, str) or not value:
                 message = f"identity state states no {name}"
                 raise ProducerError(message)
+        if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
+            message = "identity state states no observation_sequence"
+            raise ProducerError(message)
 
+        # The received handle is echoed, never parsed: every other field of the
+        # statement is this producer's own fact.
         document["correlation"] = {
             "token": binding_token,
             "scope": scope,
-            "sequence": position,
+            "sequence": sequence,
             "target": platform_id,
             "authority": authority,
             "basis": basis,
             "established_at": _utc_now(),
         }
         if self._scenario == "wrong-correlation":
-            document["correlation"]["token"] = OTHER_EVALUATION_TOKEN
+            document["correlation"]["token"] = OTHER_EVALUATION_HANDLE
 
         if self._scenario == "stale":
             document["freshness_current"] = False

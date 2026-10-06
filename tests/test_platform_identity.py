@@ -892,10 +892,13 @@ def test_no_second_digest_type_is_defined() -> None:
 # ADR-0020 §18).
 # ---------------------------------------------------------------------------
 
-#: One attempt's handle, as the deployment operation derives it.
-ATTEMPT_ONE = "dep-example-platform-test-environment-000000000000-a1"
-#: The next attempt's handle: the same platform, a later binding.
-ATTEMPT_TWO = "dep-example-platform-test-environment-000000000000-a2"
+#: One attempt's evaluation handle. A handle is a nonce: it names no platform,
+#: no environment, no attempt and no digest, and nothing is read out of it —
+#: including the position, which the evaluation context establishes.
+ATTEMPT_ONE = "ev-" + "1a" * 16
+#: The next evaluation's handle: the same platform, a later binding, another
+#: nonce. The handles are not related to each other in any way.
+ATTEMPT_TWO = "ev-" + "2b" * 16
 
 
 def _component_of_binding(

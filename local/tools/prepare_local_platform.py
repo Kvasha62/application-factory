@@ -162,6 +162,7 @@ def owner_identity_state(
         "branding": {"state": "ABSENT", "value": None},
         "provenance": "MEASURED",
         "binding_scope": binding_scope,
+        "observation_sequence": 1,
         "observation_authority": OBSERVATION_AUTHORITY,
         "observation_basis": OBSERVATION_BASIS,
         "freshness_current": True,

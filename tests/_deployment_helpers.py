@@ -47,6 +47,23 @@ FIXTURE_PATH = Path(__file__).parent / "_runtime_fixtures"
 #: The Platform Instance name the canonical tests deploy.
 PLATFORM_ID = "deployment-platform"
 
+#: The prefix the evaluating side puts on one opaque evaluation handle
+#: (``deployment_operations.deployment.EVALUATION_HANDLE_PREFIX``).
+HANDLE_PREFIX = "ev-"
+
+
+def evaluation_handle(seed: str = "ab") -> str:
+    """A fixed, well-formed opaque evaluation handle.
+
+    Tests that need a *known* handle use this; tests that need the production
+    thing call ``deployment_operations.new_evaluation_handle()``. The handle is a
+    nonce: it names no platform, no environment, no attempt and no digest, and
+    nothing may be read out of it.
+    """
+
+    return HANDLE_PREFIX + (seed * 16)[:32]
+
+
 #: The authority the owner-side test doubles declare for their observations.
 OWNER_AUTHORITY = "tests/owner-side-identity-source"
 #: How the owner-side test doubles ground an observation.
