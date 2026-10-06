@@ -50,3 +50,8 @@ htmlcov/
 
 # Deployment runtime workspaces of the example environment binding
 factory/environments/runtime/
+
+# Local Docker Running Platform stack (generated at run time)
+
+local/work/
+local/evidence/

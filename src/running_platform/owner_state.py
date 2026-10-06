@@ -60,96 +60,105 @@ class FileRunningPlatformOwnerStateReader:
 
     def read(self, binding: PlatformIdentityBinding) -> RunningPlatformOwnerState:
         try:
-            document = json.loads(self._path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            text = self._path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
             raise ActualIdentityUnavailable(
                 "running platform identity surface is unavailable"
             ) from error
-        if not isinstance(document, dict):
-            raise ActualIdentityUnavailable(
-                "running platform identity surface is invalid"
-            )
-        if "instance_digest" in document or "expected_instance" in document:
-            raise ActualIdentityUnavailable(
-                "running platform identity surface contains expected identity"
-            )
-        if document.get("correlation_token") != binding.token:
-            raise ActualIdentityUnavailable(
-                "running platform identity surface has stale or foreign correlation"
-            )
-        if document.get("freshness_current") is not True:
-            raise ActualIdentityUnavailable(
-                "running platform identity surface is stale"
-            )
-        provenance = document.get("provenance")
-        if provenance not in (
-            EvidenceProvenance.MEASURED,
-            EvidenceProvenance.TRANSITIVE,
-            EvidenceProvenance.ATTESTED,
-        ):
-            raise ActualIdentityUnavailable(
-                "running platform identity surface has invalid provenance"
-            )
+        return read_owner_state_surface(text, binding)
 
-        def field(name: str) -> IdentityField:
-            value = document.get(name)
-            if not isinstance(value, dict):
-                raise ActualIdentityUnavailable(
-                    f"actual {name} evidence is unavailable"
-                )
-            state = value.get("state")
-            if state == PresenceState.PRESENT:
-                return IdentityField.present(value.get("value"))
-            if state == PresenceState.ABSENT:
-                return IdentityField.absent()
-            raise ActualIdentityUnavailable(f"actual {name} evidence is unavailable")
 
-        raw_components = document.get("components")
-        if not isinstance(raw_components, list):
-            raise ActualIdentityUnavailable(
-                "actual component membership is unavailable"
-            )
-        components: list[ActualComponentIdentity] = []
-        for item in raw_components:
-            if not isinstance(item, dict):
-                raise ActualIdentityUnavailable(
-                    "actual component membership is malformed"
-                )
-            component_id = item.get("component_id")
-            version = item.get("component_version")
-            artifact = item.get("artifact_identity")
-            if not isinstance(component_id, str) or not component_id:
-                raise ActualIdentityUnavailable("actual component_id is unavailable")
-            if not isinstance(version, str) or not version:
-                raise ActualIdentityUnavailable(
-                    "actual component_version is unavailable"
-                )
-            if artifact is not None and not isinstance(artifact, dict):
-                raise ActualIdentityUnavailable("actual artifact identity is malformed")
-            components.append(ActualComponentIdentity(component_id, version, artifact))
+def read_owner_state_surface(
+    text: str,
+    binding: PlatformIdentityBinding,
+) -> RunningPlatformOwnerState:
+    """Validate one owner-published actual identity surface.
 
-        manifest = document.get("manifest")
-        manifest_state = document.get("manifest_state")
-        if not isinstance(manifest, dict) or not isinstance(manifest_state, str):
-            raise ActualIdentityUnavailable("actual Manifest identity is unavailable")
-        return RunningPlatformOwnerState(
-            platform_id=str(document.get("platform_id", "")),
-            membership=ActualMembership(
-                document.get("membership_established") is True,
-                tuple(components),
-            ),
-            manifest=ActualManifest(manifest, manifest_state),
-            configuration=field("configuration"),
-            golden_bundle=ActualGoldenBundle(
-                field("golden_bundle"),
-                document.get("golden_bundle_inventory_established") is True,
-            ),
-            extensions=field("extensions"),
-            branding=field("branding"),
-            provenance=provenance,
-            correlation_token=document["correlation_token"],
-            freshness_current=True,
+    The single validation of the owner identity surface: the file reader and
+    every transport reader (``running_platform.http_owner_state``) share it, so
+    no transport can weaken, reorder or re-implement the acceptance rules. A
+    malformed, contaminated, stale, or differently correlated surface fails
+    closed.
+    """
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ActualIdentityUnavailable(
+            "running platform identity surface is unavailable"
+        ) from error
+    if not isinstance(document, dict):
+        raise ActualIdentityUnavailable("running platform identity surface is invalid")
+    if "instance_digest" in document or "expected_instance" in document:
+        raise ActualIdentityUnavailable(
+            "running platform identity surface contains expected identity"
         )
+    if document.get("correlation_token") != binding.token:
+        raise ActualIdentityUnavailable(
+            "running platform identity surface has stale or foreign correlation"
+        )
+    if document.get("freshness_current") is not True:
+        raise ActualIdentityUnavailable("running platform identity surface is stale")
+    provenance = document.get("provenance")
+    if provenance not in (
+        EvidenceProvenance.MEASURED,
+        EvidenceProvenance.TRANSITIVE,
+        EvidenceProvenance.ATTESTED,
+    ):
+        raise ActualIdentityUnavailable(
+            "running platform identity surface has invalid provenance"
+        )
+
+    def field(name: str) -> IdentityField:
+        value = document.get(name)
+        if not isinstance(value, dict):
+            raise ActualIdentityUnavailable(f"actual {name} evidence is unavailable")
+        state = value.get("state")
+        if state == PresenceState.PRESENT:
+            return IdentityField.present(value.get("value"))
+        if state == PresenceState.ABSENT:
+            return IdentityField.absent()
+        raise ActualIdentityUnavailable(f"actual {name} evidence is unavailable")
+
+    raw_components = document.get("components")
+    if not isinstance(raw_components, list):
+        raise ActualIdentityUnavailable("actual component membership is unavailable")
+    components: list[ActualComponentIdentity] = []
+    for item in raw_components:
+        if not isinstance(item, dict):
+            raise ActualIdentityUnavailable("actual component membership is malformed")
+        component_id = item.get("component_id")
+        version = item.get("component_version")
+        artifact = item.get("artifact_identity")
+        if not isinstance(component_id, str) or not component_id:
+            raise ActualIdentityUnavailable("actual component_id is unavailable")
+        if not isinstance(version, str) or not version:
+            raise ActualIdentityUnavailable("actual component_version is unavailable")
+        if artifact is not None and not isinstance(artifact, dict):
+            raise ActualIdentityUnavailable("actual artifact identity is malformed")
+        components.append(ActualComponentIdentity(component_id, version, artifact))
+
+    manifest = document.get("manifest")
+    manifest_state = document.get("manifest_state")
+    if not isinstance(manifest, dict) or not isinstance(manifest_state, str):
+        raise ActualIdentityUnavailable("actual Manifest identity is unavailable")
+    return RunningPlatformOwnerState(
+        platform_id=str(document.get("platform_id", "")),
+        membership=ActualMembership(
+            document.get("membership_established") is True,
+            tuple(components),
+        ),
+        manifest=ActualManifest(manifest, manifest_state),
+        configuration=field("configuration"),
+        golden_bundle=ActualGoldenBundle(
+            field("golden_bundle"),
+            document.get("golden_bundle_inventory_established") is True,
+        ),
+        extensions=field("extensions"),
+        branding=field("branding"),
+        provenance=provenance,
+        correlation_token=document["correlation_token"],
+        freshness_current=True,
+    )
 
 
 class OwnerStateReader(Protocol):
@@ -337,4 +346,5 @@ __all__ = [
     "OwnerStateSnapshotSource",
     "OwnerStateSource",
     "RunningPlatformOwnerState",
+    "read_owner_state_surface",
 ]

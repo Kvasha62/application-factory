@@ -1,0 +1,83 @@
+# Local Running Platform stack — LOCAL DOCKER / NON-PRODUCTION.
+#
+# Two sides, physically separate:
+#
+#   running-platform  the owner-side identity producer (owner-side image only:
+#                     its own state directory, no Deployment & Operations code);
+#   dno               Deployment & Operations, reaching the producer across the
+#                     compose network with the repository's own transport
+#                     reader and the repository's own deployment operation.
+#
+# Nothing here is production: no GitHub Environment, no secrets, no registry,
+# no credentials. The identity state under RP_STATE_DIR is written by
+# `python local/tools/prepare_local_platform.py` before the stack runs.
+#
+# Usage (see local/README.md and local/run_local_evidence.py):
+#
+#   AF_WORK_DIR=$PWD/local/work RP_SCENARIO=correct \
+#     docker compose -f local/compose.yaml up -d running-platform
+#   AF_WORK_DIR=$PWD/local/work docker compose -f local/compose.yaml \
+#     run --rm --no-deps dno
+
+name: application-factory-local-running-platform
+
+services:
+  running-platform:
+    build:
+      context: ..
+      dockerfile: local/Dockerfile.running-platform
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --state
+      - /var/lib/running-platform/identity.json
+      - --foreign-state
+      - /var/lib/running-platform/identity-foreign.json
+      - --scenario
+      - ${RP_SCENARIO:-correct}
+      - --delay-seconds
+      - ${RP_DELAY_SECONDS:-0}
+      - --audit
+      - /var/lib/running-platform/audit.jsonl
+    volumes:
+      - ${AF_WORK_DIR:-./work}/rp:/var/lib/running-platform:rw
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import http.client;
+          c = http.client.HTTPConnection('127.0.0.1', 8080, timeout=2);
+          c.request('GET', '/healthz');
+          raise SystemExit(0 if c.getresponse().status == 200 else 1)
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: "no"
+
+  dno:
+    build:
+      context: ..
+      dockerfile: local/Dockerfile.dno
+    depends_on:
+      running-platform:
+        condition: service_healthy
+    volumes:
+      - ${AF_WORK_DIR:-./work}:/work:rw
+    command:
+      - local/dno/run_deployment.py
+      - --instance
+      - /work/dno/platform-instance.json
+      - --manifest
+      - /work/dno/platform-manifest.json
+      - --environment
+      - /work/dno/environment.json
+      - --identity-endpoint
+      - http://running-platform:8080/observe
+      - --identity-timeout
+      - ${AF_IDENTITY_TIMEOUT:-2.0}
+      - --result-out
+      - /work/dno/result.json
