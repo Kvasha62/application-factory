@@ -38,7 +38,7 @@ from pathlib import Path
 
 import pytest
 
-from component_registry import load_registry
+from component_registry import is_shared_library, load_registry
 from composer import (
     EXAMPLE_REQUEST_PATH,
     compose_diagnostics,
@@ -73,13 +73,40 @@ from platform_manifest import (
 # ---------------------------------------------------------------------------
 
 #: The declared dependency closure of ``learning`` in the canonical registry.
+#: ``learning`` declares a dependency on the shared in-process library
+#: ``idempotency``, but a library is never an independently deployed instance
+#: member: its declared range is validated against the authoritative registry
+#: version instead (ADR-0021 §2.2 decision D2=B).
 LEARNING_CLOSURE = (
     "authorization",
-    "idempotency",
     "identity",
     "learning",
     "tenant_authority",
 )
+
+
+def with_library_closure(registry, component_ids) -> set[str]:
+    """Close a bundle's pinned set over the shared in-process libraries.
+
+    A certified Golden Bundle pins the library versions its components import
+    in-process; the composition assembled from that bundle never carries a
+    library as an independently deployed member (ADR-0021 §2.2 D2=B).
+    """
+    pinned = set(component_ids)
+    frontier = list(pinned)
+    while frontier:
+        current = frontier.pop()
+        for dependency in registry.dependencies(current):
+            dependency_id = dependency.get("component_id")
+            if (
+                isinstance(dependency_id, str)
+                and dependency_id not in pinned
+                and dependency_id in registry.component_ids
+                and is_shared_library(registry.entry(dependency_id))
+            ):
+                pinned.add(dependency_id)
+                frontier.append(dependency_id)
+    return pinned
 
 
 @pytest.fixture(scope="module")
@@ -352,7 +379,7 @@ class TestPositiveAssembly:
         """A certified Golden Bundle reference is inherited, never re-derived."""
         root = materialize(tmp_path)
         registry = load_registry(root)
-        pinned = sorted(LEARNING_CLOSURE)
+        pinned = sorted(with_library_closure(registry, LEARNING_CLOSURE))
         components = [
             {
                 "component_id": component_id,
@@ -515,7 +542,7 @@ class TestNegativeAssembly:
         document["components"] = [
             entry
             for entry in document["components"]
-            if entry["component_id"] != "idempotency"
+            if entry["component_id"] != "identity"
         ]
         document["manifest_digest"] = compute_manifest_digest(document)
         rejects(document, "example-platform", root, "absent from the manifest")
@@ -1310,6 +1337,7 @@ class TestBoundary:
         assert shipped == {
             "README.md",
             "example_instance.json",
+            "example_instance_without_shared_libraries.json",
             "schema/platform_instance.schema.json",
         }
 

@@ -706,7 +706,15 @@ def _component_errors(document: Mapping, path: str, root: Path, registry) -> lis
     # Validate the explicit composition against dependencies declared by the
     # authoritative Component Registry. Missing or incompatible dependencies
     # are errors; this validator never adds, substitutes, or resolves them.
+    # A shared in-process library is not a platform member (ADR-0021 §2.2
+    # D2=B): it is never required to be present as a member, and it is never
+    # accepted as one.
     if registry is not None:
+        # The registry slice's published vocabulary, imported at call time like
+        # every other registry dependency of this module (the registry is the
+        # authority; an unavailable one is handled above, fail-closed).
+        from component_registry import SHARED_LIBRARY_CLASS, is_shared_library
+
         selected_versions = {
             entry.get("component_id"): entry.get("component_version")
             for entry in components
@@ -721,6 +729,16 @@ def _component_errors(document: Mapping, path: str, root: Path, registry) -> lis
 
             comp_id = entry.get("component_id")
             if not isinstance(comp_id, str) or comp_id not in registered_ids:
+                continue
+
+            if is_shared_library(registry.entry(comp_id)):
+                errors.append(
+                    f"{path}.components[{index}]: {comp_id!r} is classified "
+                    f"{SHARED_LIBRARY_CLASS} (ADR-0021 §2.2 D2=B); a shared in-process "
+                    f"library is not an independently deployable platform member and "
+                    f"cannot appear in a Platform Manifest, a Platform Instance or any "
+                    f"deployment input"
+                )
                 continue
 
             reg_entry = registry.entry(comp_id)
@@ -766,6 +784,22 @@ def _component_errors(document: Mapping, path: str, root: Path, registry) -> lis
                     errors.append(
                         f"{dep_path}.version_range: {version_range!r} is a floating selector"
                     )
+                    continue
+
+                if is_shared_library(_registry_entry(registry, dep_id)):
+                    # A shared in-process library is not deployed, so it is not
+                    # a manifest member. The declared range is still enforced —
+                    # against the authoritative registry version, which is the
+                    # only version of an in-process library there is.
+                    library_version = registry.version(dep_id)
+                    if not _version_satisfies_range(library_version, version_range):
+                        errors.append(
+                            f"{dep_path}.version_range: component {comp_id!r} requires "
+                            f"the shared in-process library {dep_id!r} in range "
+                            f"{version_range!r}, but the authoritative registry publishes "
+                            f"{library_version!r}; an in-process library dependency is never "
+                            f"dropped or substituted (ADR-0021 §2.2 D2=B)"
+                        )
                     continue
 
                 selected_version = selected_versions.get(dep_id)

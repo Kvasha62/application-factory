@@ -159,8 +159,9 @@ Microservice — внутренняя единица реализации и д�
 | **B. Platform Service** | Нет / служебный UI | Да | Identity, Payments, Media, Notifications |
 | **C. Computational Service** | Нет | Опционально | Pricing Engine, Route Optimizer |
 | **D. Streaming Pipeline** | Нет | Собственный state | Telemetry Ingest, Analytics Pipeline |
+| **E. Shared In-process Library** | Нет | Нет (in-process поверхность) | Idempotency, Saga |
 
-Business System — самостоятельная бизнес-система. Platform Service — общий сервис. Computational Service — вычислительная способность, обычно stateless. Streaming Pipeline — высокочастотный потоковый компонент со своим state при необходимости.
+Business System — самостоятельная бизнес-система. Platform Service — общий сервис. Computational Service — вычислительная способность, обычно stateless. Streaming Pipeline — высокочастотный потоковый компонент со своим state при необходимости. Shared In-process Library — библиотечная поверхность, которую потребители импортируют in-process: такой компонент не является независимо развёртываемым runtime-членом платформы, не входит в Platform Instance как отдельный член и не адресуется через network-контракт (ADR-0021 §2.2, решение D2=B).
 
 ---
 
@@ -498,6 +499,8 @@ E2E → Migration → Traffic Switch → Observation → Retire Old Version
 Компонент считается готовым к публикации только если существуют: исходный код; API contract; data ownership definition; migrations; event contracts; contract tests; unit/integration tests; deployment artifact; configuration schema; documentation; health/readiness; version; owner; compatibility information.
 
 Отсутствие обязательной части означает NOT PUBLISHABLE.
+
+Для компонентов класса **E. Shared In-process Library** (`idempotency`, `saga`; ADR-0021 §2.2, решение D2=B) требования `migrations` и `deployment artifact` не применяются к их библиотечной роли: они не являются независимо развёртываемыми членами Platform Instance, а их потребители импортируют опубликованную in-process поверхность. Остальные требования этого Definition of Done применяются к ним полностью. Само изменение класса артефакты не публикует и lifecycle-состояние записей Component Registry не меняет: publishability остаётся явным утверждением записи реестра.
 
 ---
 

@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from component_registry import REGISTRY_PATH, load_registry
+from component_registry import REGISTRY_PATH, is_shared_library, load_registry
 from component_registry.errors import RegistryValidationError
 from component_registry.registry import Registry
 from component_registry.schema import SCHEMA_PATH as REGISTRY_SCHEMA_PATH
@@ -56,17 +56,21 @@ from platform_manifest.lifecycle import (
 from platform_manifest.schema import SCHEMA_PATH, load_schema
 from platform_manifest.validation import _version_satisfies_range
 
+#: The registry inventory that a Platform Manifest may carry: every registered
+#: component except the shared in-process libraries, which are never
+#: independently deployed members (ADR-0021 §2.2 decision D2=B).
 EXPECTED_INVENTORY = (
     "authorization",
     "identity",
     "tenant_authority",
     "records",
     "learning",
-    "saga",
-    "idempotency",
     "commerce",
     "booking",
 )
+
+#: The shared in-process libraries of the canonical registry.
+SHARED_LIBRARY_IDS = ("idempotency", "saga")
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -84,8 +88,16 @@ def registry(root: Path):
 
 
 def _valid_components_from_registry(registry) -> list[dict]:
+    """The registry entries a manifest may carry (ADR-0021 §2.2 D2=B).
+
+    A shared in-process library is not an independently deployed platform
+    member, so it never appears in a Platform Manifest, a Platform Instance or
+    any deployment input.
+    """
     comps = []
     for entry in registry.entries:
+        if is_shared_library(entry):
+            continue
         comps.append(
             {
                 "component_id": entry["component_id"],
@@ -1319,13 +1331,14 @@ def test_multiple_dependencies_are_all_checked(root: Path, valid_components) -> 
         for error in errors
     )
     assert any(
-        "component 'learning'" in error and "dependency 'idempotency'" in error
-        for error in errors
-    )
-    assert any(
         "component 'learning'" in error and "dependency 'identity'" in error
         for error in errors
     )
+    # `learning` also declares a dependency on the shared in-process library
+    # `idempotency`. A library is not a manifest member, so its absence is not
+    # an error; its declared range is checked against the authoritative
+    # registry version instead (ADR-0021 §2.2 D2=B).
+    assert not any("dependency 'idempotency'" in error for error in errors)
 
 
 def test_dependency_validation_does_not_auto_add_missing_component(
@@ -1865,6 +1878,7 @@ def test_valid_registry_in_isolated_root_is_accepted(registry, isolated_root) ->
             "artifact": dict(entry["artifact"]),
         }
         for entry in loaded.entries
+        if not is_shared_library(entry)
     ]
     components.sort(key=lambda item: item["component_id"])
 

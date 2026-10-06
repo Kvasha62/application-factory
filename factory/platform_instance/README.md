@@ -54,10 +54,27 @@ Assembly **фиксирует** состав, а не вычисляет и не
 | Сборка, валидация, digest | `src/platform_instance/` | программный доступ, детерминированная сборка и проверка |
 | Тесты | `tests/test_platform_instance.py` | проверка архитектурных правил Slice F |
 | CLI | `python -m platform_instance` | validate, digest, assemble |
-| Детерминированный пример | `factory/platform_instance/example_instance.json` | точная assembly манифеста из `factory/composer/example_request.json` с `platform_id = "example-platform"` |
+| Детерминированный пример (текущий) | `factory/platform_instance/example_instance_without_shared_libraries.json` | точная assembly манифеста из `factory/composer/example_request.json` с `platform_id = "example-platform"`; Shared In-process Library не входят в состав (ADR-0021 §2.2, решение D2=B) |
+| Предыдущая композиция (сохранена без изменений) | `factory/platform_instance/example_instance.json` | assembly той же композиции до классификации D2=B: 7 членов, собственный `instance_digest`; не редактировался in place — результат классификации зафиксирован как **новый** instance (ADR-0016 §5, §7) |
 
-Конкурирующие представления Instance не создаются. Хранение конкретных
-instance-документов определяется потребителем; формат и валидация — едины.
+Конкурирующие представления одной и той же композиции не создаются: у каждой
+композиции ровно одно assembly-представление. Разные композиции — разные
+Platform Instances, поэтому рядом с текущим примером сохранён предыдущий:
+`example_instance.json` (7 членов, композиция до классификации D2=B) и
+`example_instance_without_shared_libraries.json` (6 членов, текущий) — два
+разных instance с разными `instance_digest`; прежний не редактировался in
+place и под текущей классификацией не является допустимым входом. Хранение
+конкретных instance-документов определяется потребителем; формат и
+валидация — едины.
+
+Текущий пример: `platform_id = "example-platform"`,
+`manifest_digest = sha256:3e391dc7a7300cc2b09a803a141b03ca9f2c9930dc3f2b8c50d702eea625471e`,
+`instance_digest = sha256:477145e4584b47f250a5181bb37aa21adb54c0a36ec58b3770f11f99e83219e9`.
+Прежний instance сохраняет собственные `manifest_digest =
+sha256:a5a04028adeae7f7d41978d3bc32dbbf0cf72ceca2350eff7966381b5619c912` и
+`instance_digest =
+sha256:2be690d9f3c091d23e62b77e32a07c5c0100f98719dedec2f5571498d4508212`
+(ADR-0021 §2.2, решение D2=B; ADR-0016 §5, §7).
 
 ---
 

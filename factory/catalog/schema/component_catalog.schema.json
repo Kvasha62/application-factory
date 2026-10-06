@@ -184,9 +184,10 @@
             "business_system",
             "platform_service",
             "computational_service",
-            "streaming_pipeline"
+            "streaming_pipeline",
+            "shared_library"
           ],
-          "description": "Component class (ARCHITECTURE.md §3), mirrored from the canonical registry."
+          "description": "Component class (ARCHITECTURE.md §3; ADR-0021 §2.2 D2=B), mirrored from the canonical registry. `shared_library` is the shared in-process library class: such a component is not an independently deployable platform member and never appears as a composition or Platform Instance member."
         },
         "scs_id": {
           "oneOf": [

@@ -50,8 +50,14 @@ Entry = Mapping[str, Any]
 #: Directory holding the normative schema, rules and the deterministic example.
 INSTANCE_DIR = "factory/platform_instance"
 
-#: The deterministic example instance shipped with the slice.
-EXAMPLE_INSTANCE_PATH = "factory/platform_instance/example_instance.json"
+#: The deterministic example instance shipped with the slice. It is assembled
+#: under the current component classification (ADR-0021 §2.2 D2=B): shared
+#: in-process libraries are not instance members. The prior 7-member instance
+#: assembled before that classification is preserved unchanged next to it as
+#: ``example_instance.json`` (its own recorded digest; never edited in place).
+EXAMPLE_INSTANCE_PATH = (
+    "factory/platform_instance/example_instance_without_shared_libraries.json"
+)
 
 
 def canonical_json(value: object) -> str:

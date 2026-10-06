@@ -8,7 +8,7 @@
   },
   "approval_ref": {
     "approval_id": "demo_shop/approvals/1",
-    "digest": "sha256:adeb2ac3a86e6cf50532fbb241c635eab04a149daebddd4f7d3dca62afc51cac"
+    "digest": "sha256:82c362297584e91eed3e790baba8d011056953468f8cc1ff8bf754b932f47908"
   },
   "generator_version": "control-plane/composition-requests/v1",
   "request": {
@@ -36,5 +36,5 @@
       }
     }
   },
-  "digest": "sha256:1ac2aea744af4a488908be8023657598eec16303fefcfad58d1748e08ac65d4f"
+  "digest": "sha256:5dbd79d07d910fd8c348731a4351a56b70a0070dd766bb795da7f5b974db2c59"
 }

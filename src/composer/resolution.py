@@ -15,7 +15,13 @@ authoritative metadata:
 * declared dependencies are added to the composition as a deterministic
   closure, and every addition is recorded as an explicit decision, so a
   composition change is always visible (ARCHITECTURE.md §17: nothing may be
-  replaced silently).
+  replaced silently);
+* a component the registry classifies as a shared in-process library is not a
+  composition member (ADR-0021 §2.2 decision D2=B): it is not independently
+  deployable, so it enters no manifest and no Platform Instance. A declared
+  dependency on a library is still validated — the registry version must
+  satisfy the declared range — but it is never selected, and a request that
+  names a library as a member is refused deterministically.
 
 Step order is fixed — explicitly requested components are processed in
 ``component_id`` order, then their declared dependencies — so the same request
@@ -33,7 +39,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from component_registry import (
+    SHARED_LIBRARY_CLASS,
     is_floating_selector,
+    is_shared_library,
     parse_version_range,
 )
 
@@ -228,6 +236,21 @@ def resolve_closure(
                 )
             continue
 
+        target_entry = registry.entry(component_id)
+        if is_shared_library(target_entry) and parent is None:
+            # ADR-0021 §2.2 decision D2=B: a shared in-process library is not
+            # an independently deployable platform member, so it is never a
+            # member of a composition. Its consumers reach its published
+            # surface in-process; a declared dependency on it is validated by
+            # the loop below without becoming a member.
+            errors.append(
+                f"$.components: {component_id!r} is classified {SHARED_LIBRARY_CLASS} "
+                f"(ADR-0021 §2.2 D2=B); a shared in-process library is not an "
+                f"independently deployable platform member and cannot be composed into "
+                f"a Platform Instance"
+            )
+            continue
+
         select(component_id, selected_as, constraint)
 
         for index, dependency in enumerate(registry.dependencies(component_id)):
@@ -236,6 +259,15 @@ def resolve_closure(
             errors.extend(_dependency_errors(component_id, dependency, index))
             dependency_id = dependency.get("component_id")
             if not isinstance(dependency_id, str) or not dependency_id:
+                continue
+            if is_shared_library(
+                registry.entry(dependency_id) if dependency_id in registered else None
+            ):
+                # A shared in-process library is a declared dependency but not
+                # a composition member: it is not independently deployed, so it
+                # adds no manifest entry. The declared range is still enforced
+                # against the authoritative registry version in
+                # ``composer.verification.verify_dependency_compatibility``.
                 continue
             queue.append(
                 (

@@ -145,7 +145,7 @@
     {
       "component_id": "saga",
       "component_version": "0.1.0",
-      "class": "platform_service",
+      "class": "shared_library",
       "scs_id": null,
       "maturity_level": "level_0_modular_monolith",
       "owner": "@Kvasha62",
@@ -167,12 +167,12 @@
         "openapi": null
       },
       "summary": "IS-006 (GitHub Issue #18)",
-      "entry_digest": "sha256:bf67edbafd198f58970322ef46959674d4066692da8d9ce909ea08c86cf83d5e"
+      "entry_digest": "sha256:b522f548b347dd7d4daf901480ac9d56302fea8cf6c0259ff435b3d5d9a86557"
     },
     {
       "component_id": "idempotency",
       "component_version": "0.1.0",
-      "class": "platform_service",
+      "class": "shared_library",
       "scs_id": null,
       "maturity_level": "level_0_modular_monolith",
       "owner": "@Kvasha62",
@@ -193,7 +193,7 @@
         "openapi": null
       },
       "summary": "IS-005 (GitHub Issue #16)",
-      "entry_digest": "sha256:e2322b16888dc4338c4142c58cc5b597d6394cf6f2a02e8b0d5297a6d9577dd1"
+      "entry_digest": "sha256:9204ea4e05c6aaae8c903749b1d09c41a03c38d6056c50ee2ca632e837ad27d5"
     },
     {
       "component_id": "commerce",

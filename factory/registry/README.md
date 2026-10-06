@@ -45,7 +45,7 @@ Component Registry — канонический machine-readable реестр к
 |---|---|
 | `component_id` | стабильная уникальная идентичность компонента |
 | `component_version` | явная публичная SemVer-версия |
-| `class` | класс компонента (`ARCHITECTURE.md` §3) |
+| `class` | класс компонента (`ARCHITECTURE.md` §3); `shared_library` — Shared In-process Library, не независимо развёртываемый член Platform Instance (ADR-0021 §2.2, решение D2=B) |
 | `owner` | ответственный владелец компонента |
 | `contracts` | ссылки на опубликованные контракты |
 | `data_ownership` | владение данными и области данных |
@@ -189,6 +189,11 @@ components/<dependency.component_id>/contract/component_contract.json
 
 Допустимые механизмы (`ARCHITECTURE.md` §18): `api`, `events`,
 `data_export_cdc`, `internal-consumer-surface`.
+
+Зависимость на компонент класса `shared_library` объявляется только механизмом
+`internal-consumer-surface` и не делает его членом композиции: Shared In-process
+Library потребляется in-process, а объявленный диапазон версии проверяется по
+авторитетной версии реестра (ADR-0021 §2.2, решение D2=B).
 
 Запрещённые механизмы: `database`, `internal_code`, `private_schema`,
 `internal_queue`.
@@ -706,6 +711,12 @@ D&O:
 по `ARCHITECTURE.md` §30: отсутствуют migrations и deployment artifact.
 Это состояние зафиксировано явно через `deployable`, `publishable`
 и `publishability_blockers`.
+
+Компоненты класса `shared_library` (`saga`, `idempotency`) — Shared In-process
+Library: они не являются независимо развёртываемыми членами Platform Instance
+и не входят в Platform Manifest/Platform Instance как отдельные члены, их
+поверхность потребляется in-process (ADR-0021 §2.2, решение D2=B). На
+требования §9 к `artifact` и на honest-состояние `lifecycle` это не влияет.
 
 ---
 

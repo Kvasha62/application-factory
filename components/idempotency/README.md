@@ -1,6 +1,6 @@
 # Idempotency / Command Safety Boundary (IS-005)
 
-**Класс:** A — Platform Service (внутренняя consumer surface, не HTTP)
+**Класс:** E — Shared In-process Library (внутренняя consumer surface, не HTTP; ADR-0021 §2.2, решение D2=B; ранее — Platform Service)
 **Уровень:** Level 0 — Modular Monolith
 **Версия компонента:** 0.1.0
 **Владелец данных:** `idempotency` (логическая схема `idempotency` — in-memory, bounded)
@@ -34,6 +34,10 @@ IdempotencyGuard.execute (эта граница)
 компонент не меняет ни бизнес-логику, ни решение авторизации, ни tenant-контекст.
 
 ## Публикуемая поверхность
+
+Компонент не является независимо развёртываемым членом Platform Instance:
+его consumer surface импортируется потребителями in-process, а не вызывается
+по сети (ADR-0021 §2.2, решение D2=B).
 
 Единственная consumer surface — модуль `idempotency.guard`, тип
 `IdempotencyGuard`, операция `execute` (контракт `components/idempotency/contract/`).
