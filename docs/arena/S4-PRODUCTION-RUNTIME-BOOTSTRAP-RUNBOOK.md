@@ -54,7 +54,7 @@ Both are constructor-injected parameters of the existing public API; neither is 
 | Seam | Contract | Injection point | Direction |
 |---|---|---|---|
 | **Runtime / control seam** | `RuntimeAdapter` — `materialize`, `migrate`, `start`, `attach`, `request`, `stop` (`runtime.py:221-263`, "The seam between the deployment operation and its environment") | `deploy(request, runtime=…)` (`deployment.py:639-646`); `attach(request, runtime=…)` (`deployment.py:1391`); `restart(request, runtime=…)` (`restart.py:361-367`) | Layer O → Layer R: requests only |
-| **S4 identity seam** | `PlatformIdentityProvider` (`platform_identity.py:153-160`), realized by `OwnerSuppliedPlatformIdentityProvider` over `RunningPlatformIdentitySource.observe(binding) -> ActualPlatformSnapshot` (`platform_identity_source.py:52-57`, `:60-111`) | `deploy(..., identity_provider=…)` (`deployment.py:643`); `reconcile(..., identity_provider=…)` (`reconciliation.py:179-182`); `restart(..., identity_provider=…)` (`restart.py:365`) | Layer R → Layer O: evidence only |
+| **S4 identity seam** | `PlatformIdentityProvider` (`platform_identity.py:289-299`), realized by `OwnerSuppliedPlatformIdentityProvider` over `RunningPlatformIdentitySource.observe(binding) -> ActualPlatformSnapshot` (`platform_identity_source.py:52-57`, `:60-111`) | `deploy(..., identity_provider=…)` (`deployment.py:643`); `reconcile(..., identity_provider=…)` (`reconciliation.py:179-182`); `restart(..., identity_provider=…)` (`restart.py:365`) | Layer R → Layer O: evidence only |
 
 **The complete list of things Layer O can do to the runtime** — verified by enumeration of every adapter call inside `deploy()`:
 
@@ -217,14 +217,14 @@ Two verified facts make this Level A:
 | Property | Rule |
 |---|---|
 | Fresh handle | The adapter generates a new random handle per evaluation (≥128 bits), caches nothing, re-observes every time |
-| Correlation | The producer echoes the handle; the adapter binds the answer to the evaluation only after the echo matches |
-| Foreign rejection | An echo of a handle the adapter never issued ⇒ refusal |
-| Stale rejection | An echo of an earlier handle, `freshness_current=false`, or evidence describing an earlier binding ⇒ refusal (ADR-0019 §26; ADR-0020 §18) |
+| Correlation | The producer states, as its own facts, the binding identity it answered (handle, scope, sequence, target) and its attribution (authority, basis, instant); the adapter stops a document whose statement contradicts the binding it answered, and D&O establishes correspondence in-band (`require_correlated_evidence`) |
+| Foreign rejection | An answer stating another handle, another binding space, another position or another platform ⇒ refusal; a handle the evaluation never issued can never establish correspondence |
+| Stale rejection | An answer for an earlier binding (an earlier attempt or position), `freshness_current=false`, or an incomplete correlation ⇒ refusal (ADR-0019 §26; ADR-0020 §18) |
 | Freshness | `freshness_current=true` only for the observation taken under the current handle |
 | Hard timeout | The adapter enforces its own deadline **after** the transport returns; a timeout is a refusal, never a match |
 | Fail-closed | Missing surface, missing basis, non-normative provenance, `UNKNOWN` presence, incomplete membership or inventory ⇒ `UNAVAILABLE`. `MISMATCH` is never downgraded; `UNAVAILABLE` is never upgraded (ADR-0019 §28) |
 
-This is mandatory, not polish: D&O performs no in-band comparison of evidence correlation against the binding — a snapshot labelled with a foreign correlation token still returns `MATCH` through the real S4 seam. The owner-side adapter is the only place foreign/stale evidence can be stopped.
+Correlation is not delegated to the owner-side adapter. D&O itself fails closed: `deployment_operations.platform_identity.require_correlated_evidence(binding, evidence)` runs at every identity seam (deploy, attach, restart, reconcile) before `D_actual` is computed, requires the evaluation binding to state its semantics (authority, basis, target, scope, sequence, instant), requires the observation to state its own binding identity and attribution, and refuses any disagreement as `UNAVAILABLE` — an equal handle alone establishes nothing. The adapter remains the place where a document is stopped before it crosses the boundary, but the seam no longer depends on it.
 
 ---
 
@@ -286,7 +286,7 @@ systemctl status rp-cell-manager rp-identity-producer --no-pager
 **At this point no Layer O process exists and none has ever run.** Layer R must be up and its member registry populated by the cell manager's own supervision.
 
 ### Step 5 — Layer R standalone proof (no D&O anywhere)
-Ask the producer for one observation directly. **At this point nothing has been realized into the layer**, so the correct answer is a well-formed nine-surface document with `membership_established: true` and an **empty** member set — and the S4 consumer must refuse it as incomplete (`ActualIdentityUnavailable: "actual component membership is empty"`, `platform_identity.py:329-330`).
+Ask the producer for one observation directly. **At this point nothing has been realized into the layer**, so the correct answer is a well-formed nine-surface document with `membership_established: true` and an **empty** member set — and the S4 consumer must refuse it as incomplete (`ActualIdentityUnavailable: "actual component membership is empty"`, `platform_identity.py:603-605`).
 
 That refusal is part of the proof, not a failure: it shows that (a) Layer R and its identity surface exist and answer with **zero Layer O involvement**, and (b) absence of members is reported honestly rather than fabricated into a complete identity. The complete-identity form of this proof is **I1b** (§12.1), which can only run after the first attach at step 13 — a specific realized composition is orchestration output, while the layer that hosts it and the facts about it belong to Layer R.
 
@@ -367,7 +367,11 @@ The CLI is deliberately not used: it cannot pass a provider (`deployment_operati
 One JSON object per evaluation, mirroring the field set the existing owner-surface contract validates (`running_platform/owner_state.py:61-152`):
 ```json
 {
-  "platform_id": "<actual>", "correlation_token": "<echo of H>", "freshness_current": true,
+  "platform_id": "<actual>", "freshness_current": true,
+  "correlation": {"token": "<echo of H>", "scope": "<the binding space this platform serves>",
+                  "sequence": <this answer's position in that space>, "target": "<the platform actually observed>",
+                  "authority": "<who established this observation>", "basis": "<on what basis>",
+                  "established_at": "<when>"},
   "provenance": "ATTESTED", "membership_established": true,
   "components": [{"component_id": "tenant_authority", "component_version": "0.1.0",
                   "artifact_identity": {"artifact_type": "none", "digest": null,
@@ -379,7 +383,7 @@ One JSON object per evaluation, mirroring the field set the existing owner-surfa
   "extensions":     {"state": "ABSENT"},  "branding": {"state": "ABSENT"}
 }
 ```
-The producer must refuse to emit, and the adapter refuse to accept, any document containing `instance_digest` or `expected_instance` (`running_platform/owner_state.py:72`).
+The producer must refuse to emit, and the adapter refuse to accept, any document containing `instance_digest` or `expected_instance` (`running_platform/owner_state.py:72`). The `correlation` statement is the producer's own fact: the request carries nothing but the handle, so no expected identity can be echoed back into it.
 
 ### Step 12 — negative control (must fail closed)
 Run the composition root with the S4 seam unavailable (producer stopped or answering a foreign handle). Expected: `IdentityVerificationFailed: identity/version/digest verification failed; the platform is not deployed` — **and Layer R must still be running afterwards** (check `systemctl status` and re-ask the producer). This proves a failed orchestration attempt destroys nothing it does not own.
@@ -430,7 +434,7 @@ No evidence file may contain a secret value, an expected-state document, or cont
 
 | # | Proof | Procedure | Required result |
 |---|---|---|---|
-| **I1a** | **The runtime layer and its identity surface exist without D&O** | Step 5: Layer R started by its supervisor; no Layer O process has ever run; ask the producer directly | A well-formed nine-surface document with `membership_established: true` and an empty member set; the S4 seam refuses it as incomplete (`platform_identity.py:329-330`). Layer R answered; nothing was fabricated |
+| **I1a** | **The runtime layer and its identity surface exist without D&O** | Step 5: Layer R started by its supervisor; no Layer O process has ever run; ask the producer directly | A well-formed nine-surface document with `membership_established: true` and an empty member set; the S4 seam refuses it as incomplete (`platform_identity.py:603-605`). Layer R answered; nothing was fabricated |
 | **I1b** | **The Running Platform's actual identity is established without D&O** | After step 13, with **no Layer O process running**: ask the producer directly and evaluate the answer through the S4 seam | A complete, current, self-consistent nine-surface actual identity; `D_actual == D_expected` ⇒ `MATCH`, with no Layer O participation |
 | **I2** | **Layer O's death ends nothing** | After step 13, kill the Layer O process | Layer R units still active; the producer still answers a complete current identity; `pgrep -u <DNO_USER>` empty |
 | **I3** | **Layer O's stop is a claim, not a kill** | Call `Deployment.stop()` | The record becomes `mark_stopped` (Layer O no longer claims a Running Platform, `deployment.py:312-333`), while the member runtime's fate follows **Layer R's** policy — recorded as such by the cell manager |
@@ -442,9 +446,9 @@ I1a, I1b, I2 and I3 are the acceptance evidence for "Running Platform ≠ D&O or
 | # | Case | Injected condition | Required result | Enforced at |
 |---|---|---|---|---|
 | A1 | MATCH | Complete, current, correctly correlated actual identity | `MATCH` → `identity_verified` → `realized` | `deployment.py:898-915` |
-| A2 | Drift → MISMATCH | One identity-bearing value changed | `MISMATCH`, never `UNAVAILABLE` | `platform_identity.py:268` |
-| A3 | Stale → refusal | `freshness_current=false` or an earlier handle | `UNAVAILABLE` | `validate_actual_evidence` |
-| A4 | Foreign correlation → refusal | Handle the adapter never issued | refusal **by the owner-side adapter** | mandatory: Layer O alone returns `MATCH` for a foreign token |
+| A2 | Drift → MISMATCH | One identity-bearing value changed | `MISMATCH`, never `UNAVAILABLE` | `platform_identity.py:493-494` |
+| A3 | Stale → refusal | `freshness_current=false`, an earlier handle, or an answer for an earlier binding | `UNAVAILABLE` | `require_correlated_evidence`; `validate_actual_evidence` |
+| A4 | Foreign correlation → refusal | An answer stating another handle, another binding space, another position or another platform | `UNAVAILABLE`, never `MATCH` | `require_correlated_evidence` (in D&O, in-band) **and** the owner-side adapter |
 | A5 | Incomplete → refusal | `membership_established=false`, incomplete bundle inventory, any `UNKNOWN` field | `UNAVAILABLE` | `_validate_components`, `_validate_golden_bundle_inventory` |
 | A6 | Duplicate → refusal | The same `component_id` twice | `UNAVAILABLE` | `_validate_components` |
 | A7 | Extra / missing member → MISMATCH | A member in the cell absent from the answer, or an expected member absent | `MISMATCH`, never silently ignored | projection + digest equality (`test_extra_actual_component_is_mismatch:273`, `test_missing_expected_component_is_mismatch:285`) |

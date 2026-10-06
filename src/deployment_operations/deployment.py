@@ -81,6 +81,7 @@ from deployment_operations.health import (
 )
 from deployment_operations.platform_identity import (
     ActualIdentityUnavailable,
+    BindingEvaluationContext,
     IdentityCorrespondenceResult,
     PlatformIdentityBinding,
     PlatformIdentityProvider,
@@ -178,24 +179,77 @@ def default_source_paths() -> tuple[Path, ...]:
     return (Path(__file__).resolve().parent.parent,)
 
 
+#: The authorities that establish evaluation bindings inside this capability.
+#: A binding states which operation established it, because the binding is not
+#: an opaque string: it is this operation's evaluation of one identity-bearing
+#: binding, and the operation is accountable for it (ADR-0019 §26, ADR-0020 §18).
+AUTHORITY_DEPLOY = "deployment-operations/deploy"
+AUTHORITY_ATTACH = "deployment-operations/attach"
+
+
+def evaluation_binding(
+    *,
+    authority: str,
+    token: str,
+    basis: str,
+    target: str,
+    scope: str,
+    sequence: int,
+    established_at: str,
+) -> PlatformIdentityBinding:
+    """The evaluation binding of one operation, with its established semantics.
+
+    ``authority`` names the operation that established the binding, ``token``
+    the evaluation handle it established, ``basis`` the durable record the
+    binding identity is derived from, ``target`` the identity-bearing platform
+    the evaluation is for, ``scope`` the binding space in which that target is
+    unique (this environment), ``sequence`` this evaluation's position in that
+    space (attempt, observation or restart number), and ``established_at`` the
+    operation's own instant.
+
+    Only the handle crosses an owner-side boundary; an owner-side producer's
+    answer must state the binding identity it answered, and
+    :func:`require_correlated_evidence` refuses an answer that disagrees
+    (another binding, another platform, another position in the space).
+    """
+    return PlatformIdentityBinding(
+        token=token,
+        context=BindingEvaluationContext(
+            authority=authority,
+            basis=basis,
+            target=target,
+            scope=scope,
+            sequence=sequence,
+            established_at=established_at,
+        ),
+    )
+
+
+def deployment_record_basis(deployment_id: str) -> str:
+    """The durable basis a binding identity is derived from: the record."""
+    return f"deployment-record:{deployment_id}"
+
+
 def _verify_running_platform_identity(
     provider: PlatformIdentityProvider,
     expected_instance: Mapping[str, Any],
     *,
-    binding_token: object,
+    binding: PlatformIdentityBinding,
 ) -> None:
     """Cross the owner-side identity adapter boundary exactly once.
 
-    The provider receives only an opaque evaluation binding. The expected
+    The provider receives the evaluation binding: one handle plus the semantics
+    of the identity-bearing binding this operation established. The expected
     Platform Instance remains on the D&O side and is used only after actual
-    evidence has been independently obtained. RuntimeAdapter is deliberately
-    absent from this function: runtime control and Running Platform identity
-    evidence are separate boundaries.
+    evidence has been independently obtained and its correlation established.
+    RuntimeAdapter is deliberately absent from this function: runtime control
+    and Running Platform identity evidence are separate boundaries.
     """
-    binding = PlatformIdentityBinding(binding_token)
     try:
         evidence = provider.observe_identity(binding)
-        result = establish_identity_correspondence(expected_instance, evidence)
+        result = establish_identity_correspondence(
+            expected_instance, evidence, binding=binding
+        )
     except ActualIdentityUnavailable as error:
         raise IdentityVerificationFailed(
             [f"running platform identity evidence is unavailable: {error}"]
@@ -904,7 +958,15 @@ def deploy(
                 _verify_running_platform_identity(
                     identity_provider,
                     request.instance_document,
-                    binding_token=deployment_id,
+                    binding=evaluation_binding(
+                        authority=AUTHORITY_DEPLOY,
+                        token=deployment_id,
+                        basis=deployment_record_basis(deployment_id),
+                        target=reference.platform_id,
+                        scope=environment.environment_id,
+                        sequence=request.attempt,
+                        established_at=recorder.clock(),
+                    ),
                 )
             except IdentityVerificationFailed as error:
                 recorder.fail(
@@ -1597,7 +1659,15 @@ def attach(
     _verify_running_platform_identity(
         identity_provider,
         request.instance_document,
-        binding_token=deployment_id,
+        binding=evaluation_binding(
+            authority=AUTHORITY_ATTACH,
+            token=deployment_id,
+            basis=deployment_record_basis(deployment_id),
+            target=reference.platform_id,
+            scope=environment.environment_id,
+            sequence=request.attempt,
+            established_at=now(),
+        ),
     )
 
     # -- record the re-binding as the operational action it is (§18) ---------

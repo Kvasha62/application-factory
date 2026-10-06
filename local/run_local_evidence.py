@@ -59,10 +59,14 @@ DOCKER_RUNTIME_ROOT = "/work/dno/runtime"
 #: Scenario -> (expected result, refusal reason fragment expected in the logs).
 SCENARIOS: dict[str, tuple[str, str]] = {
     "correct": ("accepted", ""),
-    "foreign": ("refused", "does not match the requested instance"),
+    # Another platform's observation is not evidence about this one: the
+    # correlation rule refuses it, and D&O fails closed with the generic
+    # unavailable message (never MATCH, never MISMATCH).
+    "foreign": ("refused", "running platform identity evidence is unavailable"),
     "stale": ("refused", "stale"),
     "wrong-correlation": ("refused", "foreign correlation"),
     "contradictory": ("refused", "contradicts actual platform_id"),
+    "mismatch": ("refused", "does not match the requested instance"),
     "delay": ("refused", "TimeoutError"),
     "unavailable": ("refused", "HTTP 503"),
 }
@@ -152,6 +156,8 @@ class ProducerProcess:
                 str(work_dir / "rp" / "identity.json"),
                 "--foreign-state",
                 str(work_dir / "rp" / "identity-foreign.json"),
+                "--mismatch-state",
+                str(work_dir / "rp" / "identity-mismatch.json"),
                 "--scenario",
                 scenario,
                 "--delay-seconds",

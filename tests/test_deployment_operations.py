@@ -111,6 +111,7 @@ from deployment_operations import (
 )
 from deployment_operations.platform_identity import (
     ActualComponentIdentity,
+    EvidenceCorrelation,
     IdentityField,
     PlatformIdentityBinding,
 )
@@ -124,8 +125,28 @@ from platform_manifest import compute_manifest_digest, validate_document
 
 
 class _CanonicalTestIdentitySource:
+    """Owner-side double of the canonical platform's actual identity.
+
+    It answers for exactly the binding it was given and states, as its own
+    correlation fact, the platform identity it observed, the binding space of
+    this request's environment and this attempt's position in it. The expected
+    Platform Instance is never part of that statement.
+    """
+
     def __init__(self, request: DeploymentRequest) -> None:
         self.request = request
+
+    def correlation(self, binding: PlatformIdentityBinding) -> EvidenceCorrelation:
+        """The correlation this double states for the binding it answered."""
+        return EvidenceCorrelation(
+            token=binding.token,
+            scope=self.request.environment.environment_id,
+            sequence=self.request.attempt,
+            target=str(self.request.instance_document["platform_id"]),
+            authority="tests/owner-side-identity-source",
+            basis="tests/owner-observation/1",
+            established_at="2026-09-16T00:00:00Z",
+        )
 
     def observe(self, binding: PlatformIdentityBinding) -> ActualPlatformSnapshot:
         components = []
@@ -159,7 +180,7 @@ class _CanonicalTestIdentitySource:
             extensions=IdentityField.absent(),
             branding=IdentityField.absent(),
             provenance="MEASURED",
-            correlation_token=binding.token,
+            correlation=self.correlation(binding),
             freshness_current=True,
         )
 
@@ -2205,12 +2226,20 @@ class TestCommandLine:
                     "extensions": {"state": "ABSENT"},
                     "branding": {"state": "ABSENT"},
                     "provenance": "MEASURED",
-                    "correlation_token": derive_deployment_id(
-                        PLATFORM_ID,
-                        instance.instance_digest,
-                        "local-cli",
-                        1,
-                    ),
+                    "correlation": {
+                        "token": derive_deployment_id(
+                            PLATFORM_ID,
+                            instance.instance_digest,
+                            "local-cli",
+                            1,
+                        ),
+                        "scope": "local-cli",
+                        "sequence": 1,
+                        "target": PLATFORM_ID,
+                        "authority": "tests/owner-side-identity-source",
+                        "basis": "tests/owner-observation/1",
+                        "established_at": "2026-09-16T00:00:00Z",
+                    },
                     "freshness_current": True,
                 },
                 indent=2,

@@ -48,6 +48,7 @@ from _deployment_helpers import (
     environment_for,
     instance_for,
     manifest_for,
+    producer_correlation,
     request_for,
 )
 
@@ -82,7 +83,9 @@ from deployment_operations import (
 )
 from deployment_operations import deployment as deployment_module
 from deployment_operations import reconciliation as reconciliation_module
-from deployment_operations.platform_identity import ActualIdentityUnavailable
+from deployment_operations.platform_identity import (
+    ActualIdentityUnavailable,
+)
 from platform_instance import compute_instance_digest
 
 
@@ -240,7 +243,7 @@ def _snapshot(**overrides: Any) -> ActualPlatformSnapshot:
         "extensions": IdentityField.absent(),
         "branding": IdentityField.absent(),
         "provenance": EvidenceProvenance.MEASURED,
-        "correlation_token": None,
+        "correlation": None,
         "freshness_current": True,
     }
     values.update(overrides)
@@ -265,10 +268,20 @@ class _OwnerSource:
 
 
 def _owner(**overrides: Any) -> _OwnerSource:
-    """An owner surface that reports the expected platform, with overrides."""
+    """An owner surface that reports the expected platform, with overrides.
+
+    The double answers for the binding it was given and states, as its own fact,
+    the platform identity it observed and its own attribution. Tests override
+    ``correlation`` to contradict exactly that statement.
+    """
 
     def build(binding: PlatformIdentityBinding) -> ActualPlatformSnapshot:
-        return _snapshot(correlation_token=binding.token, **overrides)
+        if "correlation" in overrides:
+            return _snapshot(**overrides)
+        observed = str(overrides.get("platform_id", "reconciliation-platform"))
+        return _snapshot(
+            correlation=producer_correlation(binding, target=observed), **overrides
+        )
 
     return _OwnerSource(build)
 
@@ -562,13 +575,14 @@ class TestIndependentActualObservation:
         with pytest.raises(ReconciliationDriftDetected):
             reconcile(
                 _request(deployment),
-                identity_provider=_provider(_owner(platform_id="another-platform")),
+                identity_provider=_provider(_owner(manifest_state="approved")),
             )
 
         evidence = seen["evidence"]
         assert isinstance(evidence, ActualEvidence)
-        assert evidence.value.platform_id == "another-platform"
-        assert evidence.value.platform_id != deployment.record.platform_id
+        assert evidence.value.manifest_state == "approved"
+        assert evidence.value.platform_id == deployment.record.platform_id
+        assert evidence.value.manifest_state != _record().manifest_state
 
     def test_unavailable_actual_state_is_never_replaced_by_desired_state(
         self, tmp_path: Path
@@ -648,7 +662,15 @@ class TestIndependentActualObservation:
                     "extensions": {"state": "ABSENT"},
                     "branding": {"state": "ABSENT"},
                     "provenance": EvidenceProvenance.MEASURED,
-                    "correlation_token": record.deployment_id,
+                    "correlation": {
+                        "token": record.deployment_id,
+                        "scope": record.environment_id,
+                        "sequence": 1,
+                        "target": record.platform_id,
+                        "authority": "tests/owner-side-identity-source",
+                        "basis": "tests/owner-observation/1",
+                        "established_at": "2026-09-16T00:00:00Z",
+                    },
                     "freshness_current": True,
                 }
             ),
@@ -685,7 +707,15 @@ class TestIndependentActualObservation:
                     "extensions": {"state": "ABSENT"},
                     "branding": {"state": "ABSENT"},
                     "provenance": EvidenceProvenance.MEASURED,
-                    "correlation_token": _binding_token(record),
+                    "correlation": {
+                        "token": _binding_token(record),
+                        "scope": record.environment_id,
+                        "sequence": 1,
+                        "target": record.platform_id,
+                        "authority": "tests/owner-side-identity-source",
+                        "basis": "tests/owner-observation/1",
+                        "established_at": "2026-09-16T00:00:00Z",
+                    },
                     "freshness_current": True,
                 }
             ),
@@ -706,7 +736,6 @@ class TestDriftDetection:
     @pytest.mark.parametrize(
         ("overrides", "expected"),
         [
-            ({"platform_id": "another-platform"}, ["platform_id", "instance_digest"]),
             (
                 {"manifest": {**MANIFEST_BINDING, "manifest_version": "2.0.0"}},
                 ["manifest.manifest_version", "instance_digest"],
@@ -789,6 +818,27 @@ class TestDriftDetection:
         assert deployment.record.drifted is True
         assert deployment.record.in_correspondence is False
 
+    def test_an_observation_of_another_platform_is_not_evidence_about_this_one(
+        self, tmp_path: Path
+    ) -> None:
+        """Another identity-bearing target is a correlation refusal, not drift.
+
+        The owner says it observed another platform. That observation is not
+        evidence about the evaluated binding at all (ADR-0019 §26), so the
+        reconciliation is unverifiable: it never becomes a drift or health claim
+        about this platform.
+        """
+        deployment = _deployment(tmp_path, _record())
+        with refusal(ReconciliationEvidenceUnavailable, "another identity-bearing"):
+            reconcile(
+                _request(deployment),
+                identity_provider=_provider(_owner(platform_id="another-platform")),
+            )
+        observation = deployment.record.reconciliations[-1]
+        assert observation.outcome == RECONCILIATION_UNVERIFIABLE
+        assert deployment.record.drifted is False
+        assert deployment.record.in_correspondence is not True
+
     def test_a_divergence_the_field_comparison_cannot_name_is_still_drift(
         self, tmp_path: Path
     ):
@@ -824,7 +874,7 @@ class TestDriftDetection:
         with pytest.raises(ReconciliationDriftDetected):
             reconcile(
                 _request(deployment),
-                identity_provider=_provider(_owner(platform_id="another-platform")),
+                identity_provider=_provider(_owner(manifest_state="approved")),
             )
         with pytest.raises(ReconciliationEvidenceUnavailable):
             reconcile(
@@ -979,9 +1029,14 @@ class TestObservability:
                 "reconciliation_in_correspondence",
             ),
             (
-                lambda: _provider(_owner(platform_id="another-platform")),
+                lambda: _provider(_owner(manifest_state="approved")),
                 RECONCILIATION_DRIFT,
                 "reconciliation_drift_detected",
+            ),
+            (
+                lambda: _provider(_owner(platform_id="another-platform")),
+                RECONCILIATION_UNVERIFIABLE,
+                "reconciliation_unverifiable",
             ),
             (
                 lambda: _provider(_failing_owner(RuntimeError("offline"))),
@@ -1059,7 +1114,13 @@ class TestObservability:
         with pytest.raises(SecretLeakRefused):
             reconcile(
                 _request(deployment),
-                identity_provider=_provider(_owner(platform_id=secret)),
+                identity_provider=_provider(
+                    _owner(
+                        components=(
+                            ActualComponentIdentity("alpha", secret, dict(NO_ARTIFACT)),
+                        )
+                    )
+                ),
             )
         assert Path(deployment.state_path).read_text(encoding="utf-8") == before
         assert _journal_lines(deployment) == []
@@ -1251,7 +1312,7 @@ class TestNoRemediation:
         with pytest.raises(ReconciliationDriftDetected):
             reconcile(
                 _request(deployment),
-                identity_provider=_provider(_owner(platform_id="another-platform")),
+                identity_provider=_provider(_owner(manifest_state="approved")),
             )
         assert [entry.sequence for entry in deployment.record.reconciliations] == [1, 2]
         signals = _journal_lines(deployment)
@@ -1282,14 +1343,22 @@ class TestConcurrentAndUnconfirmedWrites:
         class _ConcurrentWriter(_OwnerSource):
             def observe(self, binding: PlatformIdentityBinding) -> Any:
                 DeploymentStateStore(deployment.state_path).write(competing)
-                return _snapshot(correlation_token=binding.token)
+                return _snapshot(
+                    correlation=producer_correlation(
+                        binding, target=str(record.platform_id)
+                    )
+                )
 
         with pytest.raises(InvalidDeploymentStateTransition) as failure:
             reconcile(
                 _request(deployment),
                 identity_provider=_provider(
                     _ConcurrentWriter(
-                        lambda binding: _snapshot(correlation_token=binding.token)
+                        lambda binding: _snapshot(
+                            correlation=producer_correlation(
+                                binding, target=str(record.platform_id)
+                            )
+                        )
                     )
                 ),
             )
@@ -1350,7 +1419,13 @@ class TestConcurrentAndUnconfirmedWrites:
         with pytest.raises(SecretLeakRefused):
             reconcile(
                 _request(deployment),
-                identity_provider=_provider(_owner(platform_id=secret)),
+                identity_provider=_provider(
+                    _owner(
+                        components=(
+                            ActualComponentIdentity("alpha", secret, dict(NO_ARTIFACT)),
+                        )
+                    )
+                ),
             )
         assert DeploymentStateStore(deployment.state_path).read() == record
         assert _journal_lines(deployment) == []
@@ -1432,7 +1507,10 @@ class _RunningPlatformOwner:
             extensions=IdentityField.absent(),
             branding=IdentityField.absent(),
             provenance=EvidenceProvenance.MEASURED,
-            correlation_token=binding.token,
+            correlation=producer_correlation(
+                binding,
+                target=str(self.platform_id or self.instance.document["platform_id"]),
+            ),
             freshness_current=True,
         )
 

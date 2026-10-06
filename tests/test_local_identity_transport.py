@@ -47,9 +47,11 @@ from deployment_operations import (
 )
 from deployment_operations.platform_identity import (
     ActualIdentityUnavailable,
+    BindingEvaluationContext,
     IdentityCorrespondenceResult,
     PlatformIdentityBinding,
     establish_identity_correspondence,
+    require_correlated_evidence,
 )
 from deployment_operations.platform_identity_source import (
     OwnerSuppliedPlatformIdentityProvider,
@@ -217,6 +219,34 @@ def _provider(reader: HttpRunningPlatformOwnerStateReader):
     return OwnerSuppliedPlatformIdentityProvider(OwnerStateSnapshotSource(reader))
 
 
+def _binding(
+    prepared: dict[str, Any],
+    token: str = "opaque-binding-a1",
+    *,
+    target: str | None = None,
+    scope: str | None = None,
+    sequence: int = 1,
+) -> PlatformIdentityBinding:
+    """The evaluation binding these tests establish for the local platform.
+
+    The handle states its own position in the binding space (the local owner
+    side reads it out of the handle); the context states the binding semantics
+    the evaluation established. It carries no expected identity.
+    """
+
+    return PlatformIdentityBinding(
+        token=token,
+        context=BindingEvaluationContext(
+            authority="tests/deployment-operations",
+            basis="tests/deployment-record",
+            target=str(prepared["platform_id"]) if target is None else target,
+            scope=str(prepared["environment_id"]) if scope is None else scope,
+            sequence=sequence,
+            established_at="2026-09-16T00:00:00Z",
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # The boundary itself
 # ---------------------------------------------------------------------------
@@ -225,13 +255,17 @@ def _provider(reader: HttpRunningPlatformOwnerStateReader):
 def test_owner_surface_crosses_the_boundary_and_is_read(prepared, producer_factory):
     producer = producer_factory("correct")
     reader = _reader(producer)
-    state = reader.read(PlatformIdentityBinding("opaque-binding-1"))
+    state = reader.read(_binding(prepared))
 
     assert state.platform_id == prepared["platform_id"]
     assert [observation["request_keys"] for observation in reader.observations] == [
         [BINDING_TOKEN_KEY]
     ]
-    assert state.correlation_token == "opaque-binding-1"
+    # The owner states, as its own fact, the binding identity it answered under.
+    assert state.correlation.token == "opaque-binding-a1"
+    assert state.correlation.scope == prepared["environment_id"]
+    assert state.correlation.sequence == 1
+    assert state.correlation.target == prepared["platform_id"]
 
 
 def test_the_only_bytes_crossing_the_boundary_are_the_opaque_binding(
@@ -311,68 +345,100 @@ def test_correct_owner_identity_corresponds_to_the_expected_instance(
     reader = _reader(producer)
     provider = _provider(reader)
     instance = json.loads(Path(str(prepared["documents"]["instance"])).read_text())
+    binding = _binding(prepared)
 
-    evidence = provider.observe_identity(PlatformIdentityBinding("opaque-binding-1"))
+    evidence = provider.observe_identity(binding)
 
+    # The producer's own statement of the binding it observed, as evidence.
+    assert evidence.correlation.token == binding.token
+    assert evidence.correlation.target == prepared["platform_id"]
+    assert (
+        establish_identity_correspondence(instance, evidence, binding=binding)
+        is IdentityCorrespondenceResult.MATCH
+    )
+    # Equal content without the correlation rule certifies nothing: the same
+    # evidence evaluated without a producer-established binding is UNAVAILABLE.
     assert (
         establish_identity_correspondence(instance, evidence)
-        is IdentityCorrespondenceResult.MATCH
+        is IdentityCorrespondenceResult.UNAVAILABLE
     )
 
 
-def test_foreign_platform_identity_is_refused(prepared, producer_factory):
+def test_another_platforms_identity_is_not_evidence_about_this_one(
+    prepared, producer_factory
+):
     producer = producer_factory("foreign")
     reader = _reader(producer)
     provider = _provider(reader)
     instance = json.loads(Path(str(prepared["documents"]["instance"])).read_text())
+    binding = _binding(prepared)
 
-    evidence = provider.observe_identity(PlatformIdentityBinding("opaque-binding-1"))
+    evidence = provider.observe_identity(binding)
 
+    # The observation is real, and it is an observation of another platform: the
+    # producer's own statement says so, so it is not evidence about this one.
+    assert evidence.value.platform_id == prepared["foreign_platform_id"]
+    assert evidence.correlation.target == prepared["foreign_platform_id"]
+    with pytest.raises(
+        ActualIdentityUnavailable, match="another identity-bearing binding"
+    ):
+        require_correlated_evidence(binding, evidence)
     assert (
-        establish_identity_correspondence(instance, evidence)
-        is IdentityCorrespondenceResult.MISMATCH
+        establish_identity_correspondence(instance, evidence, binding=binding)
+        is IdentityCorrespondenceResult.UNAVAILABLE
     )
 
 
-def test_stale_owner_surface_is_refused(producer_factory):
+def test_stale_owner_surface_is_refused(prepared, producer_factory):
     reader = _reader(producer_factory("stale"))
 
     with pytest.raises(ActualIdentityUnavailable, match="stale"):
-        reader.read(PlatformIdentityBinding("opaque-binding-1"))
+        reader.read(_binding(prepared))
 
 
-def test_wrong_correlation_is_refused(producer_factory):
+def test_wrong_correlation_is_refused(prepared, producer_factory):
     reader = _reader(producer_factory("wrong-correlation"))
 
     with pytest.raises(ActualIdentityUnavailable, match="foreign correlation"):
-        reader.read(PlatformIdentityBinding("opaque-binding-1"))
+        reader.read(_binding(prepared))
 
 
-def test_contradictory_identity_surface_is_refused(producer_factory):
+def test_contradictory_identity_surface_is_refused(prepared, producer_factory):
     provider = _provider(_reader(producer_factory("contradictory")))
 
     with pytest.raises(
         ActualIdentityUnavailable, match="contradicts actual platform_id"
     ):
-        provider.observe_identity(PlatformIdentityBinding("opaque-binding-1"))
+        provider.observe_identity(_binding(prepared))
 
 
-def test_unavailable_owner_side_is_refused(producer_factory):
+def test_unavailable_owner_side_is_refused(prepared, producer_factory):
     reader = _reader(producer_factory("unavailable"), timeout_seconds=5.0)
 
     with pytest.raises(ActualIdentityUnavailable, match="HTTP 503"):
-        reader.read(PlatformIdentityBinding("opaque-binding-1"))
+        reader.read(_binding(prepared))
+
+
+def test_the_owner_side_refuses_a_handle_that_states_no_binding_position(
+    prepared, producer_factory
+):
+    """A handle that states no position cannot be answered with evidence."""
+
+    reader = _reader(producer_factory("correct"))
+
+    with pytest.raises(ActualIdentityUnavailable, match="HTTP 503"):
+        reader.read(PlatformIdentityBinding("opaque-binding"))
 
 
 def test_declared_bound_ends_the_wait_and_a_late_answer_cannot_be_accepted(
-    producer_factory,
+    prepared, producer_factory
 ):
     producer = producer_factory("delay", delay_seconds=3.0)
     reader = _reader(producer, timeout_seconds=0.75)
 
     started = time.monotonic()
     with pytest.raises(ActualIdentityUnavailable, match="TimeoutError"):
-        reader.read(PlatformIdentityBinding("opaque-binding-1"))
+        reader.read(_binding(prepared))
     waited = time.monotonic() - started
 
     # The wait ended by the declared bound, not by the answer.

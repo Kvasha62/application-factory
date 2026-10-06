@@ -56,7 +56,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
-from deployment_operations.deployment import Deployment
+from deployment_operations.deployment import (
+    Deployment,
+    deployment_record_basis,
+    evaluation_binding,
+)
 from deployment_operations.errors import (
     DeploymentInputRejected,
     DeploymentStateError,
@@ -75,11 +79,11 @@ from deployment_operations.platform_identity import (
     ActualEvidence,
     ActualIdentityUnavailable,
     IdentityCorrespondenceResult,
-    PlatformIdentityBinding,
     PlatformIdentityProvider,
     compute_actual_digest,
     establish_identity_correspondence,
     project_actual_identity,
+    require_correlated_evidence,
 )
 from deployment_operations.platform_identity_source import (
     OwnerSuppliedPlatformIdentityProvider,
@@ -277,6 +281,10 @@ def _default_identity_provider(deployment: Deployment) -> PlatformIdentityProvid
     )
 
 
+#: The authority that establishes the binding of one reconciliation observation.
+AUTHORITY_RECONCILE = "deployment-operations/reconcile"
+
+
 def _binding_token(record: DeploymentRecord, sequence: int) -> str:
     """The opaque binding of one observation — never of an earlier one.
 
@@ -308,7 +316,15 @@ def _observe(
     record = request.deployment.record
     sequence = len(record.reconciliations) + 1
     occurred_at = utc_now()
-    binding = PlatformIdentityBinding(_binding_token(record, sequence))
+    binding = evaluation_binding(
+        authority=AUTHORITY_RECONCILE,
+        token=_binding_token(record, sequence),
+        basis=deployment_record_basis(record.deployment_id),
+        target=str(record.platform_id),
+        scope=record.environment_id,
+        sequence=sequence,
+        established_at=occurred_at,
+    )
     expected = {"instance_digest": desired.get("instance_digest")}
     try:
         evidence = provider.observe_identity(binding)
@@ -316,11 +332,16 @@ def _observe(
             raise ActualIdentityUnavailable(
                 "the observation surface returned no actual evidence"
             )
+        # The observation must belong to this binding before it says anything
+        # about this platform (ADR-0019 §26, ADR-0020 §18).
+        require_correlated_evidence(binding, evidence)
         # Actual identity is recomputed from what was independently observed,
         # through the existing projection and the existing canonicalizer.
         projected = project_actual_identity(evidence)
         actual_digest = compute_actual_digest(evidence)
-        correspondence = establish_identity_correspondence(expected, evidence)
+        correspondence = establish_identity_correspondence(
+            expected, evidence, binding=binding
+        )
     except ActualIdentityUnavailable as error:
         return ReconciliationRecord(
             reconciliation_id=request.reconciliation_id,

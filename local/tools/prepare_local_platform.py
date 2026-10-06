@@ -48,6 +48,10 @@ DEFAULT_COMPONENT_ID = "tenant_authority"
 DEFAULT_COMPONENT_VERSION = "0.1.0"
 DEFAULT_ENVIRONMENT_ID = "local-docker-dno"
 DEFAULT_MANIFEST_VERSION = "1.0.0"
+#: The schema-valid component version the mismatch scenario reports: another
+#: identity-bearing instance of the same platform, so the refusal comes from the
+#: digest comparison (MISMATCH) and not from an invalid document.
+MISMATCHED_COMPONENT_VERSION = "0.2.0"
 VALIDATED_AT = "2026-10-06T00:00:00Z"
 
 _OWNER_STATE_COMMENT = (
@@ -105,13 +109,26 @@ def compose_manifest(
     return document
 
 
+#: The authority the local owner side declares for the observations it produces.
+OBSERVATION_AUTHORITY = "running-platform-owner/local-docker-identity-service"
+#: How the local owner side grounds an observation: its own authoritative state.
+OBSERVATION_BASIS = "owner-identity-state/1"
+
+
 def owner_identity_state(
     manifest: dict[str, object],
     *,
     platform_id: str,
     state_comment: str,
+    binding_scope: str,
 ) -> dict[str, object]:
-    """Build the owner-side authoritative identity state for a platform."""
+    """Build the owner-side authoritative identity state for a platform.
+
+    The state is the owner's own declaration: the platform identity it observed,
+    the binding space it serves (``binding_scope``), and the attribution of any
+    observation it produces from this state (authority, basis). Nothing here is
+    supplied by the evaluator.
+    """
     configuration = manifest.get("configuration")
     if not isinstance(configuration, dict):
         message = "the platform definition pins no configuration"
@@ -144,9 +161,40 @@ def owner_identity_state(
         "extensions": {"state": "ABSENT", "value": None},
         "branding": {"state": "ABSENT", "value": None},
         "provenance": "MEASURED",
-        "correlation_token": "<echoed per observation>",
+        "binding_scope": binding_scope,
+        "observation_authority": OBSERVATION_AUTHORITY,
+        "observation_basis": OBSERVATION_BASIS,
         "freshness_current": True,
     }
+
+
+def mismatched_identity_state(
+    state: dict[str, object],
+    *,
+    component_version: str,
+) -> dict[str, object]:
+    """The same platform identity with different identity-bearing content.
+
+    Used only to prove that an established correlation is not acceptance: a
+    producer that is correctly correlated but reports another component version
+    must be refused by the digest comparison, never accepted. The version stays
+    schema-valid, so the refusal is the digest comparison itself.
+    """
+    document = copy.deepcopy(state)
+    components = document.get("components")
+    if not isinstance(components, list) or not components:
+        message = "identity state names no component set to vary"
+        raise SystemExit(message)
+    first = components[0]
+    if not isinstance(first, dict):
+        message = "identity state component record is malformed"
+        raise SystemExit(message)
+    first["component_version"] = component_version
+    document["$comment"] = (
+        f"{CLASSIFICATION}: the same platform identity with a different "
+        "identity-bearing component version (mismatch scenario)."
+    )
+    return document
 
 
 def environment_document(
@@ -228,12 +276,13 @@ def prepare(
     _write(dno_dir / "platform-manifest.json", manifest)
     _write(dno_dir / "platform-instance.json", dict(instance.document))
     _write(dno_dir / "environment.json", environment)
-    _write(
-        rp_dir / "identity.json",
-        owner_identity_state(
-            manifest, platform_id=platform_id, state_comment=_OWNER_STATE_COMMENT
-        ),
+    owner_state = owner_identity_state(
+        manifest,
+        platform_id=platform_id,
+        state_comment=_OWNER_STATE_COMMENT,
+        binding_scope=environment_id,
     )
+    _write(rp_dir / "identity.json", owner_state)
     _write(
         rp_dir / "identity-foreign.json",
         owner_identity_state(
@@ -244,6 +293,13 @@ def prepare(
                 "different platform, used only to exercise foreign-identity "
                 "refusal at the D&O acceptance seam."
             ),
+            binding_scope=environment_id,
+        ),
+    )
+    _write(
+        rp_dir / "identity-mismatch.json",
+        mismatched_identity_state(
+            owner_state, component_version=MISMATCHED_COMPONENT_VERSION
         ),
     )
     summary: dict[str, object] = {
@@ -262,6 +318,7 @@ def prepare(
             "environment": str(dno_dir / "environment.json"),
             "owner_state": str(rp_dir / "identity.json"),
             "owner_state_foreign": str(rp_dir / "identity-foreign.json"),
+            "owner_state_mismatch": str(rp_dir / "identity-mismatch.json"),
         },
     }
     _write(work_dir / "preparation.json", summary)

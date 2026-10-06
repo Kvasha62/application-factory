@@ -35,6 +35,8 @@ services:
       - /var/lib/running-platform/identity.json
       - --foreign-state
       - /var/lib/running-platform/identity-foreign.json
+      - --mismatch-state
+      - /var/lib/running-platform/identity-mismatch.json
       - --scenario
       - ${RP_SCENARIO:-correct}
       - --delay-seconds

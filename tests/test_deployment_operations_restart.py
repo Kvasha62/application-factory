@@ -69,6 +69,7 @@ from _deployment_helpers import (
     environment_for,
     instance_for,
     manifest_for,
+    producer_correlation,
     request_for,
 )
 
@@ -429,7 +430,9 @@ def _snapshot(
         extensions=IdentityField.absent(),
         branding=IdentityField.absent(),
         provenance=EvidenceProvenance.MEASURED,
-        correlation_token=binding.token,
+        correlation=producer_correlation(
+            binding, target=str(instance.document["platform_id"])
+        ),
         freshness_current=True,
     )
 
@@ -2728,7 +2731,9 @@ class _RunningPlatformOwner:
             extensions=IdentityField.absent(),
             branding=IdentityField.absent(),
             provenance=EvidenceProvenance.MEASURED,
-            correlation_token=binding.token,
+            correlation=producer_correlation(
+                binding, target=str(self.instance.document["platform_id"])
+            ),
             freshness_current=True,
         )
 

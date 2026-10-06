@@ -299,7 +299,7 @@ class ReconciliationRecord:
       diverged, so drift is attributable instead of being flattened into a
       generic failure;
     * ``evidence`` records the normative provenance of the actual evidence and
-      that its freshness was current; the opaque owner-side correlation token is
+      that its freshness was current; the owner-side correlation statement is
       not copied here;
     * ``errors`` carries the fail-closed reason of an ``unverifiable``
       observation.

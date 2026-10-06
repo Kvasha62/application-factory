@@ -55,8 +55,12 @@ from deployment_operations import (
     load_environment,
     load_record,
 )
+from deployment_operations.deployment import (
+    AUTHORITY_DEPLOY,
+    deployment_record_basis,
+    evaluation_binding,
+)
 from deployment_operations.platform_identity import (
-    PlatformIdentityBinding,
     compute_actual_digest,
     establish_identity_correspondence,
 )
@@ -174,14 +178,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         result["record"] = _record_summary(record)
         # Post-acceptance correspondence check: a second observation, made
         # explicitly, shows the digest the shipped acceptance seam computed.
-        evidence = provider.observe_identity(
-            PlatformIdentityBinding(record.deployment_id)
+        binding = evaluation_binding(
+            authority=AUTHORITY_DEPLOY,
+            token=record.deployment_id,
+            basis=deployment_record_basis(record.deployment_id),
+            target=str(record.platform_id),
+            scope=record.environment_id,
+            sequence=record.attempt,
+            established_at=record.updated_at,
         )
+        evidence = provider.observe_identity(binding)
         actual = compute_actual_digest(evidence)
         result["actual_instance_digest"] = actual
         result["correspondence"] = establish_identity_correspondence(
-            instance_document, evidence
+            instance_document, evidence, binding=binding
         )
+        correlation = evidence.correlation
+        result["correlation"] = {
+            "token": correlation.token,
+            "scope": correlation.scope,
+            "sequence": correlation.sequence,
+            "target": correlation.target,
+            "authority": correlation.authority,
+            "basis": correlation.basis,
+            "established_at": correlation.established_at,
+        }
     except IdentityVerificationFailed as error:
         result["result"] = "refused"
         result["error_type"] = type(error).__name__

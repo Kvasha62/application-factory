@@ -32,6 +32,7 @@ from _deployment_helpers import (
     environment_for,
     instance_for,
     manifest_for,
+    producer_correlation,
     request_for,
 )
 
@@ -137,7 +138,9 @@ class _MeasuredIdentitySource:
             extensions=IdentityField.absent(),
             branding=IdentityField.absent(),
             provenance="MEASURED",
-            correlation_token=binding.token,
+            correlation=producer_correlation(
+                binding, target=str(self.request.instance_document["platform_id"])
+            ),
             freshness_current=True,
         )
 

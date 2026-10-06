@@ -26,7 +26,7 @@ def evidence(value: object) -> ActualEvidence:
     return ActualEvidence(
         value=value,
         provenance=EvidenceProvenance.MEASURED,
-        correlation=EvidenceCorrelation("observation-1"),
+        correlation=EvidenceCorrelation(token="observation-1"),
         freshness=EvidenceFreshness(True),
     )
 

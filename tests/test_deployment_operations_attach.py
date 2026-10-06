@@ -99,7 +99,13 @@ def instance(manifest: dict[str, Any], root: Path) -> Instance:
 
 
 class CanonicalSource:
-    """The owner-side source of the canonical platform's actual identity."""
+    """The owner-side source of the canonical platform's actual identity.
+
+    It answers for the binding it was given and states, as its own facts, the
+    platform identity it observed, the binding space of this request's
+    environment and this attempt's position in it. The expected Platform
+    Instance is never part of that statement.
+    """
 
     def __init__(
         self,
@@ -107,12 +113,14 @@ class CanonicalSource:
         *,
         platform_id: str | None = None,
         freshness_current: bool = True,
-        correlation_token: object | None = None,
+        correlation_handle: object | None = None,
+        correlation_target: str | None = None,
     ) -> None:
         self.request = request
         self._platform_id = platform_id
         self._freshness_current = freshness_current
-        self._correlation_token = correlation_token
+        self._correlation_handle = correlation_handle
+        self._correlation_target = correlation_target
 
     def observe(self, binding: PlatformIdentityBinding) -> ActualPlatformSnapshot:
         components = []
@@ -133,8 +141,18 @@ class CanonicalSource:
         )
         token = (
             binding.token
-            if self._correlation_token is None
-            else self._correlation_token
+            if self._correlation_handle is None
+            else self._correlation_handle
+        )
+        observed = self._correlation_target or declared
+        correlation = EvidenceCorrelation(
+            token=token,
+            scope=self.request.environment.environment_id,
+            sequence=self.request.attempt,
+            target=str(observed),
+            authority="tests/owner-side-identity-source",
+            basis="tests/owner-observation/1",
+            established_at="2026-09-16T00:00:00Z",
         )
         return ActualPlatformSnapshot(
             platform_id=declared,
@@ -156,7 +174,7 @@ class CanonicalSource:
             extensions=IdentityField.absent(),
             branding=IdentityField.absent(),
             provenance="MEASURED",
-            correlation_token=token,
+            correlation=correlation,
             freshness_current=self._freshness_current,
         )
 
@@ -180,7 +198,7 @@ class CorrelationEnforcingProvider:
 
     def observe_identity(self, binding: PlatformIdentityBinding) -> Any:
         evidence = self._inner.observe_identity(binding)
-        if not evidence.correlation.matches(EvidenceCorrelation(binding.token)):
+        if not evidence.correlation.echoes(binding.token):
             raise ActualIdentityUnavailable(
                 "the actual evidence is correlated to another evaluation"
             )
@@ -445,7 +463,7 @@ def test_attach_refuses_a_foreign_correlation(standing_platform) -> None:
     layer_r, _environment, request, deployed = standing_platform
     fresh = LayerOSeam(layer_r)
     foreign = CorrelationEnforcingProvider(
-        provider_for(request, correlation_token="a-token-this-evaluation-never-issued")
+        provider_for(request, correlation_handle="a-token-this-evaluation-never-issued")
     )
     with pytest.raises(IdentityVerificationFailed) as excinfo:
         attach(request, runtime=fresh, identity_provider=foreign)

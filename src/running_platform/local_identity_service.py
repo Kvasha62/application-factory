@@ -20,9 +20,15 @@ Owner-side properties it models:
 * every received request and every answer is recorded verbatim in an audit log
   (stdout and, optionally, a file), which is the transport transcript.
 
+* its answer states — as the owner's own facts — the correlation of the
+  observation it produced: the evaluation handle it answered (the echo), the
+  binding space this platform serves, the binding position the handle states,
+  the platform identity it actually observed, and the attribution of the
+  observation. It never receives and never echoes an expected identity.
+
 Scenario modes are owner-side behaviours that exercise D&O acceptance and
 refusal: ``correct``, ``foreign``, ``stale``, ``wrong-correlation``,
-``contradictory``, ``delay``, ``unavailable``.
+``contradictory``, ``mismatch``, ``delay``, ``unavailable``.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ import argparse
 import copy
 import hashlib
 import json
+import re
 import sys
 import time
 from collections.abc import Sequence
@@ -49,18 +56,48 @@ SCENARIOS = (
     "stale",
     "wrong-correlation",
     "contradictory",
+    "mismatch",
     "delay",
     "unavailable",
 )
 #: The token this producer answers with when it deliberately answers another
 #: evaluation (the ``wrong-correlation`` scenario).
-OTHER_EVALUATION_TOKEN = "rp-answer-for-another-evaluation"
+OTHER_EVALUATION_TOKEN = "rp-answer-for-another-evaluation-a1"
+
+#: The binding position an evaluation handle states. This is the local
+#: producer's reading of the handle it was asked to answer: the production
+#: runbook's owner-side adapter issues the handle itself, so there the same fact
+#: is owner-established rather than read. A handle that states no position
+#: cannot be answered with evidence (fail closed).
+_BINDING_POSITION_PATTERNS = (
+    re.compile(r"-a(\d+)$"),
+    re.compile(r"#observation:(\d+)$"),
+    re.compile(r"#restart:(\d+)$"),
+)
+
+
+def binding_position(token: str) -> int:
+    """The binding position the evaluation handle states; 0 when it states none."""
+
+    for pattern in _BINDING_POSITION_PATTERNS:
+        match = pattern.search(token)
+        if match:
+            return int(match.group(1))
+    return 0
+
+
 MAX_REQUEST_BYTES = 65_536
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
 HTTP_NOT_FOUND = 404
 HTTP_TOO_LARGE = 413
 HTTP_UNAVAILABLE = 503
+
+
+def _answered_token(answer: dict[str, Any]) -> object:
+    """The evaluation handle the answer states it was produced for."""
+    correlation = answer.get("correlation")
+    return correlation.get("token") if isinstance(correlation, dict) else None
 
 
 def _utc_now() -> str:
@@ -98,6 +135,7 @@ class IdentityProducer:
         *,
         state_path: Path,
         foreign_state_path: Path | None,
+        mismatch_state_path: Path | None,
         scenario: str,
         delay_seconds: float,
         audit: AuditLog,
@@ -107,6 +145,7 @@ class IdentityProducer:
             raise ProducerError(message)
         self._state_path = state_path
         self._foreign_state_path = foreign_state_path
+        self._mismatch_state_path = mismatch_state_path
         self._scenario = scenario
         self._delay_seconds = delay_seconds
         self._audit = audit
@@ -139,6 +178,14 @@ class IdentityProducer:
 
         The binding token is the only input. Nothing else from the requesting
         side is used, and the answer is produced from owner-side state only.
+
+        The answer states, as the owner's own facts, the correlation of the
+        observation: the handle it answered (the echo), the binding space this
+        platform serves, the binding position the handle states, the platform
+        identity it actually observed, and the attribution of the observation.
+        The evaluator checks that statement against the binding it established
+        (:func:`deployment_operations.platform_identity.require_correlated_evidence`);
+        this producer never receives an expected identity and never echoes one.
         """
         if self._scenario == "delay":
             time.sleep(self._delay_seconds)
@@ -146,11 +193,21 @@ class IdentityProducer:
             message = "owner-side identity is deliberately unavailable"
             raise ProducerError(message)
 
+        position = binding_position(binding_token)
+        if position < 1:
+            message = "the evaluation handle states no binding position"
+            raise ProducerError(message)
+
         if self._scenario == "foreign":
             if self._foreign_state_path is None:
                 message = "the foreign scenario needs a foreign identity state"
                 raise ProducerError(message)
             document = copy.deepcopy(self._load(self._foreign_state_path))
+        elif self._scenario == "mismatch":
+            if self._mismatch_state_path is None:
+                message = "the mismatch scenario needs a mismatched identity state"
+                raise ProducerError(message)
+            document = copy.deepcopy(self._load(self._mismatch_state_path))
         else:
             document = copy.deepcopy(self._load(self._state_path))
 
@@ -159,10 +216,29 @@ class IdentityProducer:
             message = "identity state carries no platform_id"
             raise ProducerError(message)
 
+        scope = document.get("binding_scope")
+        authority = document.get("observation_authority")
+        basis = document.get("observation_basis")
+        for name, value in (
+            ("binding_scope", scope),
+            ("observation_authority", authority),
+            ("observation_basis", basis),
+        ):
+            if not isinstance(value, str) or not value:
+                message = f"identity state states no {name}"
+                raise ProducerError(message)
+
+        document["correlation"] = {
+            "token": binding_token,
+            "scope": scope,
+            "sequence": position,
+            "target": platform_id,
+            "authority": authority,
+            "basis": basis,
+            "established_at": _utc_now(),
+        }
         if self._scenario == "wrong-correlation":
-            document["correlation_token"] = OTHER_EVALUATION_TOKEN
-        else:
-            document["correlation_token"] = binding_token
+            document["correlation"]["token"] = OTHER_EVALUATION_TOKEN
 
         if self._scenario == "stale":
             document["freshness_current"] = False
@@ -295,7 +371,7 @@ class _Handler(BaseHTTPRequestHandler):
             "event": "observation_answered",
             "scenario": self.producer.scenario,
             "binding_token": token,
-            "answered_correlation_token": answer.get("correlation_token"),
+            "answered_correlation_handle": _answered_token(answer),
             "answered_platform_id": answer.get("platform_id"),
             "answered_freshness_current": answer.get("freshness_current"),
             "answered_sha256": hashlib.sha256(body).hexdigest(),
@@ -360,6 +436,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", required=True, type=Path)
     parser.add_argument("--foreign-state", type=Path, default=None)
+    parser.add_argument("--mismatch-state", type=Path, default=None)
     parser.add_argument("--scenario", default="correct", choices=SCENARIOS)
     parser.add_argument("--delay-seconds", type=float, default=5.0)
     parser.add_argument("--host", default="127.0.0.1")
@@ -376,6 +453,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         producer = IdentityProducer(
             state_path=args.state,
             foreign_state_path=args.foreign_state,
+            mismatch_state_path=args.mismatch_state,
             scenario=args.scenario,
             delay_seconds=args.delay_seconds,
             audit=audit,

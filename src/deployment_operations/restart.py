@@ -87,6 +87,8 @@ from deployment_operations.deployment import (
     Deployment,
     _probe,
     _verify_running_platform_identity,
+    deployment_record_basis,
+    evaluation_binding,
 )
 from deployment_operations.errors import (
     DeploymentInputRejected,
@@ -116,7 +118,10 @@ from deployment_operations.health import (
     evaluate_health,
     verify_identity,
 )
-from deployment_operations.platform_identity import PlatformIdentityProvider
+from deployment_operations.platform_identity import (
+    PlatformIdentityBinding,
+    PlatformIdentityProvider,
+)
 from deployment_operations.platform_identity_source import (
     OwnerSuppliedPlatformIdentityProvider,
 )
@@ -197,6 +202,10 @@ EXECUTION_CHECKS: tuple[str, ...] = (
 #: done twice, and no uncontrolled runtime element can be left behind.
 _ATTEMPT_GUARD = threading.Lock()
 _ATTEMPT_LOCKS: dict[Path, threading.Lock] = {}
+
+
+#: The authority that establishes the binding of one restart attempt.
+AUTHORITY_RESTART = "deployment-operations/restart"
 
 
 @dataclass(frozen=True)
@@ -1084,6 +1093,26 @@ class _Attempt:
         return self.attempt_number
 
     @property
+    def evaluation_binding(self) -> PlatformIdentityBinding:
+        """The binding of *this* attempt, with its established semantics.
+
+        The binding is not an opaque string: it states which authority
+        established it (this restart operation), the durable record it is
+        derived from, the identity-bearing platform it is for, the binding space
+        (this environment) and this attempt's position in it, and the instant it
+        was established. Only its handle crosses the owner-side boundary.
+        """
+        return evaluation_binding(
+            authority=AUTHORITY_RESTART,
+            token=self.binding_token,
+            basis=deployment_record_basis(self.record.deployment_id),
+            target=str(self.record.platform_id),
+            scope=self.record.environment_id,
+            sequence=self.sequence,
+            established_at=self.now(),
+        )
+
+    @property
     def binding_token(self) -> str:
         """The opaque evaluation binding of *this* attempt.
 
@@ -1404,7 +1433,7 @@ class _Attempt:
                 _verify_running_platform_identity(
                     self.provider,
                     {"instance_digest": self.record.instance_digest},
-                    binding_token=self.binding_token,
+                    binding=self.evaluation_binding,
                 )
             except IdentityVerificationFailed as error:
                 errors.extend(error.errors or [str(error)])
