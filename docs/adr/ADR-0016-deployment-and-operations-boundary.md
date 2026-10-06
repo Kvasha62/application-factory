@@ -225,6 +225,10 @@ Runtime Operations is the operational management of a Running Platform: starting
 - Every operational action is reflected in deployment state (§9) and observable signals (§19).
 - Unmanaged drift — actual state diverging from desired state without an operation — is surfaced as a failure signal, not silently patched (§20).
 
+**Re-binding note.** Re-binding a deployment operation to a Running Platform that outlived the operation's own process (`deployment_operations.attach`) is a covered operational action of this section under "comparable operational actions": it re-verifies the realized instance and the actual platform identity, binds only runtime elements its environment already supervises, and creates, starts, stops, restarts and migrates nothing. It therefore introduces no new architectural responsibility and requires no separate Level C ADR — it is Level B. Re-binding never transfers ownership: runtime management remains operational control of the running platform (§4, §18), Deployment & Operations holds the authoritative operational record (§9), and an action that reaches no runtime leaves deployment state honest rather than recording a stop that did not happen (§20). Recorded 2026-10-06 from the owner's confirmation in permanent PR #138 comment `6010112046`.
+
+**Single active operation process.** At most one Deployment & Operations process may act on one deployment record at a time. A process that replaces a previous one must re-bind through `attach` before performing any further operational action on that record; until it does, it reaches no runtime and leaves deployment state unchanged (§18, §20). This records the rule only: no locking mechanism, supervisor implementation, lease or cross-process coordination primitive is selected, required or authorized by this note.
+
 ## 19. Observability
 
 Deployment & Operations owns operational observability:

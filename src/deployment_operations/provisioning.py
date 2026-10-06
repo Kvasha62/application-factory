@@ -212,6 +212,16 @@ def runtime_spec_document(
                 else None
             ),
             "import_paths": [str(path) for path in runtime_binding.import_paths],
+            # The endpoint this component serves and the endpoints of the
+            # components it depends on, both statically declared by the
+            # environment binding. Nothing here is allocated, discovered or
+            # inferred at runtime (ADR-0021 §3): the spec carries the declared
+            # topology as-is, so a component can neither publish an endpoint of
+            # its own choosing nor reach an undeclared provider.
+            "published_endpoint": runtime_binding.published_endpoint,
+            "dependency_endpoints": [
+                declared.document() for declared in runtime_binding.dependency_endpoints
+            ],
         },
         "workspace": str(workspace),
     }

@@ -3,7 +3,7 @@
   "pointers": {
     "configuration": {
       "configuration_id": "demo_shop/configurations/1",
-      "digest": "sha256:aea14d93a45b15728dff91ceb4fd32bc810d73196feffda9a7624b4c3983a07a"
+      "digest": "sha256:d9a0d3a5b2e7d0d153dc5c7a28dff036fbe9c8a78a8c2c9930f90c163b553132"
     },
     "requirements": {
       "digest": "sha256:aeeb7017bd8c6a68057ac2cf5aeb3110e1e3bbc1fa6a864157756dc2086b49a9",

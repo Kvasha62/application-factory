@@ -33,11 +33,11 @@
         "openapi": "components/authorization/contract/openapi.yaml"
       },
       "summary": "IS-003 (GitHub Issue #12)",
-      "entry_digest": "sha256:4bfdb068ca7437a8dae614c4273c004b5d7480ce043b4a1a0d299ab3ee1864b0"
+      "entry_digest": "sha256:7064f0be7f3c1a2fdcfd71d73f996741b18b53cf9705d492bad9f90fc0b730cd"
     },
     {
       "component_id": "identity",
-      "component_version": "0.3.0",
+      "component_version": "0.4.0",
       "class": "platform_service",
       "scs_id": null,
       "maturity_level": "level_0_modular_monolith",
@@ -60,7 +60,7 @@
         "openapi": "components/identity/contract/openapi.yaml"
       },
       "summary": null,
-      "entry_digest": "sha256:406898878db7f553a040a7010829e1c26bdd4162d301888ddf36d2db50bc9ca6"
+      "entry_digest": "sha256:098389f18eeda69a45206d96e240e1418287b926a2aa8dd4a3afce8de939273f"
     },
     {
       "component_id": "tenant_authority",
@@ -140,7 +140,7 @@
         "openapi": "components/learning/contract/openapi.yaml"
       },
       "summary": "SCS-001 Slices 1-4 — Submission Read, Teacher Submission Discovery (Issue #20), Teacher Submission Review (Issue #24), Learning Content Authoring (Issue #31), Student Enrollment (ADR-0012)",
-      "entry_digest": "sha256:bf37333bcb37e82be9b586bae85de92ff5f51d67b92b04ca64ddc5cb6526935c"
+      "entry_digest": "sha256:83cf435bf038b467aa507d12c66d19833828442c2c024ee3495447070afdd4e7"
     },
     {
       "component_id": "saga",
@@ -167,7 +167,7 @@
         "openapi": null
       },
       "summary": "IS-006 (GitHub Issue #18)",
-      "entry_digest": "sha256:874786df57178499e601dc5a0733c8e472d1743259f622bfc56ad5cb03a3d384"
+      "entry_digest": "sha256:bf67edbafd198f58970322ef46959674d4066692da8d9ce909ea08c86cf83d5e"
     },
     {
       "component_id": "idempotency",
@@ -220,7 +220,7 @@
         "openapi": "components/commerce/contract/openapi.yaml"
       },
       "summary": "SCS-002 Commerce MVP — Stage 3 business logic (Issue #55, ADR-0013): the full commerce contour on the Stage 2 skeleton — catalog (Product → Offer → Price), mutable Cart, checkout as a business command, immutable Order purchase facts with the mutable payment state — behind the same enforcement chain, IS-005 guard, audit journal and published client. Live operations: twelve — create and read one owned Product, define one Offer, set one Price, open/read/mutate one owned Cart, checkout, read one owned Order, record its payment.",
-      "entry_digest": "sha256:4aecd47758dbf02c2bf061a7dde5d5f2ca8ac4fc1f12800cbb4da4824f3a6a39"
+      "entry_digest": "sha256:8a0ce13b5456ab99e78449a68082650d5a802db56882b5c918957aab345a18e0"
     },
     {
       "component_id": "booking",
@@ -247,7 +247,7 @@
         "openapi": "components/booking/contract/openapi.yaml"
       },
       "summary": "SCS-003 Booking MVP (Issue #57, ADR-0014): the third Class A Business System of the Application Factory at Level 0. Owns tenant-scoped Resources, their Availability Windows and Reservations behind the same enforcement chain as SCS-001/SCS-002, reuses IS-001 (tenant context), IS-003 (decision), IS-005 (exactly-once commands) and the audit semantics, and proves the no-double-booking invariant atomically under concurrency. Live operations: seven — create and read one owned Resource, declare and list its Availability Windows, create, read and cancel one Reservation.",
-      "entry_digest": "sha256:f0e3366778772c56a1a308134832f3c50ac73092fb681db2b02ad3f6a649a684"
+      "entry_digest": "sha256:b4953cae19e9fb2cfd7932e4b8ef3f9c6d72d31a0c439b37f45b1b1b256f30c4"
     }
   ]
 }

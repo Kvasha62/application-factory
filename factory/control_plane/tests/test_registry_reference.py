@@ -59,7 +59,7 @@ def _walk_keys(value, found):
 def test_registry_is_canonical_and_referenced_read_only():
     entries = registry_reference.load_registry_components()
     assert entries, "canonical registry must be readable"
-    assert entries["identity"]["component_version"] == "0.3.0"
+    assert entries["identity"]["component_version"] == "0.4.0"
     version = _load(EXAMPLES["version"])
     assert registry_reference.component_reference_errors(version["components"]) == []
     # the registry file itself is never written by this package: only reads
@@ -90,7 +90,7 @@ def test_non_registered_component_fails_closed(monkeypatch):
     }
     monkeypatch.setattr(registry_reference, "load_registry_components", lambda: entries)
     errors = registry_reference.component_reference_errors(
-        [{"component_id": "identity", "component_version": "0.3.0"}]
+        [{"component_id": "identity", "component_version": "0.4.0"}]
     )
     assert errors and "registry state" in errors[0]
 
@@ -156,14 +156,14 @@ def test_builder_rejects_non_registered_component(monkeypatch):
     }
     monkeypatch.setattr(registry_reference, "load_registry_components", lambda: entries)
     with pytest.raises(ControlPlaneError) as excinfo:
-        _build_version([{"component_id": "identity", "component_version": "0.3.0"}])
+        _build_version([{"component_id": "identity", "component_version": "0.4.0"}])
     assert "registry state" in str(excinfo.value)
 
 
 def test_builder_accepts_valid_canonical_references():
     version = _build_version(
         [
-            {"component_id": "identity", "component_version": "0.3.0"},
+            {"component_id": "identity", "component_version": "0.4.0"},
             {"component_id": "tenant_authority", "component_version": "0.1.0"},
         ]
     )

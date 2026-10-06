@@ -1,6 +1,6 @@
 {
   "$schema": "factory/golden_bundle/schema/golden_bundle.schema.json",
-  "bundle_digest": "sha256:6a39b5101556a1e743a038448149036981ce249acb5380443bba6ad07f3f8cb2",
+  "bundle_digest": "sha256:4b7ac01a3efbae688039f8ada532740e23111b1dfc30005a4275da92fe519927",
   "bundle_id": "example-golden-bundle",
   "bundle_version": "1.0.0",
   "certification": null,
@@ -147,7 +147,7 @@
         "canonical_form": null
       },
       "component_id": "identity",
-      "component_version": "0.3.0"
+      "component_version": "0.4.0"
     },
     {
       "artifact": {

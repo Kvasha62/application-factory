@@ -65,7 +65,9 @@ def test_digest_changes_when_the_technical_payload_changes():
     assert digest_of(changed_value) != baseline
 
     changed_version = copy.deepcopy(original)
-    changed_version["components"][0]["component_version"] = "0.3.1"
+    # Any version other than the registered one proves the point; the value is
+    # deliberately not a version the registry publishes.
+    changed_version["components"][0]["component_version"] = "0.9.9"
     assert digest_of(changed_version) != baseline
 
     changed_schema = copy.deepcopy(original)

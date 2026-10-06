@@ -1,31 +1,31 @@
 {
+  "schema_version": "control-plane/approval/v1",
+  "approval_id": "demo_shop/approvals/1",
+  "project_ref": "demo_shop",
+  "decision": "granted",
+  "configuration_ref": {
+    "configuration_id": "demo_shop/configurations/1",
+    "digest": "sha256:c58eafbcbd07b8624c912f6d1c5175ee3a2cf79d2f6a77f0795a4d53d0602257"
+  },
+  "proposal_ref": {
+    "proposal_id": "demo_shop/proposals/1",
+    "digest": "sha256:4d23090cfb237053bbab14d5e17f7bbe651ef17ccf9cb1b2eb72b006de22f50d"
+  },
+  "requirements_ref": {
+    "requirements_id": "demo_shop/requirements/1",
+    "digest": "sha256:aeeb7017bd8c6a68057ac2cf5aeb3110e1e3bbc1fa6a864157756dc2086b49a9"
+  },
   "acknowledged_findings": [
     "fnd-c70c9039bd17"
   ],
-  "approval_id": "demo_shop/approvals/1",
   "approver": {
     "authority_ref": null,
     "kind": "owner",
     "reference": "Kvasha62"
   },
-  "configuration_ref": {
-    "configuration_id": "demo_shop/configurations/1",
-    "digest": "sha256:09ed2d1acd3387810c9156d3e2d38e4120f9778a5a8e989397476c268426b0ad"
-  },
   "decided_at": "2026-10-04T04:00:00Z",
-  "decision": "granted",
-  "digest": "sha256:6f42740e0816369fed5a7caad15b782c6357b29ae9b7495435699a996b6be5b6",
-  "predecessor": null,
-  "project_ref": "demo_shop",
-  "proposal_ref": {
-    "digest": "sha256:1ade68ba5abc532e789ff923e8f4051fb95a75b3fd36f5c640844bcb681609a0",
-    "proposal_id": "demo_shop/proposals/1"
-  },
   "reason": "Accept the resolved configuration; the open requirement is acknowledged.",
-  "requirements_ref": {
-    "digest": "sha256:aeeb7017bd8c6a68057ac2cf5aeb3110e1e3bbc1fa6a864157756dc2086b49a9",
-    "requirements_id": "demo_shop/requirements/1"
-  },
   "revokes": null,
-  "schema_version": "control-plane/approval/v1"
+  "predecessor": null,
+  "digest": "sha256:adeb2ac3a86e6cf50532fbb241c635eab04a149daebddd4f7d3dca62afc51cac"
 }

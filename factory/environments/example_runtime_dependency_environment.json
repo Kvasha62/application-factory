@@ -1,0 +1,26 @@
+{
+  "$comment": "The authoritative environment binding of the F-5 runtime-dependency composition, as an example local environment. It realizes the sibling example_runtime_dependency_instance.json in this directory, which is assembled from the sibling example_runtime_dependency_manifest.json, composed by example_runtime_dependency_request.json. ADR-0021 §3 and owner decision P1 fix the dependency endpoint as STATICALLY AND EXPLICITLY DECLARED here: Deployment & Operations allocates no endpoint dynamically, discovers no service and substitutes no address. The provider declares the endpoint it serves ('published_endpoint'); the consumer declares the endpoint it reaches ('dependency_endpoints') and the version range that endpoint's component must satisfy. The two must correspond exactly or the environment is rejected before anything is provisioned. Secrets are deliberately absent from this document: the service credential Identity presents to Tenant Authority is injected at the process boundary, e.g. --secret TENANT_AUTHORITY_SERVICE_TOKEN=<ENVVAR> (ADR-0016 §12). The endpoints below are loopback values of an example local environment; an owner's own environment document declares its own addresses.",
+  "environment_id": "f5-runtime-dependency-example-local",
+  "runtime_root": "runtime/f5-runtime-dependency",
+  "probe_timeout_seconds": 60.0,
+  "bindings": [
+    {
+      "component_id": "tenant_authority",
+      "deployment_module": "tenant_authority.deployment",
+      "deployment_factory": "build_deployment",
+      "published_endpoint": "127.0.0.1:9101"
+    },
+    {
+      "component_id": "identity",
+      "deployment_module": "identity_service.deployment",
+      "deployment_factory": "build_deployment",
+      "dependency_endpoints": {
+        "tenant_authority": {
+          "endpoint": "127.0.0.1:9101",
+          "version_range": ">=0.1.0,<0.2.0"
+        }
+      }
+    }
+  ],
+  "configuration_overlay": {}
+}

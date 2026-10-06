@@ -349,7 +349,7 @@ def test_incompatible_dependency_version_range_is_rejected(
     repo_root: Path, registry_doc: dict[str, Any]
 ) -> None:
     broken = copy.deepcopy(registry_doc)
-    # authorization depends on identity (registered at 0.3.0); require >=0.9.0,<1.0.0
+    # authorization depends on identity (registered at 0.4.0); require >=0.9.0,<1.0.0
     broken["components"][0]["dependencies"][0]["version_range"] = ">=0.9.0,<1.0.0"
     with pytest.raises(DependencyClosureError, match="incompatible dependency version"):
         validate_dependency_closure(broken, repository_root=repo_root)

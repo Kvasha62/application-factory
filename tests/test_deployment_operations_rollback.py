@@ -57,6 +57,13 @@ def _record(
     return record.mark_realized(at="2026-09-30T00:03:00Z")
 
 
+#: A runtime element this synthetic operation holds. A rollback stops the
+#: runtime of an operation that is **bound** to one: ``Deployment.stop()``
+#: refuses an operation that reaches no runtime, so a handle-less deployment
+#: claiming ``running`` would model a state the boundary does not allow.
+BOUND_HANDLE = "bound-runtime-handle"
+
+
 def _deployment(tmp_path: Path, record: DeploymentRecord) -> Deployment:
     state_path = DeploymentStateStore.path_for(tmp_path, record.deployment_id)
     store = DeploymentStateStore(state_path)
@@ -67,6 +74,7 @@ def _deployment(tmp_path: Path, record: DeploymentRecord) -> Deployment:
         verification=SimpleNamespace(),
         state_path=state_path,
         events_path=journal.path,
+        _handles=(BOUND_HANDLE,),
         _journal=journal,
         _store=store,
     )

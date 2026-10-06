@@ -54,6 +54,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from deployment_operations.published_endpoint import (
+    PublishedEndpointError,
+    PublishedEndpointServer,
+)
+
 #: Keys a forward migration declaration may carry. Anything else — in
 #: particular a reverse or downgrade path — makes the declaration unusable:
 #: schema develops forward only (LAW-08; ADR-0016 §14).
@@ -1287,6 +1292,7 @@ class ComponentRuntime:
         self._boundary = boundary
         self._deployment: Any = None
         self._app: Any = None
+        self._endpoint_server: PublishedEndpointServer | None = None
         declared = (spec.get("runtime") or {}).get("deployment_module")
         if declared != self.entry_module():
             raise RuntimeWorkerError(
@@ -1309,7 +1315,22 @@ class ComponentRuntime:
 
     def start(self) -> dict[str, Any]:
         self._ensure_built()
-        return {"status": "ok"}
+        answer: dict[str, Any] = {"status": "ok"}
+        endpoint = (self._spec.get("runtime") or {}).get("published_endpoint")
+        if isinstance(endpoint, str) and endpoint:
+            # The provider serves its published contract on the endpoint the
+            # environment binding declared, from its own runtime process
+            # (ADR-0021 §3). A component that cannot serve the endpoint its
+            # consumers are bound to reach does not start: there is no
+            # in-process fallback and no substitute address.
+            self._endpoint_server = PublishedEndpointServer(self._app, endpoint)
+            try:
+                self._endpoint_server.serve()
+            except PublishedEndpointError as error:
+                self._endpoint_server = None
+                raise RuntimeWorkerError(str(error)) from error
+            answer["published_endpoint"] = self._endpoint_server.endpoint
+        return answer
 
     def _ensure_built(self) -> None:
         if self._deployment is None:
@@ -1382,6 +1403,9 @@ class ComponentRuntime:
         }
 
     def stop(self) -> dict[str, Any]:
+        server, self._endpoint_server = self._endpoint_server, None
+        if server is not None:
+            server.stop()
         self._app = None
         self._deployment = None
         return {"status": "ok"}

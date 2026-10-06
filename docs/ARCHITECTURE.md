@@ -629,7 +629,7 @@ Platform Instance = desired state / deployment input
 Running Platform  = actual runtime state
 ```
 
-Deployment & Operations — отдельная capability вне фабрики, следующая за Platform Instance. Она отвечает за переход от Platform Instance к Running Platform и за поддержание соответствия actual state желаемому. Её ответственность: provisioning; deployment; deployment state; migration orchestration; runtime management; health/readiness; upgrade; rollback; operational observability.
+Deployment & Operations — отдельная capability вне фабрики, следующая за Platform Instance. Она отвечает за переход от Platform Instance к Running Platform и за поддержание соответствия actual state желаемому. Её ответственность: provisioning; deployment; deployment state; migration orchestration; runtime management — операционное управление Running Platform через runtime seam (ADR-0016 §18); health/readiness; upgrade; rollback; operational observability.
 
 Deployment & Operations не имеет права:
 
@@ -643,7 +643,7 @@ Deployment & Operations не имеет права:
 
 **Immutable Manifest Principle.** Deployment & Operations не мутирует опубликованный Manifest ради deployment/runtime нужд. Любое изменение desired state проходит только через новый versioned Manifest → новый Platform Instance (§16, §17).
 
-**Ownership.** Владение бизнес-данными остаётся у соответствующих компонентов (LAW-03, §5). Tenant Authority остаётся владельцем tenant lifecycle (§2.3). Deployment & Operations не становится владельцем бизнес-данных.
+**Ownership.** Владение бизнес-данными остаётся у соответствующих компонентов (LAW-03, §5). Tenant Authority остаётся владельцем tenant lifecycle (§2.3). Deployment & Operations не становится владельцем бизнес-данных. Владение жизненным циклом production runtime — создание, запуск, остановка, перезапуск и миграция runtime-элементов — остаётся у runtime-слоя, исполняющего runtime seam. Deployment & Operations владеет оркестрацией, верификацией и авторитетной операционной записью (ADR-0016 §4, §6, §9, §18), а не самим runtime: Running Platform переживает завершившуюся операцию D&O и может существовать без неё.
 
 **Versioning.** Запрет floating selectors действует и на этой границе (§1.3): `latest`, `current`, `default`, `stable`, `edge`, `main`, `master`, `head`, `tip`, `*` и эквиваленты не могут быть deployment input. Deployment работает только с конкретно зафиксированными версиями и artifact identities (§11).
 

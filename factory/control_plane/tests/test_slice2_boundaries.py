@@ -332,13 +332,13 @@ def _pairs(value):
 #: changing one means a shipped document changed, which must be a deliberate,
 #: reviewed act — never a side effect of a refactor.
 EXAMPLE_DIGESTS = {
-    "v2_version": "sha256:09ed2d1acd3387810c9156d3e2d38e4120f9778a5a8e989397476c268426b0ad",
-    "proposal": "sha256:1ade68ba5abc532e789ff923e8f4051fb95a75b3fd36f5c640844bcb681609a0",
-    "approval": "sha256:6f42740e0816369fed5a7caad15b782c6357b29ae9b7495435699a996b6be5b6",
-    "request": "sha256:486fb214d4cde3a56bf963fdd38ec6d95d477bc90092281f8fa91b7c43cbef31",
+    "v2_version": "sha256:c58eafbcbd07b8624c912f6d1c5175ee3a2cf79d2f6a77f0795a4d53d0602257",
+    "proposal": "sha256:4d23090cfb237053bbab14d5e17f7bbe651ef17ccf9cb1b2eb72b006de22f50d",
+    "approval": "sha256:adeb2ac3a86e6cf50532fbb241c635eab04a149daebddd4f7d3dca62afc51cac",
+    "request": "sha256:1ac2aea744af4a488908be8023657598eec16303fefcfad58d1748e08ac65d4f",
 }
 EXAMPLE_FINGERPRINT = (
-    "sha256:1f04f41453887391dafaa167b1da4a8909f053182f31f77315c70ef618a22fee"
+    "sha256:8ee6329df575a2342f57765de872473a8354278ac671694a5d8700e221fe5c1d"
 )
 
 

@@ -79,6 +79,54 @@ OP_MIGRATE = "migrate"
 OP_PROBE = "probe"
 OP_STOP = "stop"
 
+#: The environment-binding variable carrying the endpoint a component serves.
+#: A runtime process learns where to listen from the authoritative environment
+#: binding; it never chooses an address, and nothing is allocated dynamically
+#: (ADR-0021 §3, owner decision P1).
+PUBLISHED_ENDPOINT_ENV = "FACTORY_PUBLISHED_ENDPOINT"
+#: Prefix of the variables carrying one declared dependency's endpoint and its
+#: declared version range. The component id is upper-cased and reduced to
+#: alphanumerics, so ``tenant_authority`` becomes
+#: ``FACTORY_DEPENDENCY_TENANT_AUTHORITY_ENDPOINT``.
+DEPENDENCY_ENDPOINT_PREFIX = "FACTORY_DEPENDENCY_"
+
+
+def dependency_endpoint_env(component_id: str) -> str:
+    """The environment-binding variable naming one dependency's endpoint."""
+    return f"{DEPENDENCY_ENDPOINT_PREFIX}{_env_key(component_id)}_ENDPOINT"
+
+
+def dependency_version_range_env(component_id: str) -> str:
+    """The environment-binding variable naming one dependency's version range."""
+    return f"{DEPENDENCY_ENDPOINT_PREFIX}{_env_key(component_id)}_VERSION_RANGE"
+
+
+def _env_key(component_id: str) -> str:
+    return "".join(char if char.isalnum() else "_" for char in component_id).upper()
+
+
+def endpoint_environment(binding: ComponentRuntimeBinding) -> dict[str, str]:
+    """The declared endpoints of one element, as process environment.
+
+    Endpoints are operational inputs of the environment binding, not component
+    configuration: they are injected here, at the process boundary, exactly like
+    a secret (ADR-0016 §12; ADR-0021 §3). Only declared values are exported — an
+    empty slot is absent, never an empty string a component could mistake for a
+    real address.
+    """
+    environment: dict[str, str] = {}
+    if binding.published_endpoint:
+        environment[PUBLISHED_ENDPOINT_ENV] = binding.published_endpoint
+    for declared in binding.dependency_endpoints:
+        if not declared.endpoint:
+            continue
+        environment[dependency_endpoint_env(declared.component_id)] = declared.endpoint
+        if declared.version_range:
+            environment[dependency_version_range_env(declared.component_id)] = (
+                declared.version_range
+            )
+    return environment
+
 
 @dataclass(frozen=True)
 class BoundModule:
@@ -234,6 +282,23 @@ class RuntimeAdapter(Protocol):
         ...
 
     def start(self, element: RuntimeElement) -> RuntimeHandle: ...
+
+    def attach(self, element: RuntimeElement) -> RuntimeHandle:
+        """Bind a runtime element the environment **already** supervises.
+
+        The re-binding counterpart of :meth:`start` for an operation that
+        realizes nothing: it returns a reference to the runtime element this
+        environment already runs for exactly this element, and refuses when
+        there is none. It creates nothing, starts nothing, restarts nothing,
+        stops nothing and migrates nothing — the lifecycle of the runtime
+        belongs to its own owner, and this operation only restores a
+        deployment operation's reference to a runtime that outlived it
+        (ADR-0016 §18).
+
+        An environment that cannot safely bind a runtime element surviving the
+        deployment process must refuse rather than fabricate a handle.
+        """
+        ...
 
     def request(
         self,
@@ -846,6 +911,12 @@ class LocalProcessRuntime:
         system_root = os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT")
         if system_root:
             environment["SystemRoot"] = system_root
+        # The declared endpoints reach the process the same way a secret does —
+        # at the boundary, from the environment binding — because they are
+        # operational inputs and not component configuration. A component
+        # therefore cannot publish an endpoint of its own choosing, and it can
+        # only reach a provider this environment declared (ADR-0021 §3).
+        environment.update(endpoint_environment(element.binding))
         # Secrets are operational inputs injected at the boundary: they reach
         # the component process and are never written anywhere (ADR-0016 §12).
         environment.update({key: value for key, value in element.secrets.items()})
@@ -906,6 +977,24 @@ class LocalProcessRuntime:
             )
             raise RuntimeProcessError(message) from error
         return RuntimeHandle(element=element, process=process, log_stream=log_stream)
+
+    def attach(self, element: RuntimeElement) -> RuntimeHandle:
+        """Refuse: this process model cannot bind a runtime it does not own.
+
+        ``LocalProcessRuntime`` runs one subprocess per component **inside the
+        deployment process**: those processes do not outlive it, so there is no
+        standing runtime element to bind. Returning a handle here would claim a
+        runtime this operation never started and does not supervise — an
+        invented ``deployed`` claim, which the boundary refuses (§10, §20).
+        Re-binding a runtime that outlives the deployment process requires an
+        adapter whose environment supervises that runtime itself (ADR-0016 §18).
+        """
+        raise RuntimeProcessError(
+            f"{element.component.component_id}: this runtime adapter owns the "
+            "processes it started itself and cannot attach to a runtime element "
+            "that outlives the deployment process; attach requires an adapter "
+            "whose environment supervises a standing Running Platform"
+        )
 
     def request(
         self,

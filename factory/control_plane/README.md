@@ -228,3 +228,42 @@ revoked ledger, incomplete Composition Request verification, successful
 delegation only after verification), v1 non-conversion, all S2
 error/warning/info acknowledgement semantics, and the absence of
 network/external-model/persistence/`src/` reverse-dependency side effects.
+
+## Owner-authorized exception (2026-10-05) — the identity `0.4.0` cascade
+
+> **A one-off, owner-authorized exception. It is not an update path.**
+
+On 2026-10-05 the owner authorized — permanent PR #138 comments `5998321766`
+(G1), `5998764930` (G2 = Option A) and `5999402241` (G3 + cascade) — an
+**in-place amendment** of four shipped Slice-1 rehearsal artifacts, as a direct
+and unavoidable consequence of the ratified `identity` version change to
+`0.4.0`:
+
+| Artifact | Amendment |
+|---|---|
+| `configurations/demo_shop_c1.json` | the pinned `identity` version, and the `digest` that follows it |
+| `configurations/demo_shop_index.json` | `current.digest` follows the amended version |
+| `projects/demo_shop.json` | `pointers.configuration.digest` follows the amended version |
+| `tests/test_registry_reference.py` | the asserted **live**-registry version pins |
+
+Why it was unavoidable: `registry_reference.py` cross-checks every
+ConfigurationVersion against the **live** registry and requires exact version
+equality; the registry holds exactly one version per component
+(`factory/registry/schema/component_registry.schema.json` — component identity
+is unique across the array), so publishing `0.4.0` retires `0.3.x` from it; and
+the frozen `test_validation.py` / `test_versions_and_linkage.py` re-validate the
+shipped historical versions against that live registry. The append-only
+alternative leaves the stale version on disk — still frozen, still validated,
+still failing — so it does not repair the artifact; it was built and measured
+before this exception was requested.
+
+**This establishes no general update path.** The rule recorded above remains
+fully in force for every future configuration-version change: *there is no
+update path for an immutable version; any technical change creates a **new**
+ConfigurationVersion/RequirementsVersion with a new digest and a `predecessor`
+link.* The Slice-2 statement that a `configuration/v1` document "stays valid
+with its original digest and is never rewritten" is likewise unchanged as a
+rule. No freeze guard, digest guard or fail-closed check was weakened, bypassed
+or removed to make this change: the Slice-1 freeze guard compares the working
+tree against `HEAD`, and its baseline moved only because this authorized change
+was committed.

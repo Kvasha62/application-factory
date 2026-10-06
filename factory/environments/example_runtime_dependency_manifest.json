@@ -1,0 +1,44 @@
+{
+  "$schema": "factory/platform_manifest/schema/platform_manifest.schema.json",
+  "approval": null,
+  "components": [
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "canonical_form": null,
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "identity",
+      "component_version": "0.4.0"
+    },
+    {
+      "artifact": {
+        "artifact_type": "none",
+        "canonical_form": null,
+        "digest": null,
+        "pinned": false
+      },
+      "component_id": "tenant_authority",
+      "component_version": "0.1.0"
+    }
+  ],
+  "configuration": {
+    "identity": {
+      "current_platform_id": "f5-runtime-dependency"
+    },
+    "tenant_authority": {
+      "platform_id": "f5-runtime-dependency"
+    }
+  },
+  "golden_bundle": null,
+  "lifecycle": {
+    "state": "validated"
+  },
+  "manifest_digest": "sha256:446058d8c2a06075333ec9132ce5bfe2f188eb2e5c2d28e528a45810be939ec6",
+  "manifest_id": "f5-runtime-dependency",
+  "manifest_version": "1.0.0",
+  "predecessor": null,
+  "publication": null,
+  "validation_attestation": null
+}

@@ -559,7 +559,7 @@
     },
     {
       "component_id": "identity",
-      "version_range": ">=0.3.0,<0.4.0",
+      "version_range": ">=0.3.0,<0.5.0",
       "kind": "api",
       "contract": "components/identity/contract/component_contract.json",
       "direction": "booking -> identity (tenant context of the verified subject for the resource-create command without a target)",
