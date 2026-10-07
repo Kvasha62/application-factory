@@ -39,6 +39,7 @@ import http.client
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -54,7 +55,9 @@ _OUT_DEFAULT = _LOCAL_DIR / "evidence"
 
 CLASSIFICATION = "LOCAL DOCKER / NON-PRODUCTION"
 COMPOSE_FILE = _LOCAL_DIR / "compose.yaml"
-#: Where the D&O container sees the work directory (see local/compose.yaml).
+#: The base runtime root of the D&O container's work directory (see
+#: local/compose.yaml). Each scenario runs inside its own subdirectory of it, so
+#: deployment state and event journals cannot be mixed between scenarios.
 DOCKER_RUNTIME_ROOT = "/work/dno/runtime"
 
 #: Scenario -> (expected result, refusal reason fragment expected in the logs).
@@ -277,7 +280,11 @@ class DockerStack:
         return "http://running-platform:8080/observe"
 
     def run_dno(
-        self, work_dir: Path, timeout: float, result_out: Path
+        self,
+        work_dir: Path,
+        timeout: float,
+        result_out: Path,
+        environment: Path,
     ) -> tuple[str, str, int]:
         run = self._compose(
             "run",
@@ -292,8 +299,10 @@ class DockerStack:
             "/work/dno/platform-instance.json",
             "--manifest",
             "/work/dno/platform-manifest.json",
+            # The scenario's own environment document, whose runtime root is
+            # this scenario's own directory (see _scenario_state).
             "--environment",
-            "/work/dno/environment.json",
+            f"/work/dno/{environment.name}",
             "--identity-endpoint",
             self.endpoint(),
             "--identity-timeout",
@@ -397,6 +406,67 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _remove_leftover(path: Path, scenario: str, what: str) -> None:
+    """Remove what an earlier run left at ``path``, refusing to carry on if not.
+
+    Isolation and stale-result protection both mean nothing if the previous
+    run's file is still there, so an unremovable one (a directory written by a
+    container running as another user, for instance) is a harness error rather
+    than a scenario that may pass on somebody else's evidence.
+    """
+    try:
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
+    except OSError as error:
+        message = (
+            f"{scenario}: {what} ({path}) of an earlier run could not be removed; "
+            "running anyway would let it stand in for this invocation"
+        )
+        raise HarnessError(message) from error
+
+
+def _scenario_state(work_dir: Path, scenario: str, mode: str) -> tuple[Path, str]:
+    """Prepare this scenario's own filesystem state and environment document.
+
+    LOCAL DOCKER / NON-PRODUCTION. All scenarios realize the same Platform
+    Instance under the same environment id and attempt, so they share one
+    deployment id: over a single runtime root the ``DeploymentStateStore``
+    record of one scenario would be overwritten by the next and the
+    ``EventJournal`` entries (appended at the ``next_sequence()`` of whichever
+    file is already there) would run on from the previous scenario — the
+    transcript of a scenario would then say something about another run.
+
+    Each scenario therefore runs inside its own runtime root, created empty.
+    Only the directory the operation writes into is isolated: the deployment
+    semantics, the content of the environment document and every acceptance and
+    refusal rule stay exactly as prepared.
+
+    Returns the host path of the scenario's environment document and the
+    runtime root that document names, as the D&O side of this mode sees it.
+    """
+    host_root = work_dir / "dno" / "runtime" / scenario
+    if mode == "docker":
+        # The work directory is mounted at /work inside the containers (see
+        # local/compose.yaml), so the document must name the container path.
+        declared_root = f"{DOCKER_RUNTIME_ROOT}/{scenario}"
+    else:
+        declared_root = str(host_root)
+    # Isolated *and* pristine: state and journal of an earlier run of this very
+    # scenario must not be readable in this one either.
+    _remove_leftover(host_root, scenario, "runtime root")
+    host_root.mkdir(parents=True, exist_ok=True)
+    document = _load_json(work_dir / "dno" / "environment.json")
+    document["runtime_root"] = declared_root
+    environment_out = work_dir / "dno" / f"environment-{scenario}.json"
+    _write(
+        environment_out,
+        json.dumps(document, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+    )
+    return environment_out, declared_root
+
+
 def run_scenario(
     *,
     scenario: str,
@@ -407,11 +477,24 @@ def run_scenario(
     identity_timeout: float,
     delay_seconds: float,
 ) -> dict[str, Any]:
-    """Run one scenario and write its transcripts."""
+    """Run one scenario and write its transcripts.
+
+    The scenario is invoked with its own runtime root and with its result file
+    removed beforehand (see :func:`_scenario_state`), so neither another scenario
+    of this run nor an earlier run of this one can supply what is read back.
+    """
     expected, fragment = SCENARIOS[scenario]
     scenario_dir = out_dir / f"{scenario}"
     scenario_dir.mkdir(parents=True, exist_ok=True)
     effective_delay = delay_seconds if scenario == "delay" else 0.0
+    # Stale-result protection: the scenario's own result document is removed
+    # before the invocation, so what is read back afterwards can only be what
+    # this run wrote — and a run that fails therefore has no result at all.
+    result_out = work_dir / "dno" / f"result-{scenario}.json"
+    _remove_leftover(result_out, scenario, "result document")
+    # Every scenario also runs inside its own runtime root, so deployment state
+    # and event journals of one scenario cannot reach another one.
+    environment_out, scenario_runtime_root = _scenario_state(work_dir, scenario, mode)
     started = time.monotonic()
     producer: ProducerProcess | None = None
     stack: DockerStack | None = None
@@ -424,7 +507,6 @@ def run_scenario(
         stack = DockerStack(scenario, effective_delay, work_dir)
         stack.start()
         endpoint = stack.endpoint()
-    result_out = work_dir / "dno" / f"result-{scenario}.json"
     dno_stdout = ""
     dno_stderr = ""
     audit_text = ""
@@ -438,8 +520,10 @@ def run_scenario(
                     str(work_dir / "dno" / "platform-instance.json"),
                     "--manifest",
                     str(work_dir / "dno" / "platform-manifest.json"),
+                    # The scenario's own environment document: its runtime root
+                    # is this scenario's own directory (see _scenario_state).
                     "--environment",
-                    str(work_dir / "dno" / "environment.json"),
+                    str(environment_out),
                     "--identity-endpoint",
                     endpoint,
                     "--identity-timeout",
@@ -458,7 +542,7 @@ def run_scenario(
         else:
             assert stack is not None
             dno_stdout, dno_stderr, dno_exit = stack.run_dno(
-                work_dir, identity_timeout, result_out
+                work_dir, identity_timeout, result_out, environment_out
             )
             audit_text = stack.audit()
     finally:
@@ -487,12 +571,24 @@ def run_scenario(
     observed = str(result.get("result", "missing"))
     errors = list(result.get("errors", []))
     matched_reason = any(fragment in error for error in errors) if fragment else True
+    # Stale-result protection. The document is read back from the shared work
+    # directory, so it describes *this* invocation only when the two sides agree:
+    # local/dno/run_deployment.py exits 0 on an acceptance and 3 on an identity-seam
+    # refusal. Where they disagree the file did not come from this run — an
+    # accepted verdict carried by a failed invocation is precisely that case — and
+    # no outcome may be credited on its strength.
+    result_trusted = result_out.is_file() and (
+        (observed, dno_exit) in {("accepted", 0), ("refused", 3)}
+    )
     non_forwarding = non_forwarding_report(result, preparation)
     checks = {
         "scenario": scenario,
         "expected_result": expected,
         "observed_result": observed,
-        "outcome_ok": observed == expected,
+        "result_file_present": result_out.is_file(),
+        "result_trusted": result_trusted,
+        "scenario_runtime_root": scenario_runtime_root,
+        "outcome_ok": observed == expected and result_trusted,
         "expected_reason_fragment": fragment,
         "errors": errors,
         "reason_ok": matched_reason,
