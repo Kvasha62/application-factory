@@ -240,10 +240,14 @@ class DockerStack:
         self._env["AF_WORK_DIR"] = str(work_dir)
 
     def _compose(self, *args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        # Git Bash/MSYS rewrites arguments that look like POSIX paths (for
+        # example /work/dno/result.json) into Windows host paths; container
+        # paths must reach the daemon untouched.
+        env = {**self._env, "MSYS_NO_PATHCONV": "1"}
         return subprocess.run(
             ["docker", "compose", "-f", str(COMPOSE_FILE), *args],
             cwd=str(_REPO_ROOT),
-            env=self._env,
+            env=env,
             text=True,
             capture_output=True,
             check=False,
@@ -274,13 +278,15 @@ class DockerStack:
 
     def run_dno(
         self, work_dir: Path, timeout: float, result_out: Path
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, int]:
         run = self._compose(
             "run",
             "--rm",
             "--no-deps",
             "dno",
-            "python",
+            # local/Dockerfile.dno already sets ENTRYPOINT ["python"], so the
+            # command is the script alone: a second `python` would ask the
+            # interpreter to run a file named "python".
             "local/dno/run_deployment.py",
             "--instance",
             "/work/dno/platform-instance.json",
@@ -292,10 +298,12 @@ class DockerStack:
             self.endpoint(),
             "--identity-timeout",
             str(timeout),
+            # The scenario-specific name, so the file the container writes under
+            # the /work mount is the file this run reads back on the host.
             "--result-out",
-            "/work/dno/result.json",
+            f"/work/dno/{result_out.name}",
         )
-        return run.stdout, run.stderr
+        return run.stdout, run.stderr, run.returncode
 
     def audit(self) -> str:
         logs = self._compose("logs", "--no-log-prefix", "running-platform")
@@ -449,10 +457,9 @@ def run_scenario(
             dno_exit = completed.returncode
         else:
             assert stack is not None
-            dno_stdout, dno_stderr = stack.run_dno(
+            dno_stdout, dno_stderr, dno_exit = stack.run_dno(
                 work_dir, identity_timeout, result_out
             )
-            dno_exit = 0 if '"result": "accepted"' in dno_stdout else 3
             audit_text = stack.audit()
     finally:
         if producer is not None and scenario == "delay":
