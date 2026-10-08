@@ -104,6 +104,7 @@ from deployment_operations.runtime import (
     RuntimeProcessError,
     bind_execution,
     build_elements,
+    execution_binding_from_document,
     verify_bound_content,
 )
 from deployment_operations.state import (
@@ -1005,15 +1006,31 @@ def deploy(
 
         # -- realized / deployed -------------------------------------------
         recorder.realized()
-    except DeploymentOperationsError:
+    except DeploymentOperationsError as error:
         # Fail-closed: nothing half-verified keeps running. The record keeps the
         # history (the stages that completed, the verification that failed) and
-        # stops claiming a platform that is no longer running (§20).
-        for handle in handles.values():
-            adapter.stop(handle)
-        if recorder.record.running:
-            recorder.update(recorder.record.mark_stopped(at=recorder.clock()))
+        # stops claiming a platform that is no longer running (§20). The cleanup
+        # itself is total, so what it could not release is reported with the
+        # failure that called for it instead of replacing it.
+        error.errors.extend(_release_handles(recorder, adapter, handles))
         raise
+    except Exception as error:  # noqa: BLE001 - the owner's seam is external code
+        # An owner-supplied runtime seam is external code: the RuntimeAdapter
+        # contract says which operations exist, not which exceptions an
+        # implementation raises (ADR-0016 §18). Whatever it raises, the failure
+        # is normalized into this capability's vocabulary at the stage the
+        # operation had reached, every element this operation started is
+        # released (detach-only: the runtime's lifecycle belongs to its owner),
+        # and the original exception stays as diagnostic context — never an
+        # uncontrolled traceback that leaves started elements unaccounted for.
+        failure = _unexpected_failure(recorder.record, error)
+        failure.errors.extend(_release_handles(recorder, adapter, handles))
+        recorder.fail(
+            failure.stage or "deploying",
+            "the deployment operation stopped unexpectedly",
+            failure.errors,
+            failure,
+        )
 
     return Deployment(
         record=recorder.record,
@@ -1026,6 +1043,86 @@ def deploy(
         _store=store,
         _secrets=tuple(environment.secrets.values()),
         _clock=now,
+    )
+
+
+def _release_handles(
+    recorder: _Recorder,
+    adapter: RuntimeAdapter,
+    handles: Mapping[str, RuntimeHandle],
+) -> list[str]:
+    """Release this operation's reference to the elements it started (§18).
+
+    Detach-only by contract: :class:`RuntimeAdapter.stop` releases this
+    operation's reference and never retires what the owner supervises — the
+    lifecycle of the Running Platform belongs to its owner (ADR-0016 §18;
+    S4 runbook §7). The record stops claiming a platform that is no longer
+    reached, and only after every handle was released: a stop that failed
+    leaves the previous claim standing rather than asserting a stop that did
+    not happen (§9, §10).
+
+    Total by construction: the seam is external code, so every handle is
+    attempted and everything that could not be released is **returned** as a
+    recorded reason. Cleanup runs while a failure is already being reported,
+    and a cleanup that threw its own exception would replace that failure —
+    the one thing the record must never lose (§20).
+    """
+    problems: list[str] = []
+    for component_id in sorted(handles):
+        try:
+            adapter.stop(handles[component_id])
+        except Exception as error:  # noqa: BLE001 - the owner's seam
+            problems.append(
+                f"{component_id}: the runtime element could not be released "
+                f"({error.__class__.__name__}: {error})"
+            )
+    if recorder.record.running and not problems:
+        try:
+            recorder.update(recorder.record.mark_stopped(at=recorder.clock()))
+        except Exception as error:  # noqa: BLE001 - reported, never raised
+            problems.append(
+                "the stopped state of the platform could not be recorded "
+                f"({error.__class__.__name__}: {error})"
+            )
+    return problems
+
+
+def _reached_stage(record: DeploymentRecord) -> str:
+    """The stage of the initial path this operation had reached (§36)."""
+    for entry in record.stages:
+        if entry.status == STAGE_IN_PROGRESS:
+            return entry.name
+    completed = [
+        entry.name for entry in record.stages if entry.status == STAGE_COMPLETED
+    ]
+    return completed[-1] if completed else "deploying"
+
+
+def _unexpected_failure(
+    record: DeploymentRecord, error: Exception
+) -> DeploymentOperationsError:
+    """The recorded failure an unexpected exception becomes (§20).
+
+    The exception type is the implementation's vocabulary, not this
+    capability's: it is carried as the first recorded reason, while the failure
+    itself is the fail-closed failure of the stage the operation had reached.
+    """
+    stage = _reached_stage(record)
+    detail = f"{error.__class__.__name__}: {error}"
+    if stage == "starting":
+        return StartupFailed([detail])
+    if stage == "health_check":
+        return HealthCheckFailed([detail])
+    if stage == "deploying":
+        return DeploymentExecutionFailed([detail])
+    return DeploymentOperationsError(
+        (
+            f"the deployment operation stopped unexpectedly at the {stage!r} "
+            "stage; the failure is recorded and nothing half-realized keeps "
+            "running"
+        ),
+        errors=[detail],
+        stage=stage,
     )
 
 
@@ -1418,6 +1515,45 @@ def _record_observations(
     recorder.components(changes)
 
 
+def _attach_executions(
+    record: DeploymentRecord,
+    elements: Mapping[str, RuntimeElement],
+) -> dict[str, RuntimeElement]:
+    """The elements ``attach`` hands the adapter, bound to the recorded content.
+
+    ``attach`` starts nothing, but the reference it restores is the reference a
+    restart re-executes from: the elements it hands the owner are bound to the
+    execution content the deployment record already pins — the boundary
+    established before anything was launched — and that boundary is re-verified
+    against the bytes on disk here, so content replaced since the deployment is
+    refused rather than handed out for execution (ADR-0016 §9, §10).
+    """
+    bound: dict[str, RuntimeElement] = {}
+    errors: list[str] = []
+    for component_id, element in elements.items():
+        entry = record.component(component_id)
+        persisted = entry.execution if entry is not None else None
+        if not isinstance(persisted, Mapping):
+            errors.append(
+                f"{component_id}: the record holds no execution binding; there "
+                "is no verified content for this operation's runtime element"
+            )
+            continue
+        execution = execution_binding_from_document(persisted)
+        if execution.component_id != component_id:
+            errors.append(
+                f"{component_id}: the record's execution binding names "
+                f"{execution.component_id!r}; a binding belongs to exactly the "
+                "component it was established for"
+            )
+            continue
+        errors.extend(verify_bound_content(execution))
+        bound[component_id] = replace(element, execution=execution)
+    if errors:
+        raise IdentityVerificationFailed(errors)
+    return bound
+
+
 def _attach_subject_errors(
     record: DeploymentRecord,
     verification: InstanceVerification,
@@ -1557,7 +1693,10 @@ def attach(
     an honest realized, running, identity-verified platform for exactly this
     instance. It then asks the injected :class:`RuntimeAdapter` to bind the
     runtime elements its environment already supervises, and re-verifies the
-    actual platform identity through the same S4 seam ``deploy`` uses.
+    actual platform identity through the same S4 seam ``deploy`` uses. The
+    elements it hands the adapter are bound to the execution content the record
+    pins — re-verified against the bytes on disk — because what ``attach``
+    restores is the reference a restart re-executes from, in a fresh process.
 
     What ``attach`` never does (ADR-0016 §7, §9, §10, §18, §20):
 
@@ -1657,12 +1796,29 @@ def attach(
         )
     provisioned = provision(environment, verification, deployment_id)
     paths = tuple(source_paths) if source_paths is not None else default_source_paths()
-    elements = build_elements(
-        environment, provisioned, verification, source_paths=paths
+    elements = _attach_executions(
+        record,
+        build_elements(environment, provisioned, verification, source_paths=paths),
     )
     handles: dict[str, RuntimeHandle] = {}
     for component_id in sorted(elements):
-        handle = runtime.attach(elements[component_id])
+        try:
+            handle = runtime.attach(elements[component_id])
+        except RuntimeProcessError:
+            raise
+        except Exception as error:
+            # An owner-supplied runtime seam is external code: whatever it
+            # raises while binding, the binding failed closed. Nothing was
+            # created, started, stopped or migrated, no state was written, and
+            # the original exception stays as diagnostic context (§18, §20).
+            raise RuntimeProcessError(
+                (
+                    f"{deployment_id}: the runtime adapter could not bind the "
+                    "standing platform; this operation was not re-bound and no "
+                    "runtime element was touched"
+                ),
+                errors=[f"{error.__class__.__name__}: {error}"],
+            ) from error
         if handle.component_id != component_id:
             raise InvalidDeploymentStateTransition(
                 f"{deployment_id}: the runtime adapter bound "

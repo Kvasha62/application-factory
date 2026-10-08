@@ -167,16 +167,42 @@ def _is_governed(path: Path) -> bool:
 
 
 def _class_origin(instance: Any) -> Path | None:
-    """The file the implementation of ``instance`` was defined in, if any."""
+    """The file the implementation of ``instance`` was defined in, if any.
+
+    ``inspect`` answers with whatever the object's own type tells it, so this is
+    a read of owner-controlled information: an object may raise from any part of
+    that read, and the answer is then "no verifiable origin" rather than an
+    exception escaping the composition.
+    """
     try:
         return Path(inspect.getfile(type(instance))).resolve()
-    except TypeError:  # pragma: no cover - builtins and dynamic classes
+    except Exception:  # noqa: BLE001 - any failure means "not verifiable"
         return None
 
 
 def _class_name(instance: Any) -> str:
-    instance_type = type(instance)
-    return f"{instance_type.__module__}.{instance_type.__qualname__}"
+    """The dot path of ``instance``'s type, or a placeholder when unreadable."""
+    try:
+        instance_type = type(instance)
+        return f"{instance_type.__module__}.{instance_type.__qualname__}"
+    except Exception:  # noqa: BLE001 - owner-controlled attribute read
+        return "<unreadable owner type>"
+
+
+def _owner_attributes(instance: Any, names: Sequence[str]) -> dict[str, Any] | None:
+    """Read a fixed set of attributes off an owner-controlled object.
+
+    ``getattr`` on an owner-supplied object runs the owner's code, including a
+    ``__getattr__`` or a property descriptor that raises. ``None`` means the
+    read itself failed and the object is unusable; the caller refuses it.
+    """
+    found: dict[str, Any] = {}
+    try:
+        for name in names:
+            found[name] = getattr(instance, name, None)
+    except Exception:  # noqa: BLE001 - owner-controlled attribute read
+        return None
+    return found
 
 
 def parse_layer_r_reference(reference: str) -> tuple[str, str]:
@@ -262,6 +288,10 @@ class LayerRWiring:
     #: ``True`` when the shipped adapter wrapped the owner's own source; the
     #: owner is then the source of the facts and this composition only adapts.
     adapted_owner_source: bool
+    #: The owner's own identity source, when the wiring declared one. Carried so
+    #: that the composition can be re-validated — and its claims checked against
+    #: what it actually holds — without re-resolving the declaration.
+    identity_source: Any = None
 
     def document(self) -> dict[str, object]:
         """The resolved composition as a credential-free record."""
@@ -299,6 +329,11 @@ def _exec_module_from_file(path: Path) -> ModuleType:
     name = f"layer_r_declared_{digest}"
     existing = sys.modules.get(name)
     if existing is not None:
+        # Already executed in this process: the module's own state (an owner's
+        # supervision registry, for instance) is the state of this process, and
+        # re-executing the file would silently reset it. A change to the file on
+        # disk takes effect in the next process, exactly as it would for an
+        # imported module.
         return existing
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
@@ -346,7 +381,8 @@ def _load_declared_module(
             f"the declared Layer R module {target!r} could not be imported "
             f"({error.__class__.__name__})"
         ) from error
-    origin = getattr(module, "__file__", None)
+    files = _owner_attributes(module, ("__file__",))
+    origin = files["__file__"] if files is not None else None
     if not isinstance(origin, str) or not origin:
         raise _refusal(f"the declared Layer R module {target!r} has no source location")
     resolved = Path(origin).resolve()
@@ -388,11 +424,14 @@ def _validate_runtime_adapter(adapter: Any) -> RuntimeAdapter:
             "composition never creates a runtime of its own"
         )
     errors: list[str] = []
-    missing = [
-        name
-        for name in RUNTIME_ADAPTER_OPERATIONS
-        if not callable(getattr(adapter, name, None))
-    ]
+    attributes = _owner_attributes(adapter, RUNTIME_ADAPTER_OPERATIONS)
+    if attributes is None:
+        raise _refusal(
+            "the declared Layer R runtime_adapter could not be inspected: "
+            "reading its runtime seam raised an exception, so this composition "
+            "cannot establish what was supplied"
+        )
+    missing = [name for name, value in attributes.items() if not callable(value)]
     if missing:
         errors.append(
             "the declared Layer R runtime_adapter does not implement the "
@@ -417,7 +456,7 @@ def _validate_runtime_adapter(adapter: Any) -> RuntimeAdapter:
 
 def _validate_identity_provider(
     wiring: Any,
-) -> tuple[PlatformIdentityProvider, bool]:
+) -> tuple[PlatformIdentityProvider, bool, Any]:
     """Refuse anything that is not owner-produced actual identity evidence.
 
     The shipped ``OwnerSuppliedPlatformIdentityProvider`` is accepted only as
@@ -426,31 +465,58 @@ def _validate_identity_provider(
     class, and an identity source must come from outside this repository in
     every case.
     """
-    provider = getattr(wiring, "identity_provider", None)
-    source = getattr(wiring, "identity_source", None)
+    attributes = _owner_attributes(wiring, ("identity_provider", "identity_source"))
+    if attributes is None:
+        raise _refusal(
+            "the declared Layer R wiring could not be inspected: reading its "
+            "identity seam raised an exception, so this composition cannot "
+            "establish what was supplied"
+        )
+    provider = attributes["identity_provider"]
+    source = attributes["identity_source"]
     if provider is None and source is None:
         raise _refusal(
             "the declared Layer R answered with neither identity_provider nor "
             "identity_source; actual identity evidence must come from the "
             "Running Platform owner"
         )
+    if isinstance(provider, OwnerSuppliedPlatformIdentityProvider):
+        # The shipped adapter is accepted only as the adapter over the owner's
+        # own source: the facts must still be the owner's, and the class the
+        # composition holds is not itself an identity authority (ADR-0020 §4).
+        # The source it actually carries is the one validated, whether the
+        # wiring names it again or not.
+        wrapped = getattr(provider, "_source", None)
+        if source is not None and wrapped is not None and source is not wrapped:
+            raise _refusal(
+                "the declared Layer R wiring carries the shipped identity "
+                "adapter over another source than the identity_source it names; "
+                "this composition adapts exactly the owner's own source"
+            )
+        validated = _validate_owner_source(source if source is not None else wrapped)
+        return provider, True, validated
     if provider is not None:
-        if not callable(getattr(provider, "observe_identity", None)):
-            raise _refusal(
-                "the declared Layer R identity_provider does not implement the "
-                "identity seam (observe_identity)"
-            )
-        origin = _class_origin(provider)
-        if origin is None or _is_governed(origin):
-            raise _refusal(
-                "the declared Layer R identity_provider "
-                f"({_class_name(provider)}) is not owner-side code; the "
-                "owner-side provider must be defined outside the Deployment & "
-                "Operations package"
-            )
-        return provider, False
+        return _validate_owner_provider(provider), False, None
 
-    if not callable(getattr(source, "observe", None)):
+    validated = _validate_owner_source(source)
+    return OwnerSuppliedPlatformIdentityProvider(validated), True, validated
+
+
+def _validate_owner_source(source: Any) -> Any:
+    """Refuse anything that is not an owner-side actual-identity source.
+
+    The facts belong to the Running Platform owner (ADR-0020 §4): a source
+    defined inside this repository — the D&O-owned file surface included — is
+    never the source of production actual identity.
+    """
+    seam = _owner_attributes(source, ("observe",))
+    if seam is None:
+        raise _refusal(
+            "the declared Layer R identity_source could not be inspected: "
+            "reading its observe seam raised an exception, so this composition "
+            "cannot establish what was supplied"
+        )
+    if not callable(seam["observe"]):
         raise _refusal(
             "the declared Layer R identity_source does not implement the "
             "owner-side source contract (observe)"
@@ -464,10 +530,90 @@ def _validate_identity_provider(
     if _is_governed(origin):
         raise _refusal(
             f"the declared Layer R identity_source ({_class_name(source)}) is "
-            "defined inside the Deployment & Operations code; actual identity "
+            "not owner-side code: it is defined inside the Deployment & "
+            "Operations code, and actual identity facts are produced by the "
+            "Running Platform owner"
+        )
+    return source
+
+
+def _validate_owner_provider(provider: Any) -> PlatformIdentityProvider:
+    """Refuse anything that is not an owner-side identity provider.
+
+    The same rule the resolver applies to a declared factory's answer, applied
+    to a provider that is already in hand: a callable ``observe_identity``
+    defined outside this repository. The D&O-owned file-backed surface is
+    refused here as it is everywhere else (ADR-0020 §4).
+    """
+    seam = _owner_attributes(provider, ("observe_identity",))
+    if seam is None:
+        raise _refusal(
+            "the production composition's identity provider could not be "
+            "inspected: reading its identity seam raised an exception, so this "
+            "composition cannot establish what was supplied"
+        )
+    if not callable(seam["observe_identity"]):
+        raise _refusal(
+            "the production composition's identity provider does not implement "
+            "the identity seam (observe_identity)"
+        )
+    origin = _class_origin(provider)
+    if origin is None or _is_governed(origin):
+        raise _refusal(
+            "the production composition's identity provider "
+            f"({_class_name(provider)}) is not owner-side code; actual identity "
             "facts are produced by the Running Platform owner"
         )
-    return OwnerSuppliedPlatformIdentityProvider(source), True
+    return provider
+
+
+def validate_wiring(wiring: Any) -> None:
+    """Refuse a wiring whose seams are not the owner-side seams it claims.
+
+    The identical checks :func:`resolve_layer_r` applies to a declared
+    factory's answer, applied to a wiring object: a wiring constructed by hand
+    — bypassing the resolver — does not get to claim a validated composition,
+    and a composition root may not report validated wiring in its document
+    while holding seams that were never validated (ADR-0016 §7, §20).
+    """
+    if not isinstance(wiring, LayerRWiring):
+        raise _refusal(
+            "the production composition must be built from a resolved Layer R "
+            "wiring; this object holds no wiring the resolver validated"
+        )
+    seams = _owner_attributes(
+        wiring,
+        (
+            "runtime_adapter",
+            "identity_provider",
+            "identity_source",
+            "adapted_owner_source",
+        ),
+    )
+    if seams is None:
+        # A wiring is a dataclass whose fields are read directly, but its fields
+        # may hold owner-side objects whose own reads raise, and a subclass may
+        # answer with a descriptor: whatever the read raises is a composition
+        # refusal, never an arbitrary exception out of the composition (§7, §20).
+        raise _refusal(
+            "the production composition's wiring could not be inspected: reading "
+            "its seams raised an exception, so this composition cannot establish "
+            "what it holds"
+        )
+    _validate_runtime_adapter(seams["runtime_adapter"])
+    _, adapted, _ = _validate_identity_provider(wiring)
+    if bool(seams["adapted_owner_source"]) != adapted:
+        raise _refusal(
+            "the production composition's wiring misstates its identity seam: "
+            f"it declares adapted_owner_source={bool(seams['adapted_owner_source'])} "
+            "while carrying "
+            + (
+                "the shipped adapter over an owner-side source"
+                if adapted
+                else "the owner's own provider"
+            )
+            + "; a composition that reports a validated wiring has to show it"
+        )
 
 
 def resolve_layer_r(declaration: LayerREntryPoint) -> LayerRWiring:
@@ -478,21 +624,30 @@ def resolve_layer_r(declaration: LayerREntryPoint) -> LayerRWiring:
     Deployment & Operations operation exists.
     """
     module, module_path = _load_declared_module(declaration)
-    factory = getattr(module, declaration.factory_name, None)
+    attributes = _owner_attributes(module, (declaration.factory_name,))
+    factory = attributes.get(declaration.factory_name) if attributes else None
     wiring = _call_declared_factory(factory, declaration, module_path)
     if wiring is None:
         raise _refusal(
             f"{module_path}:{declaration.factory_name} answered with no wiring; "
             "a Running Platform wiring is required"
         )
-    adapter = _validate_runtime_adapter(getattr(wiring, "runtime_adapter", None))
-    provider, adapted = _validate_identity_provider(wiring)
+    seams = _owner_attributes(wiring, ("runtime_adapter",))
+    if seams is None:
+        raise _refusal(
+            f"{module_path}:{declaration.factory_name} answered with an object "
+            "whose runtime seam could not be inspected: reading it raised an "
+            "exception, so this composition cannot establish what was supplied"
+        )
+    adapter = _validate_runtime_adapter(seams["runtime_adapter"])
+    provider, adapted, validated_source = _validate_identity_provider(wiring)
     return LayerRWiring(
         declaration=declaration,
         module_path=module_path,
         runtime_adapter=adapter,
         identity_provider=provider,
         adapted_owner_source=adapted,
+        identity_source=validated_source,
     )
 
 
@@ -507,4 +662,5 @@ __all__ = [
     "resolve_layer_r",
     "shipped_owner_side_dir",
     "source_checkout_dir",
+    "validate_wiring",
 ]

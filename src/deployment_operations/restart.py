@@ -71,7 +71,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -93,7 +92,6 @@ from deployment_operations.deployment import (
 )
 from deployment_operations.errors import (
     DeploymentInputRejected,
-    DeploymentOperationsError,
     DeploymentStateError,
     IdentityVerificationFailed,
     InvalidDeploymentStateTransition,
@@ -171,10 +169,15 @@ from running_platform.owner_state import (
 
 Clock = Callable[[], str]
 
-#: The failures the managed runtime boundary can answer with. A restart catches
-#: exactly these and turns them into an honest phase failure; anything else is
-#: not a runtime outcome and is never converted into one.
-_RUNTIME_ERRORS = (DeploymentOperationsError, OSError, subprocess.SubprocessError)
+#: What a restart treats as a managed-runtime failure. The owner's runtime seam
+#: is external code: the RuntimeAdapter contract names its operations, not the
+#: exception types an implementation raises, so an unexpected exception is
+#: still a failure of the phase that was running — recorded, never left as an
+#: uncontrolled traceback with elements still started. ``BaseException`` (an
+#: interrupt, a process exit) is deliberately not caught: it leaves the record
+#: stating exactly what had been reached, and the next process attaches or
+#: refuses instead of inventing a recovery (ADR-0016 §18, §20).
+_RUNTIME_ERRORS = Exception
 
 #: The operational actions a restart attempt records in deployment state
 #: (ADR-0016 §18: every operational action is reflected in deployment state).
