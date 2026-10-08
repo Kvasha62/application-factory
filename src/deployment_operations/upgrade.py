@@ -1,4 +1,14 @@
-"""Upgrade orchestration for one realized Platform Instance (ADR-0017)."""
+"""Upgrade orchestration for one realized Platform Instance (ADR-0017).
+
+An upgrade realizes and verifies the replacement first, then hands the old
+platform over: it releases this operation's references to it — the runtime
+contract's **detach** (``RuntimeAdapter.stop``, ADR-0016 §18; S4 runbook §7) —
+and only then commits the superseded state. A released reference is not evidence
+that the old platform stopped, so no state or signal of this module claims one;
+the old record keeps its ``running`` claim and withdraws the operational
+condition it can no longer verify. What the old runtime element does next is its
+owner's decision, never this module's.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +17,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from deployment_operations.deployment import Deployment, DeploymentRequest, deploy
+from deployment_operations.deployment import (
+    Deployment,
+    DeploymentRequest,
+    deploy,
+    release_references,
+)
 from deployment_operations.errors import (
     DeploymentInputRejected,
     InvalidDeploymentStateTransition,
@@ -132,14 +147,16 @@ def _sync_deployed_attr(deployment: Any) -> None:
             pass
 
 
-def _stop_deployment_runtime(deployment: Any) -> None:
-    if hasattr(deployment, "stop") and callable(deployment.stop):
-        deployment.stop()
-        return
-    runtime = getattr(deployment, "_runtime", None)
-    if runtime is not None:
-        for handle in getattr(deployment, "_handles", ()) or ():
-            runtime.stop(handle)
+def _release_deployment_runtime(deployment: Any, *, origin: str) -> DeploymentRecord:
+    """Release this deployment operation's references to the platform (§18).
+
+    The upgrade hands the Running Platform over to its replacement; it does not
+    stop it. ``RuntimeAdapter.stop`` is the runtime contract's **detach** — a
+    released reference is not evidence that the platform stopped (S4 runbook
+    §7), so the release is recorded as the honest ``running + readiness
+    withdrawn`` state and never as a stopped platform.
+    """
+    return release_references(deployment, origin=origin)
 
 
 def _cleanup_candidate(
@@ -147,36 +164,39 @@ def _cleanup_candidate(
     *,
     causal_error: BaseException | None = None,
 ) -> Exception | None:
-    stop_error: Exception | None = None
+    release_error: Exception | None = None
     persistence_error: Exception | None = None
     try:
-        _stop_deployment_runtime(candidate)
+        _release_deployment_runtime(candidate, origin="upgrade_aborted_candidate")
     except Exception as error:  # noqa: BLE001 - classified below
-        record_after_stop = getattr(candidate, "record", None)
-        runtime_stopped = (
-            isinstance(record_after_stop, DeploymentRecord)
-            and not record_after_stop.running
-            and not record_after_stop.ready
+        record_after_release = getattr(candidate, "record", None)
+        release_recorded = (
+            isinstance(record_after_release, DeploymentRecord)
+            and not record_after_release.ready
             and any(
-                action.name == "platform_stopped"
-                for action in record_after_stop.operational_actions
+                action.name == "platform_released"
+                for action in record_after_release.operational_actions
             )
         )
-        if runtime_stopped:
+        if release_recorded:
             persistence_error = error
         else:
-            stop_error = error
+            release_error = error
     record = getattr(candidate, "record", None)
     if isinstance(record, DeploymentRecord):
-        if stop_error is None and (record.running or record.ready):
-            record = record.mark_stopped(at=utc_now())
-            candidate.record = record
-        elif stop_error is not None and record.ready:
-            record = record.withdraw_ready(
-                at=utc_now(),
-                reason="upgrade_aborted_candidate_stop_failed",
-            )
-            candidate.record = record
+        # An aborted candidate is released, never stopped: what can be stated is
+        # the withdrawn operational condition, and nothing about the candidate's
+        # runtime being down (ADR-0016 §18).
+        withdrawn = record.withdraw_ready(
+            at=utc_now(),
+            reason=(
+                "upgrade_aborted_candidate_released"
+                if release_error is None
+                else "upgrade_aborted_candidate_release_failed"
+            ),
+        )
+        if withdrawn is not record:
+            candidate.record = withdrawn
         has_state_target = getattr(candidate, "_store", None) is not None or hasattr(
             candidate, "state_path"
         )
@@ -234,7 +254,16 @@ def upgrade(
     runtime: Any = None,
     identity_provider: Any = None,
 ) -> Deployment:
-    """Deploy the replacement, accept identity, then supersede the old one."""
+    """Deploy the replacement, accept identity, then hand the old one over.
+
+    The hand-over is a **detach**: the replacement is realized and verified
+    first, then this operation releases its own references to the old platform
+    (``RuntimeAdapter.stop``, ADR-0016 §18) and only then is the superseded
+    state committed. A released reference is not evidence that the old platform
+    stopped, so neither deployment state nor the journal claims one — the old
+    record keeps its ``running`` claim and withdraws the operational condition
+    it can no longer verify (S4 runbook §7).
+    """
     current = request.current
     replacement = request.replacement
     old = current.record
@@ -282,7 +311,7 @@ def upgrade(
     )
 
     candidate: Deployment | None = None
-    stopped_record: DeploymentRecord | None = None
+    released_record: DeploymentRecord | None = None
     concurrent_state_conflict = False
     state_committed = False
     try:
@@ -320,28 +349,32 @@ def upgrade(
                 raise InvalidDeploymentStateTransition(
                     "the current deployment state changed during upgrade"
                 )
-            persisted_before_stop = _read_persisted(current.state_path)
-            if persisted_before_stop != old:
+            persisted_before_release = _read_persisted(current.state_path)
+            if persisted_before_release != old:
                 concurrent_state_conflict = True
                 raise InvalidDeploymentStateTransition(
                     "the persisted current deployment state changed during upgrade"
                 )
 
-            # Keep the old deployment's lifecycle and deployed claim authoritative
-            # until its runtime elements have stopped successfully.
-            _stop_deployment_runtime(current)
-            persisted_after_stop = _read_persisted(current.state_path)
-            if persisted_after_stop != current.record and persisted_after_stop != old:
-                concurrent_state_conflict = True
-                raise InvalidDeploymentStateTransition(
-                    "the persisted current deployment state changed during upgrade"
-                )
-
-            stopped_record = (
-                current.record.mark_stopped(at=utc_now())
-                if current.record.running or current.record.ready
-                else current.record
+            # Keep the old deployment's lifecycle and deployed claim
+            # authoritative until the replacement is realized and verified; only
+            # then release this operation's references to the old platform. That
+            # release is the contract's detach, not a stop: the record keeps its
+            # ``running`` claim and withdraws the condition it can no longer
+            # verify (ADR-0016 §18; S4 runbook §7).
+            released_record = _release_deployment_runtime(
+                current, origin="upgrade_current"
             )
+            persisted_after_release = _read_persisted(current.state_path)
+            if (
+                persisted_after_release != current.record
+                and persisted_after_release != old
+            ):
+                concurrent_state_conflict = True
+                raise InvalidDeploymentStateTransition(
+                    "the persisted current deployment state changed during upgrade"
+                )
+
             at = utc_now()
             superseded = old.mark_superseded(
                 at=at,
@@ -352,11 +385,11 @@ def upgrade(
                 },
             )
             superseded = replace(
-                stopped_record,
+                released_record,
                 lifecycle=superseded.lifecycle,
                 updated_at=superseded.updated_at,
                 operational_actions=(
-                    *stopped_record.operational_actions,
+                    *released_record.operational_actions,
                     superseded.operational_actions[-1],
                 ),
             )
@@ -402,20 +435,23 @@ def upgrade(
         if state_committed:
             # Runtime cutover and superseded state write have durably committed.
             # A post-commit completion-signal failure does not undo the upgrade,
-            # stop the replacement runtime, or emit a contradictory failure event.
+            # release the replacement's references, or emit a contradictory
+            # failure event.
             raise
         if not concurrent_state_conflict:
             observed_record = current.record
-            stop_was_recorded = any(
-                action.name == "platform_stopped"
+            release_recorded = any(
+                action.name == "platform_released"
                 for action in observed_record.operational_actions
             )
-            if stopped_record is not None:
-                recovery_record = stopped_record
+            if released_record is not None:
+                # The references were released and the record says exactly that:
+                # the platform may still be up, and the honest state keeps it
+                # reachable instead of claiming a stop nobody established.
+                recovery_record = released_record
             elif (
-                stop_was_recorded
+                release_recorded
                 and observed_record.lifecycle == LIFECYCLE_REALIZED
-                and not observed_record.running
                 and not observed_record.ready
             ):
                 recovery_record = observed_record

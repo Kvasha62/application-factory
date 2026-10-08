@@ -440,6 +440,67 @@ class Deployment:
             )
         return record
 
+    def release(self, *, origin: str) -> DeploymentRecord:
+        """Release this operation's references to the platform — a detach (§18).
+
+        ``RuntimeAdapter.stop`` is the runtime contract's **detach**: it releases
+        this operation's reference to a runtime element and leaves that element's
+        fate to its owner (S4 runbook §7; ADR-0016 §18). This is the hand-over an
+        orchestration performs before it records that a platform was superseded
+        or rolled back — an upgrade or a rollback releases *its own* references;
+        it does not stop the platform, and it never becomes the authority on
+        whether the platform is down.
+
+        It is therefore deliberately not :meth:`stop`: a released reference is
+        not evidence of a stopped platform, so nothing here claims one. What is
+        recorded is exactly what this operation established — the verified
+        operational condition is withdrawn (it can no longer be checked, §33) and
+        the release itself is recorded as an operational action carrying the
+        ``origin`` that asked for it. ``running`` keeps the value it had: the
+        conservative statement that a Running Platform may still exist — and
+        that claim is what keeps the record an honest subject for the
+        observational :mod:`deployment_operations.reconciliation`, which
+        refuses a record that claims no Running Platform (§9, §10). A verified
+        condition is not claimed: ``attach`` requires one, so a released
+        operation is re-verified by a following explicit restart, never
+        silently re-adopted.
+
+        Fail-closed about what it cannot do: an operation that claims a running
+        platform but holds no runtime element reaches no runtime, so it releases
+        nothing and refuses rather than recording a release that never happened
+        (the posture of :meth:`stop`). A release that raises is a release that
+        did not happen: the record is left exactly as it was, and the caller
+        keeps its previous claim instead of inventing one.
+        """
+        at = self._clock()
+        if self.record.running and not self._handles:
+            raise DeploymentStateError(
+                f"{self.record.deployment_id}: this deployment operation holds "
+                "no runtime element, so it is bound to no Running Platform whose "
+                "references it could release; nothing is recorded and no state "
+                "is moved by an operation that reaches no runtime (ADR-0016 §9, "
+                "§18, §20). Re-bind the operation with "
+                "deployment_operations.attach first."
+            )
+        for handle in self._handles:
+            if self._runtime is not None:
+                self._runtime.stop(handle)
+        record = self.record.withdraw_ready(
+            at=at,
+            reason=(
+                f"{origin}: this deployment operation released its references to "
+                "the Running Platform; a detach is the runtime contract's "
+                "reference release and is not evidence that the platform stopped"
+            ),
+        )
+        record = record.with_operational_action(
+            "platform_released", at=at, detail={"origin": origin}
+        )
+        self.record = record
+        if self._store is not None:
+            self._store.write(record, secrets=self._secrets)
+        return record
+
     def _event(
         self,
         name: str,
@@ -1101,6 +1162,50 @@ def _release_handles(
                 f"({error.__class__.__name__}: {error})"
             )
     return problems
+
+
+def release_references(
+    deployment: Any,
+    *,
+    origin: str,
+) -> DeploymentRecord:
+    """Release one deployment operation's references to the platform (§18).
+
+    The hand-over an orchestration performs before it records that a platform
+    was superseded or rolled back: ``origin`` names the orchestration asking
+    for it. A :class:`Deployment` performs it through :meth:`Deployment.release`
+    — release every element over the runtime seam, then record the honest
+    ``running + readiness withdrawn`` state — and nothing about it claims a
+    stopped platform.
+
+    A handle that exposes only the seam and the record (a synthetic or
+    owner-side object) gets the same treatment without a persistence round
+    trip: every element it holds is released and its record is moved to that
+    same honest state, or left exactly as it was if a release raised — a
+    release that raised is a release that did not happen, and the caller keeps
+    its previous claim instead of inventing one (ADR-0016 §18, §20).
+    """
+    release = getattr(deployment, "release", None)
+    if callable(release):
+        return release(origin=origin)
+    runtime = getattr(deployment, "_runtime", None)
+    if runtime is not None:
+        for handle in getattr(deployment, "_handles", ()) or ():
+            runtime.stop(handle)
+    at = utc_now()
+    record = deployment.record.withdraw_ready(
+        at=at,
+        reason=(
+            f"{origin}: this deployment operation released its references to "
+            "the Running Platform; a detach is the runtime contract's reference "
+            "release and is not evidence that the platform stopped"
+        ),
+    )
+    record = record.with_operational_action(
+        "platform_released", at=at, detail={"origin": origin}
+    )
+    deployment.record = record
+    return record
 
 
 def _reached_stage(record: DeploymentRecord) -> str:

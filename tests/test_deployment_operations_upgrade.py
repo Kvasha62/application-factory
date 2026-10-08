@@ -1,3 +1,4 @@
+import ast
 import importlib
 import threading
 from pathlib import Path
@@ -6,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 upgrade_module = importlib.import_module("deployment_operations.upgrade")
+rollback_module = importlib.import_module("deployment_operations.rollback")
 from deployment_operations.deployment import Deployment
 from deployment_operations.errors import (
     DeploymentInputRejected,
@@ -259,11 +261,90 @@ def test_success_supersedes_old_only_after_new_deployed(tmp_path: Path, monkeypa
     )
 
 
-#: A runtime element this synthetic operation holds. An upgrade stops the
-#: runtime of an operation that is **bound** to one: ``Deployment.stop()``
+#: A runtime element this synthetic operation holds. An upgrade releases the
+#: references of an operation that is **bound** to one: ``Deployment.release``
 #: refuses an operation that reaches no runtime, so a handle-less deployment
-#: claiming ``running`` would model a state the boundary does not allow.
+#: claiming ``running`` would model a state the boundary does not allow. The
+#: release is the contract's detach — it never claims a stopped platform.
 BOUND_HANDLE = "bound-runtime-handle"
+
+
+class DetachOnlyRuntime:
+    """The production contract's runtime seam: ``stop`` releases a reference.
+
+    It is the detach of ADR-0016 §18 — the member keeps running under its
+    owner's policy — so the double records what it was asked and can prove
+    afterwards that nothing terminated the member, which is the fact the
+    upgrade's state and journal must never contradict.
+    """
+
+    def __init__(self) -> None:
+        self.member_alive = True
+        self.detached: list[str] = []
+
+    def stop(self, handle: str) -> dict[str, object]:
+        assert self.member_alive, "the member is its owner's, not this operation's"
+        self.detached.append(handle)
+        return {"status": "detached", "was_running": self.member_alive}
+
+
+def test_a_detached_upgrade_member_stays_alive_without_a_stop_claim(
+    tmp_path: Path, monkeypatch
+):
+    """AC: detach-only runtime — the released member lives, the state says so."""
+    current_record = _record(
+        tmp_path, instance="a" * 64, deployment_id="old-deployment"
+    )
+    runtime = DetachOnlyRuntime()
+    current = _real_deployment(
+        tmp_path,
+        current_record,
+        runtime=runtime,
+        handles=("old-runtime-handle",),
+    )
+    replacement = _request(tmp_path, "c" * 64)
+    request = UpgradeRequest(
+        current, replacement, derive_upgrade_id(current, replacement)
+    )
+    candidate = _real_deployment(
+        tmp_path,
+        _record(tmp_path, instance="c" * 64, deployment_id="new-deployment"),
+    )
+    monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
+
+    result = upgrade(request)
+
+    assert result is candidate
+    # the release reached the seam exactly once, and it terminated nothing
+    assert runtime.detached == ["old-runtime-handle"]
+    assert (
+        runtime.member_alive is True
+    ), "the upgrade released a reference; the member it released is still up"
+    persisted = DeploymentStateStore(current.state_path).read()
+    assert persisted.lifecycle == LIFECYCLE_SUPERSEDED
+    assert persisted.running is True
+    assert persisted.ready is False
+    assert persisted.deployed is False
+    assert persisted.identity_verified is True
+    released = [
+        action
+        for action in persisted.operational_actions
+        if action.name == "platform_released"
+    ]
+    assert len(released) == 1
+    assert released[0].detail["origin"] == "upgrade_current"
+    assert not any(
+        action.name == "platform_stopped" for action in persisted.operational_actions
+    )
+    state_text = current.state_path.read_text(encoding="utf-8")
+    journal_text = current.events_path.read_text(encoding="utf-8")
+    assert "platform_stopped" not in state_text
+    assert "platform_stopped" not in journal_text
+    assert "platform_released" in state_text
+    assert [event.event for event in current.events()] == [
+        "upgrade_requested",
+        "old_instance_superseded",
+    ]
 
 
 def _real_deployment(
@@ -289,7 +370,7 @@ def _real_deployment(
     )
 
 
-def test_current_stop_occurs_before_superseded_state_or_event(
+def test_current_release_occurs_before_superseded_state_or_event(
     tmp_path: Path, monkeypatch
 ):
     current_record = _record(
@@ -306,13 +387,13 @@ def test_current_stop_occurs_before_superseded_state_or_event(
     )
     monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
 
-    original_stop = current.stop
-    observed_during_stop: list[tuple[str, bool, str, tuple[str, ...]]] = []
+    original_release = current.release
+    observed_during_release: list[tuple[str, bool, str, tuple[str, ...]]] = []
 
-    def observe_then_stop():
+    def observe_then_release(*, origin: str):
         persisted_now = DeploymentStateStore(current.state_path).read()
         events_now = tuple(event.event for event in current.events())
-        observed_during_stop.append(
+        observed_during_release.append(
             (
                 current.record.lifecycle,
                 current.deployed,
@@ -320,39 +401,43 @@ def test_current_stop_occurs_before_superseded_state_or_event(
                 events_now,
             )
         )
-        return original_stop()
+        return original_release(origin=origin)
 
-    monkeypatch.setattr(current, "stop", observe_then_stop)
+    monkeypatch.setattr(current, "release", observe_then_release)
 
     result = upgrade(request)
 
     assert result is candidate
-    assert observed_during_stop == [
+    assert observed_during_release == [
         (
             LIFECYCLE_REALIZED,
             True,
             LIFECYCLE_REALIZED,
             ("upgrade_requested",),
         )
-    ]
+    ], "the replacement was realized and verified before the old was handed over"
     persisted = DeploymentStateStore(current.state_path).read()
     assert persisted.lifecycle == LIFECYCLE_SUPERSEDED
-    assert persisted.running is False
+    # The hand-over is a detach: the old record keeps its running claim and
+    # withdraws the condition it can no longer verify.
+    assert persisted.running is True
     assert persisted.ready is False
     assert persisted.deployed is False
     assert current.deployed is False
     action_names = [action.name for action in persisted.operational_actions]
-    assert "platform_stopped" in action_names
+    assert "platform_released" in action_names
     assert "platform_superseded" in action_names
-    assert action_names.index("platform_stopped") < action_names.index(
+    assert action_names.index("platform_released") < action_names.index(
         "platform_superseded"
     )
+    assert (
+        "platform_stopped" not in action_names
+    ), "a released reference is not a stopped platform"
     old_event_names = [event.event for event in current.events()]
     assert old_event_names == [
         "upgrade_requested",
-        "platform_stopped",
         "old_instance_superseded",
-    ]
+    ], "no signal of this upgrade claims the old platform stopped"
     new_event_names = [event.event for event in candidate.events()]
     assert new_event_names == [
         "new_identity_verified",
@@ -360,7 +445,7 @@ def test_current_stop_occurs_before_superseded_state_or_event(
     ]
 
 
-def test_current_stop_failure_preserves_authoritative_state_and_cleans_candidate(
+def test_current_release_failure_preserves_authoritative_state_and_cleans_candidate(
     tmp_path: Path, monkeypatch
 ):
     current_record = _record(
@@ -386,24 +471,26 @@ def test_current_stop_failure_preserves_authoritative_state_and_cleans_candidate
     )
     monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
 
-    stop_attempts: list[str] = []
+    release_attempts: list[str] = []
 
-    def fail_current_stop():
-        stop_attempts.append("stop")
-        raise RuntimeError("old runtime refused to stop")
+    def fail_current_release(*, origin: str):
+        release_attempts.append(origin)
+        raise RuntimeError("old runtime refused to release")
 
-    monkeypatch.setattr(current, "stop", fail_current_stop)
+    monkeypatch.setattr(current, "release", fail_current_release)
 
-    with pytest.raises(RuntimeError, match="old runtime refused to stop"):
+    with pytest.raises(RuntimeError, match="old runtime refused to release"):
         upgrade(request)
 
     persisted_current = DeploymentStateStore(current.state_path).read()
     persisted_candidate = DeploymentStateStore(candidate.state_path).read()
-    assert stop_attempts == ["stop"]
+    assert release_attempts == ["upgrade_current"]
     assert cleanup_calls == ["replacement-runtime-handle"]
     assert candidate.deployed is False
     assert persisted_candidate.deployed is False
-    assert persisted_candidate.running is False
+    # The aborted candidate was released, not stopped: neither its `running`
+    # claim nor its readiness says the candidate platform is down.
+    assert persisted_candidate.running is True
     assert persisted_candidate.ready is False
     assert persisted_current == current_record
     assert persisted_current.lifecycle == LIFECYCLE_REALIZED
@@ -417,6 +504,10 @@ def test_current_stop_failure_preserves_authoritative_state_and_cleans_candidate
         action.name == "platform_superseded"
         for action in persisted_current.operational_actions
     )
+    assert not any(
+        action.name == "platform_stopped"
+        for action in persisted_current.operational_actions
+    )
 
     old_events = [event.event for event in current.events()]
     new_events = [event.event for event in candidate.events()]
@@ -425,7 +516,7 @@ def test_current_stop_failure_preserves_authoritative_state_and_cleans_candidate
     assert "upgrade_completed" not in new_events
 
 
-def test_final_state_write_failure_restores_stopped_state_and_cleans_candidate(
+def test_final_state_write_failure_restores_released_state_and_cleans_candidate(
     tmp_path: Path, monkeypatch
 ):
     current_record = _record(
@@ -475,15 +566,18 @@ def test_final_state_write_failure_restores_stopped_state_and_cleans_candidate(
     assert candidate.deployed is False
     assert persisted_candidate.deployed is False
     assert persisted_current.lifecycle == LIFECYCLE_REALIZED
-    assert persisted_current.running is False
+    # The release had already happened when the superseded write failed, so the
+    # old deployment stays represented honestly — still potentially alive, no
+    # verified readiness, no stopped-platform claim.
+    assert persisted_current.running is True
     assert persisted_current.ready is False
     assert persisted_current.deployed is False
+    action_names = [action.name for action in persisted_current.operational_actions]
+    assert "platform_released" in action_names
+    assert "platform_stopped" not in action_names
+    assert "platform_superseded" not in action_names
     assert current.record == persisted_current
     assert current.deployed is False
-    assert any(
-        action.name == "platform_stopped"
-        for action in persisted_current.operational_actions
-    )
     assert not any(
         action.name == "platform_superseded"
         for action in persisted_current.operational_actions
@@ -635,7 +729,7 @@ def test_concurrent_persisted_state_change_during_deploy_fails_closed_and_cleans
     assert "upgrade_completed" not in new_events
 
 
-def test_concurrent_persisted_state_change_during_stop_fails_closed_and_cleans_candidate(
+def test_concurrent_persisted_state_change_during_release_fails_closed_and_cleans_candidate(
     tmp_path: Path, monkeypatch
 ):
     current_record = _record(
@@ -669,14 +763,14 @@ def test_concurrent_persisted_state_change_during_stop_fails_closed_and_cleans_c
     )
     monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
 
-    original_stop = current.stop
+    original_release = current.release
 
-    def stop_with_concurrent_writer():
-        result = original_stop()
+    def release_with_concurrent_writer(*, origin: str):
+        result = original_release(origin=origin)
         DeploymentStateStore(current.state_path).write(competing)
         return result
 
-    monkeypatch.setattr(current, "stop", stop_with_concurrent_writer)
+    monkeypatch.setattr(current, "release", release_with_concurrent_writer)
 
     with pytest.raises(
         InvalidDeploymentStateTransition,
@@ -953,11 +1047,13 @@ def test_candidate_cleanup_stop_failure_withdraws_candidate_readiness_and_preser
     monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
     monkeypatch.setattr(
         current,
-        "stop",
-        lambda: (_ for _ in ()).throw(RuntimeError("old runtime refused to stop")),
+        "release",
+        lambda *, origin: (_ for _ in ()).throw(
+            RuntimeError("old runtime refused to release")
+        ),
     )
 
-    with pytest.raises(RuntimeError, match="old runtime refused to stop"):
+    with pytest.raises(RuntimeError, match="old runtime refused to release"):
         upgrade(request)
 
     persisted_current = DeploymentStateStore(current.state_path).read()
@@ -970,7 +1066,7 @@ def test_candidate_cleanup_stop_failure_withdraws_candidate_readiness_and_preser
     assert any(
         action.name == "readiness_withdrawn"
         for action in persisted_candidate.operational_actions
-    )
+    ), "the failed candidate cleanup states what it knows, never a stop"
 
 
 @pytest.mark.parametrize("candidate_has_store", [True, False])
@@ -1004,8 +1100,10 @@ def test_candidate_cleanup_state_write_failure_is_recorded_and_removes_false_dep
     monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
     monkeypatch.setattr(
         current,
-        "stop",
-        lambda: (_ for _ in ()).throw(RuntimeError("old runtime refused to stop")),
+        "release",
+        lambda *, origin: (_ for _ in ()).throw(
+            RuntimeError("old runtime refused to release")
+        ),
     )
 
     original_write = DeploymentStateStore.write
@@ -1019,14 +1117,18 @@ def test_candidate_cleanup_state_write_failure_is_recorded_and_removes_false_dep
 
     monkeypatch.setattr(DeploymentStateStore, "write", fail_candidate_cleanup_write)
 
-    with pytest.raises(RuntimeError, match="old runtime refused to stop") as exc_info:
+    with pytest.raises(
+        RuntimeError, match="old runtime refused to release"
+    ) as exc_info:
         upgrade(request)
 
     assert len(cleanup_write_attempts) == 1
     assert cleanup_calls == ["replacement-runtime-handle"]
     assert candidate.deployed is False
     assert candidate.record.deployed is False
-    assert candidate.record.running is False
+    assert (
+        candidate.record.running is True
+    ), "the aborted candidate was released, not stopped"
     assert candidate.record.ready is False
     assert not candidate.state_path.exists()
     with pytest.raises(DeploymentStateError):
@@ -1059,3 +1161,39 @@ def test_candidate_cleanup_state_write_failure_is_recorded_and_removes_false_dep
     )
     assert not any(event.event == "old_instance_superseded" for event in old_events)
     assert not any(event.event == "upgrade_completed" for event in new_events)
+
+
+def _identifiers_and_literals(module) -> set[str]:
+    """Every identifier and string literal a module's code uses."""
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            found.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            found.add(node.attr)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            found.add(node.value)
+    return found
+
+
+def test_the_hand_over_paths_never_record_or_publish_a_stop():
+    """Structural guard: the detach paths claim no stopped platform.
+
+    An upgrade and a rollback hand the platform over with the detach the runtime
+    contract gives them. Neither module may reach for a stop — not the plain
+    ``Deployment.stop`` claim, not ``mark_stopped``, not the ``platform_stopped``
+    action and not ``EVENT_PLATFORM_STOPPED`` — and both must go through the
+    release helper, so this guard cannot pass vacuously.
+    """
+    for module in (upgrade_module, rollback_module):
+        used = _identifiers_and_literals(module)
+        assert "stop" not in used, module.__name__
+        assert "mark_stopped" not in used, module.__name__
+        assert "EVENT_PLATFORM_STOPPED" not in used, module.__name__
+        assert "platform_stopped" not in used, module.__name__
+        assert "release_references" in used, (
+            f"{module.__name__} must hand the platform over through the detach "
+            "helper instead of stopping anything"
+        )
+        assert "platform_released" in used, module.__name__

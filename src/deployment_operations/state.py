@@ -774,7 +774,14 @@ class DeploymentRecord:
     def mark_superseded(
         self, *, at: str, detail: Mapping[str, Any] | None = None
     ) -> DeploymentRecord:
-        """Mark this realized deployment as superseded by an accepted upgrade."""
+        """Mark this realized deployment as superseded by an accepted upgrade.
+
+        The upgrade hands the platform over to its replacement: this operation
+        releases its references — the detach of ADR-0016 §18, recorded as
+        ``platform_released`` — and the record keeps its ``running`` claim,
+        because nothing established that the superseded platform's runtime ever
+        stopped. That decision belongs to the runtime's owner (S4 runbook §7).
+        """
         if not self.deployed:
             raise InvalidDeploymentStateTransition(
                 "only an honest deployed record can be superseded"
@@ -787,20 +794,32 @@ class DeploymentRecord:
     def mark_rolled_back(
         self, *, at: str, detail: Mapping[str, Any] | None = None
     ) -> DeploymentRecord:
-        """Record rollback only after the previous Running Platform has stopped."""
-        stopped = any(
-            action.name == "platform_stopped" for action in self.operational_actions
+        """Record rollback after this operation released its references (§18).
+
+        A rollback does not stop the previous Running Platform and must not
+        claim to have done so: the rollback releases *its own* references —
+        the runtime contract's **detach** (S4 runbook §7) — and the platform's
+        own lifecycle stays its owner's decision. The gate therefore requires
+        exactly what such a hand-over establishes: the verified operational
+        condition is withdrawn, the release is recorded as an operational
+        action (``platform_released``), and the identity/version/digest
+        verification still stands. ``running`` is not required to be false —
+        the platform may still be up, and :meth:`mark_stopped` is the explicit
+        plain stop's claim, never this one's.
+        """
+        released = any(
+            action.name == "platform_released" for action in self.operational_actions
         )
         if (
             self.lifecycle != LIFECYCLE_REALIZED
-            or self.running
             or self.ready
             or not self.identity_verified
             or self.failure is not None
-            or not stopped
+            or not released
         ):
             raise InvalidDeploymentStateTransition(
-                "only a verified realized deployment stopped by rollback can be rolled back"
+                "only a verified realized deployment whose released references "
+                "are recorded can be rolled back"
             )
         record = replace(self, lifecycle=LIFECYCLE_ROLLED_BACK, updated_at=at)
         return record.with_operational_action(

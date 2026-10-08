@@ -57,10 +57,11 @@ def _record(
     return record.mark_realized(at="2026-09-30T00:03:00Z")
 
 
-#: A runtime element this synthetic operation holds. A rollback stops the
-#: runtime of an operation that is **bound** to one: ``Deployment.stop()``
+#: A runtime element this synthetic operation holds. A rollback releases the
+#: references of an operation that is **bound** to one: ``Deployment.release``
 #: refuses an operation that reaches no runtime, so a handle-less deployment
-#: claiming ``running`` would model a state the boundary does not allow.
+#: claiming ``running`` would model a state the boundary does not allow. The
+#: release is the contract's detach — it never claims a stopped platform.
 BOUND_HANDLE = "bound-runtime-handle"
 
 
@@ -78,6 +79,83 @@ def _deployment(tmp_path: Path, record: DeploymentRecord) -> Deployment:
         _journal=journal,
         _store=store,
     )
+
+
+class DetachOnlyRuntime:
+    """The production contract's runtime seam: ``stop`` releases a reference.
+
+    It is the detach of ADR-0016 §18 — the member keeps running under its
+    owner's policy — so the double records what it was asked and can prove
+    afterwards that nothing terminated the member.
+    """
+
+    def __init__(self) -> None:
+        self.member_alive = True
+        self.detached: list[str] = []
+
+    def stop(self, handle: str) -> dict[str, object]:
+        assert self.member_alive, "the member is its owner's, not this operation's"
+        self.detached.append(handle)
+        return {"status": "detached", "was_running": self.member_alive}
+
+
+def test_a_detached_rollback_member_stays_alive_without_a_stop_claim(
+    tmp_path: Path, monkeypatch
+):
+    """AC: detach-only runtime — the old member lives, the state says so."""
+    request = _request(tmp_path)
+    monkeypatch.setattr(rollback_module, "verify_instance", _verified_target)
+    runtime = DetachOnlyRuntime()
+    request.current._runtime = runtime
+    request.current._handles = ("old-runtime-handle",)
+    holder = {}
+
+    def deploy_target(deployment_request, **_kwargs):
+        candidate = _candidate_for_request(tmp_path, deployment_request)
+        holder["candidate"] = candidate
+        return candidate
+
+    monkeypatch.setattr(rollback_module, "deploy", deploy_target)
+
+    result = rollback(request)
+
+    candidate = holder["candidate"]
+    assert result is candidate
+    assert candidate.deployed is True
+    assert runtime.detached == ["old-runtime-handle"]
+    assert (
+        runtime.member_alive is True
+    ), "the rollback released a reference; the member it released is still up"
+    record = request.current.record
+    assert record.lifecycle == LIFECYCLE_ROLLED_BACK
+    assert record.running is True
+    assert record.ready is False
+    assert record.deployed is False
+    assert record.identity_verified is True
+    released = [
+        action
+        for action in record.operational_actions
+        if action.name == "platform_released"
+    ]
+    assert len(released) == 1
+    assert released[0].detail["origin"] == "rollback_current"
+    assert not any(
+        action.name == "platform_stopped" for action in record.operational_actions
+    )
+    state_text = request.current.state_path.read_text(encoding="utf-8")
+    journal_text = request.current.events_path.read_text(encoding="utf-8")
+    assert "platform_stopped" not in state_text
+    assert "platform_stopped" not in journal_text
+    assert "platform_released" in state_text
+    current_events = [event.event for event in request.current.events()]
+    assert current_events == [
+        "rollback_requested",
+        "rollback_target_verified",
+        "rollback_completed",
+    ]
+    candidate_events = [event.event for event in candidate.events()]
+    assert candidate_events[0] == "rollback_target_realized"
+    assert candidate_events[-1] == "rollback_completed"
 
 
 def _candidate_for_request(
@@ -178,9 +256,12 @@ def test_rollback_success_realizes_exact_prior_target_then_rolls_back_current(
     assert candidate.record.deployed
     assert candidate.record.instance_digest == request.target.record.instance_digest
     assert request.current.record.lifecycle == LIFECYCLE_ROLLED_BACK
-    assert request.current.record.running is False
+    # The hand-over is a detach: the previous record keeps its running claim and
+    # withdraws the condition it can no longer verify.
+    assert request.current.record.running is True
     assert request.current.record.ready is False
     assert request.current.record.deployed is False
+    assert request.current.record.identity_verified is True
     action_names = [
         action.name for action in request.current.record.operational_actions
     ]
@@ -191,11 +272,14 @@ def test_rollback_success_realizes_exact_prior_target_then_rolls_back_current(
         "rollback_target_realized"
     )
     assert action_names.index("rollback_target_realized") < action_names.index(
-        "platform_stopped"
+        "platform_released"
     )
-    assert action_names.index("platform_stopped") < action_names.index(
+    assert action_names.index("platform_released") < action_names.index(
         "platform_rolled_back"
     )
+    assert (
+        "platform_stopped" not in action_names
+    ), "a released reference is not a stopped platform"
     assert action_names.index("platform_rolled_back") < action_names.index(
         "rollback_completed"
     )
@@ -297,6 +381,15 @@ def test_failed_target_transition_preserves_current_and_records_failure(
 
     assert request.current.record.lifecycle == LIFECYCLE_REALIZED
     assert request.current.deployed
+    assert (
+        request.current.record.running,
+        request.current.record.ready,
+        request.current.record.deployed,
+    ) == (True, True, True), "the current platform stays authoritative and ready"
+    assert not any(
+        action.name in {"platform_released", "platform_stopped"}
+        for action in request.current.record.operational_actions
+    ), "no hand-over happened, so none is recorded"
     assert request.current.record.operational_actions[-1].name == "rollback_failed"
     failure = next(
         event for event in request.current.events() if event.event == "rollback_failed"
@@ -384,7 +477,7 @@ def test_rollback_uses_only_forward_migration_deployment_path(
     )
 
 
-def test_current_stop_failure_preserves_authoritative_state_and_cleans_candidate(
+def test_current_release_failure_preserves_authoritative_state_and_cleans_candidate(
     tmp_path: Path, monkeypatch
 ):
     request = _request(tmp_path)
@@ -406,23 +499,31 @@ def test_current_stop_failure_preserves_authoritative_state_and_cleans_candidate
         return candidate
 
     monkeypatch.setattr(rollback_module, "deploy", deploy_target)
-    stop_attempts = []
+    release_attempts = []
 
-    def fail_current_stop():
-        stop_attempts.append("stop")
-        raise RuntimeError("old runtime refused to stop")
+    def fail_current_release(*, origin):
+        release_attempts.append(origin)
+        raise RuntimeError("old runtime refused to release")
 
-    monkeypatch.setattr(request.current, "stop", fail_current_stop)
+    monkeypatch.setattr(request.current, "release", fail_current_release)
     original = request.current.record
 
-    with pytest.raises(RuntimeError, match="old runtime refused to stop"):
+    with pytest.raises(RuntimeError, match="old runtime refused to release"):
         rollback(request)
 
     candidate = candidate_holder["candidate"]
     persisted = DeploymentStateStore(request.current.state_path).read()
-    assert stop_attempts == ["stop"]
+    assert release_attempts == ["rollback_current"]
     assert cleanup_calls == ["target-runtime-handle"]
     assert not candidate.deployed
+    assert (
+        candidate.record.running is True
+    ), "the aborted target was released, not stopped"
+    assert candidate.record.ready is False
+    assert not any(
+        action.name == "platform_stopped"
+        for action in candidate.record.operational_actions
+    )
     assert persisted.lifecycle == LIFECYCLE_REALIZED
     assert persisted.running is True
     assert persisted.ready is True
@@ -435,6 +536,10 @@ def test_current_stop_failure_preserves_authoritative_state_and_cleans_candidate
     assert action_names.count("rollback_failed") == 1
     assert "rollback_completed" not in action_names
     assert "platform_rolled_back" not in action_names
+    assert "platform_stopped" not in action_names
+    assert (
+        "platform_released" not in action_names
+    ), "the release that failed is not recorded as one that happened"
 
     current_events = request.current.events()
     assert sum(event.event == "rollback_failed" for event in current_events) == 1
@@ -442,7 +547,7 @@ def test_current_stop_failure_preserves_authoritative_state_and_cleans_candidate
     assert not any(event.event == "rollback_completed" for event in candidate.events())
 
 
-def test_final_state_write_failure_restores_stopped_state_without_success_claim(
+def test_final_state_write_failure_restores_released_state_without_success_claim(
     tmp_path: Path, monkeypatch
 ):
     request = _request(tmp_path)
@@ -491,15 +596,17 @@ def test_final_state_write_failure_restores_stopped_state_without_success_claim(
     assert persisted.platform_id == initial.platform_id
     assert persisted.instance_digest == initial.instance_digest
     assert persisted.identity_verified is True
-    # The old runtime was stopped successfully, so preserve the stopped actual
-    # conditions rather than restoring a stale `deployed` claim.
-    assert persisted.running is False
+    # The references were already released, so preserve the honest actual
+    # conditions — still potentially alive, no verified readiness — rather than
+    # restoring a stale `deployed` claim or claiming a stop.
+    assert persisted.running is True
     assert persisted.ready is False
     assert persisted.deployed is False
     assert any(
-        action.name == "platform_stopped" for action in persisted.operational_actions
+        action.name == "platform_released" for action in persisted.operational_actions
     )
     names = [action.name for action in persisted.operational_actions]
+    assert "platform_stopped" not in names
     assert names.count("rollback_failed") == 1
     assert "rollback_completed" not in names
     assert "platform_rolled_back" not in names
