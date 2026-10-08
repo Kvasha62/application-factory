@@ -465,12 +465,22 @@ class Deployment:
         operation is re-verified by a following explicit restart, never
         silently re-adopted.
 
+        **A hand-over over several references can be partial**, and this module
+        never rounds that outcome to either extreme (§20). Every reference is
+        attempted, and the three outcomes are distinguishable from what is
+        recorded: no reference released leaves the record exactly as it was and
+        raises; a partial release withdraws the condition that can no longer
+        hold, records ``platform_released`` with the references that were
+        released, the ones that refused and ``complete: False``, persists that
+        record, and then raises; a complete release records the same action with
+        every reference released and ``complete: True`` and returns. In both
+        failing outcomes the runtime's own exception stays the causal failure —
+        it is re-raised, annotated with what was and was not released.
+
         Fail-closed about what it cannot do: an operation that claims a running
         platform but holds no runtime element reaches no runtime, so it releases
         nothing and refuses rather than recording a release that never happened
-        (the posture of :meth:`stop`). A release that raises is a release that
-        did not happen: the record is left exactly as it was, and the caller
-        keeps its previous claim instead of inventing one.
+        (the posture of :meth:`stop`).
         """
         at = self._clock()
         if self.record.running and not self._handles:
@@ -482,23 +492,46 @@ class Deployment:
                 "§18, §20). Re-bind the operation with "
                 "deployment_operations.attach first."
             )
-        for handle in self._handles:
-            if self._runtime is not None:
-                self._runtime.stop(handle)
+        released, failures = _detach_handles(self._runtime, self._handles)
+        if failures and not released:
+            # Nothing was handed over: the record keeps its claim as it was, and
+            # the runtime's own exception is the causal failure.
+            _note_release_failure(
+                failures,
+                released,
+                note=(
+                    "no reference was released: none of "
+                    f"[{', '.join(sorted(label for label, _ in failures))}] "
+                    "answered this operation's detach, so the record was left "
+                    "unchanged"
+                ),
+            )
+            raise failures[0][1]
         record = self.record.withdraw_ready(
-            at=at,
-            reason=(
-                f"{origin}: this deployment operation released its references to "
-                "the Running Platform; a detach is the runtime contract's "
-                "reference release and is not evidence that the platform stopped"
-            ),
+            at=at, reason=_release_reason(origin, failures)
         )
         record = record.with_operational_action(
-            "platform_released", at=at, detail={"origin": origin}
+            "platform_released",
+            at=at,
+            detail=_release_detail(origin, released, failures),
         )
         self.record = record
         if self._store is not None:
             self._store.write(record, secrets=self._secrets)
+        if failures:
+            # The hand-over is partial: the record above persists exactly which
+            # references were released and which refused, and the runtime's own
+            # exception stays the causal failure.
+            _note_release_failure(
+                failures,
+                released,
+                note=(
+                    "the hand-over is partial: deployment state records it as "
+                    "``platform_released`` with complete=False, so it cannot be "
+                    "mistaken for an untouched operation"
+                ),
+            )
+            raise failures[0][1]
         return record
 
     def _event(
@@ -1110,6 +1143,101 @@ def deploy(
     )
 
 
+def _handle_label(handle: Any) -> str:
+    """A stable name for one runtime element in recorded evidence."""
+    component_id = getattr(handle, "component_id", None)
+    if isinstance(component_id, str) and component_id.strip():
+        return component_id
+    return str(handle)
+
+
+def _detach_handles(
+    runtime: Any, handles: Sequence[Any]
+) -> tuple[list[str], list[tuple[str, BaseException]]]:
+    """Release every reference this operation holds, total over the seam (§18).
+
+    One element that refuses its release must not keep the others from being
+    released: a partial hand-over is a real outcome and has to be reportable
+    (:meth:`Deployment.release`, :func:`release_references`). Returns what was
+    released and, for everything that was not, the label and the exception the
+    contract's own seam raised.
+
+    A handle this operation has no seam for is given up without a runtime call —
+    the local/synthetic composition has no seam to detach through, and the
+    recorded evidence names only what the seam answered for.
+    """
+    released: list[str] = []
+    failures: list[tuple[str, BaseException]] = []
+    for handle in handles:
+        label = _handle_label(handle)
+        if runtime is None:
+            released.append(label)
+            continue
+        try:
+            runtime.stop(handle)
+        except Exception as error:  # noqa: BLE001 - the owner's seam
+            failures.append((label, error))
+        else:
+            released.append(label)
+    return released, failures
+
+
+def _release_reason(origin: str, failures: Sequence[tuple[str, BaseException]]) -> str:
+    """The withdrawal reason of a release — complete or partial (§13, §33)."""
+    if failures:
+        return (
+            f"{origin}: this deployment operation released some of its "
+            "references to the Running Platform and others refused; a detach is "
+            "the runtime contract's reference release and is not evidence that "
+            "the platform stopped"
+        )
+    return (
+        f"{origin}: this deployment operation released its references to "
+        "the Running Platform; a detach is the runtime contract's "
+        "reference release and is not evidence that the platform stopped"
+    )
+
+
+def _release_detail(
+    origin: str,
+    released: Sequence[str],
+    failures: Sequence[tuple[str, BaseException]],
+) -> dict[str, Any]:
+    """What one release actually established, so partial is never ambiguous.
+
+    ``complete`` is true only when every reference this operation held was
+    released; ``unreleased`` names the references that refused theirs. The three
+    outcomes — nothing released, partial, complete — are therefore
+    distinguishable from deployment state alone.
+    """
+    return {
+        "origin": origin,
+        "complete": not failures,
+        "released": sorted(released),
+        "unreleased": sorted(label for label, _ in failures),
+    }
+
+
+def _note_release_failure(
+    failures: Sequence[tuple[str, BaseException]],
+    released: Sequence[str],
+    *,
+    note: str,
+) -> None:
+    """Annotate the causal exception with what the release established.
+
+    The runtime's own exception stays the failure a caller sees (§20): the note
+    adds the recorded evidence — what was released, what refused — without
+    replacing the causal error, and every further failure is noted too.
+    """
+    failures[0][1].add_note(
+        f"{note} (released: {sorted(released) or 'none'}; "
+        f"unreleased: {[label for label, _ in failures]})"
+    )
+    for label, error in failures[1:]:
+        failures[0][1].add_note(f"{label}: {error.__class__.__name__}: {error}")
+
+
 def _release_handles(
     recorder: _Recorder,
     adapter: RuntimeAdapter,
@@ -1181,30 +1309,53 @@ def release_references(
     A handle that exposes only the seam and the record (a synthetic or
     owner-side object) gets the same treatment without a persistence round
     trip: every element it holds is released and its record is moved to that
-    same honest state, or left exactly as it was if a release raised — a
-    release that raised is a release that did not happen, and the caller keeps
-    its previous claim instead of inventing one (ADR-0016 §18, §20).
+    same honest state — with the same three distinguishable outcomes as
+    :meth:`Deployment.release` (nothing released and the record untouched;
+    partial with ``complete: False``; complete) and the same causal exception —
+    or left exactly as it was if no release happened at all (ADR-0016 §18, §20).
+    Persisting the moved record stays with the caller, which is the object that
+    owns the state target.
     """
     release = getattr(deployment, "release", None)
     if callable(release):
         return release(origin=origin)
-    runtime = getattr(deployment, "_runtime", None)
-    if runtime is not None:
-        for handle in getattr(deployment, "_handles", ()) or ():
-            runtime.stop(handle)
+    released, failures = _detach_handles(
+        getattr(deployment, "_runtime", None),
+        tuple(getattr(deployment, "_handles", ()) or ()),
+    )
+    if failures and not released:
+        # Nothing was handed over: the record keeps its claim as it was, and the
+        # runtime's own exception is the causal failure.
+        _note_release_failure(
+            failures,
+            released,
+            note=(
+                "no reference was released, so the record was left unchanged; "
+                "persistence stays with the caller of this helper"
+            ),
+        )
+        raise failures[0][1]
     at = utc_now()
     record = deployment.record.withdraw_ready(
-        at=at,
-        reason=(
-            f"{origin}: this deployment operation released its references to "
-            "the Running Platform; a detach is the runtime contract's reference "
-            "release and is not evidence that the platform stopped"
-        ),
+        at=at, reason=_release_reason(origin, failures)
     )
     record = record.with_operational_action(
-        "platform_released", at=at, detail={"origin": origin}
+        "platform_released",
+        at=at,
+        detail=_release_detail(origin, released, failures),
     )
     deployment.record = record
+    if failures:
+        _note_release_failure(
+            failures,
+            released,
+            note=(
+                "the hand-over is partial and this object's record states it "
+                "with complete=False; persistence stays with the caller of this "
+                "helper"
+            ),
+        )
+        raise failures[0][1]
     return record
 
 

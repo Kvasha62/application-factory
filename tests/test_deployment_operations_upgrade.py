@@ -275,14 +275,21 @@ class DetachOnlyRuntime:
     It is the detach of ADR-0016 §18 — the member keeps running under its
     owner's policy — so the double records what it was asked and can prove
     afterwards that nothing terminated the member, which is the fact the
-    upgrade's state and journal must never contradict.
+    upgrade's state and journal must never contradict. Members named in
+    ``refuse`` refuse their release, which is how a *partial* hand-over over
+    several references is exercised.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, refuse: frozenset[str] = frozenset()) -> None:
         self.member_alive = True
+        self.refuse = refuse
+        self.attempted: list[str] = []
         self.detached: list[str] = []
 
     def stop(self, handle: str) -> dict[str, object]:
+        self.attempted.append(handle)
+        if handle in self.refuse:
+            raise RuntimeError(f"{handle}: the member refused to be released")
         assert self.member_alive, "the member is its owner's, not this operation's"
         self.detached.append(handle)
         return {"status": "detached", "was_running": self.member_alive}
@@ -368,6 +375,165 @@ def _real_deployment(
         _journal=journal,
         _store=store,
     )
+
+
+def test_a_partial_release_of_current_is_recorded_and_never_claims_a_stop(
+    tmp_path: Path, monkeypatch
+):
+    """One member refusing its release is neither "nothing happened" nor a stop.
+
+    The hand-over over several references can be partial: the reference that
+    answered is released, the one that refused is not, and deployment state must
+    state exactly that — never a fully ready platform, never a stopped one.
+    """
+    current_record = _record(
+        tmp_path, instance="a" * 64, deployment_id="old-deployment"
+    )
+    runtime = DetachOnlyRuntime(refuse=frozenset({"member-b"}))
+    current = _real_deployment(
+        tmp_path,
+        current_record,
+        runtime=runtime,
+        handles=("member-a", "member-b"),
+    )
+    replacement = _request(tmp_path, "c" * 64)
+    request = UpgradeRequest(
+        current, replacement, derive_upgrade_id(current, replacement)
+    )
+    cleanup_calls: list[str] = []
+
+    class CandidateRuntime:
+        def stop(self, handle: str):
+            cleanup_calls.append(handle)
+            return {"status": "detached"}
+
+    candidate = _real_deployment(
+        tmp_path,
+        _record(tmp_path, instance="c" * 64, deployment_id="new-deployment"),
+        runtime=CandidateRuntime(),
+        handles=("replacement-runtime-handle",),
+    )
+    monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
+
+    with pytest.raises(
+        RuntimeError, match="member-b: the member refused to be released"
+    ) as caught:
+        upgrade(request)
+
+    # every reference was attempted; the refusing one kept no other bound
+    assert runtime.attempted == ["member-a", "member-b"]
+    assert runtime.detached == ["member-a"]
+    assert runtime.member_alive is True, "a detach terminated nothing"
+    # the causal failure is the runtime's own, annotated with the partial outcome
+    assert any("partial" in note for note in caught.value.__notes__)
+    assert any("member-b" in note for note in caught.value.__notes__)
+
+    persisted = DeploymentStateStore(current.state_path).read()
+    assert (persisted.running, persisted.ready, persisted.deployed) == (
+        True,
+        False,
+        False,
+    ), "the partial hand-over cannot leave a fully ready/deployed claim standing"
+    assert persisted.lifecycle == LIFECYCLE_REALIZED
+    assert persisted.identity_verified is True
+    released = [
+        action
+        for action in persisted.operational_actions
+        if action.name == "platform_released"
+    ]
+    assert len(released) == 1
+    assert released[0].detail == {
+        "origin": "upgrade_current",
+        "complete": False,
+        "released": ["member-a"],
+        "unreleased": ["member-b"],
+    }
+    action_names = [action.name for action in persisted.operational_actions]
+    assert "platform_stopped" not in action_names
+    assert "platform_superseded" not in action_names
+    assert "platform_stopped" not in current.state_path.read_text(encoding="utf-8")
+    assert current.record == persisted
+    assert cleanup_calls == ["replacement-runtime-handle"]
+    assert [event.event for event in current.events()] == [
+        "upgrade_requested",
+        "upgrade_failed",
+    ]
+    # the retry cannot read the operation as untouched and fully bound
+    with pytest.raises(InvalidDeploymentStateTransition):
+        upgrade(request)
+    assert runtime.attempted == ["member-a", "member-b"], (
+        "the retry reached no runtime, because the state does not claim a "
+        "deployed platform"
+    )
+
+
+def test_a_partial_aborted_candidate_release_states_the_partial_hand_over(
+    tmp_path: Path, monkeypatch
+):
+    """The same policy for candidate cleanup: partial stays partial and kept."""
+    current_record = _record(
+        tmp_path, instance="a" * 64, deployment_id="old-deployment"
+    )
+    current = _real_deployment(tmp_path, current_record)
+    replacement = _request(tmp_path, "c" * 64)
+    request = UpgradeRequest(
+        current, replacement, derive_upgrade_id(current, replacement)
+    )
+    runtime = DetachOnlyRuntime(refuse=frozenset({"candidate-b"}))
+    candidate = _real_deployment(
+        tmp_path,
+        _record(tmp_path, instance="c" * 64, deployment_id="new-deployment"),
+        runtime=runtime,
+        handles=("candidate-a", "candidate-b"),
+    )
+    monkeypatch.setattr(upgrade_module, "deploy", lambda *args, **kwargs: candidate)
+    monkeypatch.setattr(
+        current,
+        "release",
+        lambda *, origin: (_ for _ in ()).throw(
+            RuntimeError("old runtime refused to release")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="old runtime refused to release"):
+        upgrade(request)
+
+    assert runtime.attempted == ["candidate-a", "candidate-b"]
+    assert runtime.detached == ["candidate-a"]
+    persisted_current = DeploymentStateStore(current.state_path).read()
+    assert (
+        persisted_current == current_record
+    ), "the current deployment keeps its honest claim: nothing was handed over"
+    persisted_candidate = DeploymentStateStore(candidate.state_path).read()
+    assert (persisted_candidate.running, persisted_candidate.ready) == (True, False)
+    assert persisted_candidate.deployed is False
+    released = [
+        action
+        for action in persisted_candidate.operational_actions
+        if action.name == "platform_released"
+    ]
+    assert len(released) == 1
+    assert released[0].detail == {
+        "origin": "upgrade_aborted_candidate",
+        "complete": False,
+        "released": ["candidate-a"],
+        "unreleased": ["candidate-b"],
+    }
+    assert "platform_stopped" not in [
+        action.name for action in persisted_candidate.operational_actions
+    ]
+    assert candidate.state_path.exists(), (
+        "a partial hand-over is evidence and is kept, never removed as a stale "
+        "candidate state file"
+    )
+    old_events = current.events()
+    assert [event.event for event in old_events] == [
+        "upgrade_requested",
+        "upgrade_failed",
+    ]
+    assert (
+        "candidate_cleanup_persistence_failed" not in old_events[-1].detail
+    ), "a partial release is not a persistence failure"
 
 
 def test_current_release_occurs_before_superseded_state_or_event(

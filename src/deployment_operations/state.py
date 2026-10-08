@@ -806,9 +806,15 @@ class DeploymentRecord:
         verification still stands. ``running`` is not required to be false —
         the platform may still be up, and :meth:`mark_stopped` is the explicit
         plain stop's claim, never this one's.
+
+        The recorded release must be a **complete** one (``complete: True``): a
+        hand-over that released only some of the operation's references is not a
+        rollback that could be recorded, and rounding it to one would be the
+        false claim this transition exists to prevent.
         """
         released = any(
-            action.name == "platform_released" for action in self.operational_actions
+            action.name == "platform_released" and action.detail.get("complete") is True
+            for action in self.operational_actions
         )
         if (
             self.lifecycle != LIFECYCLE_REALIZED
@@ -818,8 +824,8 @@ class DeploymentRecord:
             or not released
         ):
             raise InvalidDeploymentStateTransition(
-                "only a verified realized deployment whose released references "
-                "are recorded can be rolled back"
+                "only a verified realized deployment whose references were "
+                "all released can be rolled back"
             )
         record = replace(self, lifecycle=LIFECYCLE_ROLLED_BACK, updated_at=at)
         return record.with_operational_action(

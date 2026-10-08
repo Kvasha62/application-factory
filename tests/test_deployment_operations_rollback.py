@@ -86,14 +86,20 @@ class DetachOnlyRuntime:
 
     It is the detach of ADR-0016 §18 — the member keeps running under its
     owner's policy — so the double records what it was asked and can prove
-    afterwards that nothing terminated the member.
+    afterwards that nothing terminated the member. Members named in ``refuse``
+    refuse their release, which is how a *partial* hand-over is exercised.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, refuse: frozenset[str] = frozenset()) -> None:
         self.member_alive = True
+        self.refuse = refuse
+        self.attempted: list[str] = []
         self.detached: list[str] = []
 
     def stop(self, handle: str) -> dict[str, object]:
+        self.attempted.append(handle)
+        if handle in self.refuse:
+            raise RuntimeError(f"{handle}: the member refused to be released")
         assert self.member_alive, "the member is its owner's, not this operation's"
         self.detached.append(handle)
         return {"status": "detached", "was_running": self.member_alive}
@@ -299,6 +305,144 @@ def test_rollback_success_realizes_exact_prior_target_then_rolls_back_current(
     )
     assert completed.instance_digest == "a" * 64
     assert completed.detail["rollback_id"] == request.rollback_id
+
+
+def test_a_partial_release_of_current_is_recorded_and_never_claims_a_stop(
+    tmp_path: Path, monkeypatch
+):
+    """One member refusing its release is neither "nothing happened" nor a stop."""
+    request = _request(tmp_path)
+    monkeypatch.setattr(rollback_module, "verify_instance", _verified_target)
+    runtime = DetachOnlyRuntime(refuse=frozenset({"member-b"}))
+    request.current._runtime = runtime
+    request.current._handles = ("member-a", "member-b")
+    cleanup_calls: list[str] = []
+    holder = {}
+
+    class CandidateRuntime:
+        def stop(self, handle: str):
+            cleanup_calls.append(handle)
+            return {"status": "detached"}
+
+    def deploy_target(deployment_request, **_kwargs):
+        candidate = _candidate_for_request(tmp_path, deployment_request)
+        candidate._runtime = CandidateRuntime()
+        candidate._handles = ("target-runtime-handle",)
+        holder["candidate"] = candidate
+        return candidate
+
+    monkeypatch.setattr(rollback_module, "deploy", deploy_target)
+
+    with pytest.raises(
+        RuntimeError, match="member-b: the member refused to be released"
+    ) as caught:
+        rollback(request)
+
+    assert runtime.attempted == ["member-a", "member-b"]
+    assert runtime.detached == ["member-a"]
+    assert runtime.member_alive is True
+    assert any("partial" in note for note in caught.value.__notes__)
+    assert cleanup_calls == ["target-runtime-handle"]
+    record = request.current.record
+    assert (record.running, record.ready, record.deployed) == (
+        True,
+        False,
+        False,
+    ), "the partial hand-over cannot leave a fully ready/deployed claim standing"
+    assert record.lifecycle == LIFECYCLE_REALIZED
+    released = [
+        action
+        for action in record.operational_actions
+        if action.name == "platform_released"
+    ]
+    assert len(released) == 1
+    assert released[0].detail == {
+        "origin": "rollback_current",
+        "complete": False,
+        "released": ["member-a"],
+        "unreleased": ["member-b"],
+    }
+    action_names = [action.name for action in record.operational_actions]
+    assert "platform_stopped" not in action_names
+    assert "platform_rolled_back" not in action_names
+    assert "rollback_completed" not in action_names
+    assert action_names.count("rollback_failed") == 1
+    assert "platform_stopped" not in request.current.state_path.read_text(
+        encoding="utf-8"
+    )
+    assert DeploymentStateStore(request.current.state_path).read() == record
+    assert [event.event for event in request.current.events()].count(
+        "rollback_failed"
+    ) == 1
+    # the retry cannot read the operation as untouched and fully bound
+    with pytest.raises(InvalidDeploymentStateTransition):
+        rollback(request)
+    assert runtime.attempted == ["member-a", "member-b"]
+
+
+def test_a_partial_aborted_target_release_states_the_partial_hand_over(
+    tmp_path: Path, monkeypatch
+):
+    """The same policy for target cleanup after a failed final state write."""
+    request = _request(tmp_path)
+    monkeypatch.setattr(rollback_module, "verify_instance", _verified_target)
+    current_runtime = DetachOnlyRuntime()
+    request.current._runtime = current_runtime
+    request.current._handles = ("old-runtime-handle",)
+    holder = {}
+    target_runtime = DetachOnlyRuntime(refuse=frozenset({"target-b"}))
+
+    def deploy_target(deployment_request, **_kwargs):
+        candidate = _candidate_for_request(tmp_path, deployment_request)
+        candidate._runtime = target_runtime
+        candidate._handles = ("target-a", "target-b")
+        holder["candidate"] = candidate
+        return candidate
+
+    monkeypatch.setattr(rollback_module, "deploy", deploy_target)
+    original_write = DeploymentStateStore.write
+
+    def fail_rolled_back_commit(store, record, *, secrets=()):
+        if (
+            store.path == request.current.state_path
+            and record.lifecycle == LIFECYCLE_ROLLED_BACK
+        ):
+            raise OSError("injected final rollback state write failure")
+        return original_write(store, record, secrets=secrets)
+
+    monkeypatch.setattr(DeploymentStateStore, "write", fail_rolled_back_commit)
+
+    with pytest.raises(OSError, match="injected final rollback state write failure"):
+        rollback(request)
+
+    candidate = holder["candidate"]
+    assert target_runtime.attempted == ["target-a", "target-b"]
+    assert target_runtime.detached == ["target-a"]
+    persisted_target = DeploymentStateStore(candidate.state_path).read()
+    assert (persisted_target.running, persisted_target.ready) == (True, False)
+    assert persisted_target.deployed is False
+    released = [
+        action
+        for action in persisted_target.operational_actions
+        if action.name == "platform_released"
+    ]
+    assert len(released) == 1
+    assert released[0].detail == {
+        "origin": "rollback_failed_candidate",
+        "complete": False,
+        "released": ["target-a"],
+        "unreleased": ["target-b"],
+    }
+    assert "platform_stopped" not in [
+        action.name for action in persisted_target.operational_actions
+    ]
+    # the current deployment is preserved as released — still potentially alive
+    current_record = request.current.record
+    assert (current_record.running, current_record.ready) == (True, False)
+    assert current_record.lifecycle == LIFECYCLE_REALIZED
+    assert "platform_stopped" not in [
+        action.name for action in current_record.operational_actions
+    ]
 
 
 def test_rollback_rejects_name_only_or_missing_target_digest(tmp_path: Path):

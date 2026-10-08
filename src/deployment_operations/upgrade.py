@@ -178,7 +178,15 @@ def _cleanup_candidate(
                 for action in record_after_release.operational_actions
             )
         )
-        if release_recorded:
+        # A recorded release that reports references it could not release is a
+        # *partial* hand-over, not a persistence failure: the seam refused and
+        # the record already says so (its own evidence must survive, so it is
+        # never treated as a state file to remove).
+        release_incomplete = release_recorded and any(
+            action.name == "platform_released" and action.detail.get("unreleased")
+            for action in record_after_release.operational_actions
+        )
+        if release_recorded and not release_incomplete:
             persistence_error = error
         else:
             release_error = error
@@ -186,7 +194,8 @@ def _cleanup_candidate(
     if isinstance(record, DeploymentRecord):
         # An aborted candidate is released, never stopped: what can be stated is
         # the withdrawn operational condition, and nothing about the candidate's
-        # runtime being down (ADR-0016 §18).
+        # runtime being down (ADR-0016 §18). A partial release already carries
+        # its own evidence and is preserved rather than overwritten.
         withdrawn = record.withdraw_ready(
             at=utc_now(),
             reason=(
