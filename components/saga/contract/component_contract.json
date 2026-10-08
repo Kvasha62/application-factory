@@ -1,7 +1,7 @@
 {
   "component_id": "saga",
   "component_version": "0.1.0",
-  "class": "platform_service",
+  "class": "shared_library",
   "maturity_level": "level_0_modular_monolith",
   "task": "IS-006 (GitHub Issue #18)",
   "purpose": "Saga / Workflow Consistency Boundary",
