@@ -9,8 +9,9 @@ the S4 runbook's ``<RP_CELL_HOME>``, e.g. ``/srv/running-platform/cell``.
 This module is the only place in Deployment & Operations that reaches for
 Layer R, and it reaches for it through an **explicit declaration**:
 
-    <absolute-path.py>:<factory>    /srv/running-platform/cell/rp_runtime_adapter.py:build_layer_r_wiring
-    <dotted.module>:<factory>       running_platform_cell.wiring:build_layer_r_wiring
+    <absolute-path.py>:<factory>    the owner's module file and factory, e.g. under
+                                    <RP_CELL_HOME> such as /srv/running-platform/cell
+    <dotted.module>:<factory>       the owner's importable module and factory
 
 The declared factory is called once with the declared options as keyword
 arguments (option names from the command line are normalised so ``-`` becomes

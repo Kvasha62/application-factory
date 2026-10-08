@@ -23,7 +23,7 @@ The entry point is explicit::
         --instance  <platform-instance.json> \\
         --manifest  <platform-manifest.json> \\
         --environment <environment.json> \\
-        --layer-r /srv/running-platform/cell/rp_runtime_adapter.py:build_layer_r_wiring
+        --layer-r /srv/running-platform/cell/rp_runtime_adapter.py:<factory>
 
 What this module is, and is not
 -------------------------------

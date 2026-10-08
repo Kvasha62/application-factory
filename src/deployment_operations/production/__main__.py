@@ -4,7 +4,10 @@
         --instance  <platform-instance.json> \\
         --manifest  <platform-manifest.json> \\
         --environment <environment.json> \\
-        --layer-r /srv/running-platform/cell/rp_runtime_adapter.py:build_layer_r_wiring
+        --layer-r /srv/running-platform/cell/rp_runtime_adapter.py:<factory>
+
+``<factory>`` is the owner's own factory in the owner's own module: this
+repository neither names it nor guesses it.
 
 Production mode is selected visibly and explicitly: ``--layer-r`` is required,
 and there is no default to fall back to. The declared owner-side entry point
