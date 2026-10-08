@@ -57,7 +57,9 @@ from deployment_operations.platform_identity import (
 from deployment_operations.platform_identity_source import ActualPlatformSnapshot
 from deployment_operations.runtime import (
     LocalProcessRuntime,
+    RuntimeHandle,
     RuntimeProcessError,
+    verify_bound_content,
 )
 
 #: The attribution this cell states for its own observations (ADR-0020 §17).
@@ -71,12 +73,21 @@ ANSWER_UNAVAILABLE = "unavailable"
 ANSWER_MALFORMED = "malformed"
 ANSWER_ERROR = "error"
 
-#: The live supervision state of the cell processes this module stands for,
-#: keyed by cell home. A real cell keeps this in its supervisor process; a test
-#: process plays that role, and a later wiring instance of the same cell home
-#: therefore sees the members the cell already runs. This is the cell's own
-#: state — never a Deployment & Operations record.
-_SUPERVISED: dict[str, dict[str, Any]] = {}
+#: How this double's runtime seam fails when a test asks it to. A real
+#: owner-side adapter is external code and may raise anything at all, so the
+#: three shapes that matter are covered: its own runtime error, an ordinary
+#: Python exception, and a ``BaseException`` that no operation-level handler is
+#: meant to catch (the interrupted-process shape).
+FAIL_RUNTIME_ERROR = "runtime_error"
+FAIL_ERROR = "error"
+FAIL_INTERRUPT = "interrupt"
+
+#: The name of this cell's own supervision record, under its home. A real cell
+#: keeps its supervision in its own supervisor process; a test process plays
+#: that role, so the record is kept where a later process — a fresh Layer O
+#: process re-binding to the standing platform — can read it. This is the
+#: cell's own state, never a Deployment & Operations record.
+SUPERVISION_FILENAME = "supervision.json"
 
 
 class CellRuntimeAdapter:
@@ -87,15 +98,51 @@ class CellRuntimeAdapter:
     replaced.
     """
 
-    def __init__(self, cell_home: Path, audit_file: Path | None) -> None:
+    def __init__(
+        self,
+        cell_home: Path,
+        audit_file: Path | None,
+        *,
+        failures: Mapping[str, str] | None = None,
+    ) -> None:
         self._inner = LocalProcessRuntime()
         self._cell_home = Path(cell_home).resolve()
         self._audit_file = audit_file
         self.calls: list[str] = []
+        #: operation -> failure shape: what this cell's seam does when asked.
+        self._failures = dict(failures or {})
+        #: component id -> the live handle this process holds for that member.
+        #: A member survives this process; the handle to its process does not,
+        #: which is why the durable part of the supervision is the record below.
+        self._live: dict[str, RuntimeHandle] = {}
 
     # -- the cell's own supervision state ----------------------------------
-    def _supervision(self) -> dict[str, Any]:
-        return _SUPERVISED.setdefault(str(self._cell_home), {})
+    def _supervision_path(self) -> Path:
+        return self._cell_home / SUPERVISION_FILENAME
+
+    def _supervision(self) -> dict[str, dict[str, str]]:
+        """The members this cell supervises, as the cell's own durable state."""
+        try:
+            document = json.loads(self._supervision_path().read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return {}
+        if not isinstance(document, dict):
+            return {}
+        return {
+            str(component_id): dict(entry)
+            for component_id, entry in document.items()
+            if isinstance(entry, dict)
+        }
+
+    def _write_supervision(self, members: Mapping[str, Mapping[str, str]]) -> None:
+        path = self._supervision_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {k: dict(v) for k, v in members.items()}, indent=2, sort_keys=True
+            ),
+            encoding="utf-8",
+        )
 
     def supervised(self) -> tuple[str, ...]:
         """The runtime elements this cell currently supervises."""
@@ -103,16 +150,20 @@ class CellRuntimeAdapter:
 
     def _retire(self, component_id: str) -> None:
         """Retire one member under the cell's own policy (never a D&O action)."""
-        handle = self._supervision().pop(component_id, None)
-        if handle is None:
+        members = self._supervision()
+        if members.pop(component_id, None) is None:
             return
         self._record(f"retire:{component_id}")
-        self._inner.stop(handle)
+        self._write_supervision(members)
+        handle = self._live.pop(component_id, None)
+        if handle is not None:
+            self._inner.stop(handle)
 
     def shutdown(self) -> None:
         """This cell's own retirement policy, applied when the owner decides."""
         for component_id in self.supervised():
             self._retire(component_id)
+        self._record("shutdown")
 
     # -- the cell's own audit (never a Deployment & Operations record) ------
     def _record(self, call: str) -> None:
@@ -122,13 +173,37 @@ class CellRuntimeAdapter:
             with self._audit_file.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps({"call": call}, sort_keys=True) + "\n")
 
+    # -- this double's failure control --------------------------------------
+    def _maybe_fail(self, operation: str, component_id: str = "") -> None:
+        """Fail the way a real owner-side adapter may fail, when told to.
+
+        The attempted call is recorded *before* the failure so a test can see
+        that this cell was asked and refused, rather than never reached.
+        """
+        shape = self._failures.get(operation)
+        if shape is None:
+            return
+        self._record(f"failed:{operation}:{component_id}")
+        context = f"this cell's runtime seam failed in {operation}"
+        if shape == FAIL_INTERRUPT:
+            # A BaseException no operation-level handler is meant to catch: the
+            # shape of a process that died mid-operation.
+            raise KeyboardInterrupt(f"{context} (interrupted)")
+        if shape == FAIL_RUNTIME_ERROR:
+            raise RuntimeProcessError(f"{context} (runtime error)")
+        raise ValueError(f"{context} (unexpected error)")
+
     # -- the RuntimeAdapter seam -------------------------------------------
     def materialize(self, element: Any) -> Any:
-        self._record(f"materialize:{element.component.component_id}")
+        component_id = element.component.component_id
+        self._record(f"materialize:{component_id}")
+        self._maybe_fail("materialize", component_id)
         return self._inner.materialize(element)
 
     def migrate(self, element: Any) -> Any:
-        self._record(f"migrate:{element.component.component_id}")
+        component_id = element.component.component_id
+        self._record(f"migrate:{component_id}")
+        self._maybe_fail("migrate", component_id)
         return self._inner.migrate(element)
 
     def start(self, element: Any) -> Any:
@@ -136,31 +211,70 @@ class CellRuntimeAdapter:
         # One member per component: the cell replaces the member it supersedes.
         self._retire(component_id)
         self._record(f"start:{component_id}")
+        self._maybe_fail("start", component_id)
         handle = self._inner.start(element)
-        self._supervision()[component_id] = handle
+        self._live[component_id] = handle
+        members = self._supervision()
+        members[component_id] = {
+            "deployment_id": str(element.deployment_id),
+            "instance_digest": str(element.instance_digest),
+        }
+        self._write_supervision(members)
         return handle
 
     def attach(self, element: Any) -> Any:
         component_id = element.component.component_id
         self._record(f"attach:{component_id}")
-        handle = self._supervision().get(component_id)
-        if handle is None:
+        self._maybe_fail("attach", component_id)
+        execution = getattr(element, "execution", None)
+        if execution is None:
+            raise RuntimeProcessError(
+                f"{component_id}: this element names no execution content; a cell "
+                "binds exactly what it supervises and refuses to hand out "
+                "content it cannot verify"
+            )
+        problems = verify_bound_content(execution)
+        if problems:
+            raise RuntimeProcessError(
+                f"{component_id}: the content this element names does not match "
+                "what was bound for it",
+                errors=list(problems),
+            )
+        member = self._supervision().get(component_id)
+        if member is None:
             raise RuntimeProcessError(
                 f"{component_id}: this cell supervises no such runtime element; "
                 "attach binds an existing element and creates none"
             )
-        return handle
+        if member.get("deployment_id") != str(element.deployment_id) or member.get(
+            "instance_digest"
+        ) != str(element.instance_digest):
+            raise RuntimeProcessError(
+                f"{component_id}: this cell supervises an element of another "
+                "deployment or instance; attach binds exactly the member this "
+                "operation realized"
+            )
+        live = self._live.get(component_id)
+        if live is not None:
+            return live
+        # This process does not hold the member's process — a fresh Layer O
+        # process binds the standing member the cell supervises. The handle it
+        # gets is this cell's reference, not a newly created runtime element.
+        return RuntimeHandle(element=element, process=None, started=True)
 
     def request(
         self, handle: Any, operation: str, *, timeout: float | None = None
     ) -> Mapping[str, Any]:
-        self._record(f"request:{operation}:{handle.component_id}")
+        component_id = handle.component_id
+        self._record(f"request:{operation}:{component_id}")
+        self._maybe_fail("request", component_id)
         return self._inner.request(handle, operation, timeout=timeout)
 
     def stop(self, handle: Any) -> Mapping[str, Any]:
         """Detach: release the caller's reference, leave the member to this cell."""
         component_id = handle.component_id
         self._record(f"detach:{component_id}")
+        self._maybe_fail("stop", component_id)
         return {"status": "detached", "component_id": component_id}
 
 
@@ -307,6 +421,8 @@ def build_layer_r_wiring(
     state_file: str,
     audit_file: str = "",
     runtime_audit_file: str = "",
+    fail_on: str = "",
+    fail_kind: str = "",
 ) -> CellWiring:
     """Build this cell's wiring for the declared options.
 
@@ -314,15 +430,30 @@ def build_layer_r_wiring(
     every parameter is a string; a real cell reads its own configuration the
     same way. Nothing here is discovered and nothing is defaulted by
     Deployment & Operations.
+
+    ``fail_on`` names the runtime operations this cell's seam should refuse
+    (comma separated) and ``fail_kind`` how — see the ``FAIL_*`` shapes above.
+    They exist so a test can drive the failure paths an owner-side adapter
+    produces in production.
     """
     if not state_file:
         message = "state_file is required: this cell owns its authoritative state"
         raise ValueError(message)
+    shape = fail_kind or FAIL_ERROR
+    if shape not in (FAIL_RUNTIME_ERROR, FAIL_ERROR, FAIL_INTERRUPT):
+        message = f"fail_kind must be one of the FAIL_* shapes, got {fail_kind!r}"
+        raise ValueError(message)
+    failures = {
+        operation.strip(): shape
+        for operation in str(fail_on).split(",")
+        if operation.strip()
+    }
     state_path = Path(state_file)
     return CellWiring(
         runtime_adapter=CellRuntimeAdapter(
             state_path.parent,
             Path(runtime_audit_file) if runtime_audit_file else None,
+            failures=failures,
         ),
         identity_source=CellIdentitySource(
             state_path,
