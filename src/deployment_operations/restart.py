@@ -1068,6 +1068,11 @@ class _Attempt:
     fresh: dict[str, RuntimeHandle] = field(init=False)
     #: The components whose runtime element is known to be up.
     up: set[str] = field(init=False)
+    #: The components whose references this attempt released: a released
+    #: reference is not an active reference any more, so it is dropped from
+    #: ``current``/``fresh`` and never detached a second time, and the failure
+    #: signals can state what was and was not handed back (ADR-0016 §18).
+    released: set[str] = field(init=False, default_factory=set)
     phases: list[RestartPhaseRecord] = field(init=False)
     observations: tuple[ComponentObservation, ...] = field(init=False, default=())
     requested_at: str = field(init=False, default="")
@@ -1254,7 +1259,11 @@ class _Attempt:
             # A state write that failed is refused loudly: no outcome is
             # invented for it, nothing is published, and the elements this
             # attempt started are stopped so it leaves nothing uncontrolled.
+            # The operation then keeps only the references this attempt still
+            # holds — a released reference is not an active one, whatever the
+            # state file says.
             self._abandon_fresh_elements()
+            self._hand_over()
             raise
         except _PhaseFailure as failure:
             return self._terminate_failed(failure.phase, failure.reason, failure.errors)
@@ -1309,13 +1318,20 @@ class _Attempt:
                     f"{component_id}: {detail}" for detail in _error_details(error)
                 )
                 continue
+            # The reference was released: it is no longer an active reference of
+            # this operation, so the attempt keeps only the components whose
+            # release the seam refused. Nothing is detached twice, and the
+            # operation is never handed a released handle back.
+            self.released.add(component_id)
+            self.current.pop(component_id, None)
             self.up.discard(component_id)
             self._component_state(component_id, runtime_started=False)
         if errors:
             # An element was not released: the platform is not detached, and
             # saying so is the only honest state. The conservative claim — still
             # running, no verified readiness — is recorded instead of a false
-            # stop.
+            # stop. What *was* released is kept as evidence, and the components
+            # whose release refused stay this attempt's references.
             self.update(
                 self.record.withdraw_ready(
                     at=self.now(), reason="a restart stop phase did not complete"
@@ -1542,6 +1558,12 @@ class _Attempt:
                 "phase": phase,
                 "reason": reason,
                 "phases": list(self.reached_phases()),
+                # What this attempt handed back, and what it still holds: a
+                # partial hand-over is stated as one, so nothing in deployment
+                # state can be read as an untouched operation or as a stopped
+                # platform.
+                "released": sorted(self.released),
+                "references_held": sorted(self.up),
             },
         )
         attempt = self._attempt_record(
@@ -1567,6 +1589,7 @@ class _Attempt:
                 "running": record.running,
                 "ready": record.ready,
                 "deployed": record.deployed,
+                "released": sorted(self.released),
                 "references_held": sorted(self.up),
             },
         )
@@ -1605,14 +1628,21 @@ class _Attempt:
         """
         errors: list[str] = []
         for component_id in sorted(self.fresh):
+            handle = self.fresh[component_id]
             try:
-                self.adapter.stop(self.fresh[component_id])
+                self.adapter.stop(handle)
             except _RUNTIME_ERRORS as error:
                 errors.append(
                     f"{component_id}: the runtime element this attempt started "
                     f"could not be stopped ({error.__class__.__name__}: {error})"
                 )
                 continue
+            # Released: dropped from what this attempt still holds, so a repeated
+            # cleanup detaches nothing twice and ``_hand_over`` never hands the
+            # operation a released handle.
+            self.released.add(component_id)
+            self.fresh.pop(component_id, None)
+            self.current.pop(component_id, None)
             self.up.discard(component_id)
             self._component_state(component_id, runtime_started=False)
         return errors
@@ -1621,15 +1651,22 @@ class _Attempt:
         """Release this attempt's references without recording what cannot be.
 
         Used when a state write failed: the attempt keeps acting on the last
-        state it durably wrote, so only the reference release is performed.
+        state it durably wrote, so only the reference release is performed —
+        and what it released is dropped from the references it still holds.
         """
         for component_id in sorted(self.fresh):
+            handle = self.fresh[component_id]
             try:
-                self.adapter.stop(self.fresh[component_id])
+                self.adapter.stop(handle)
             except _RUNTIME_ERRORS:
                 # Nothing can be recorded about it: the state write that failed
-                # is the failure this operation reports.
+                # is the failure this operation reports. The reference stays this
+                # attempt's, because the seam did not release it.
                 continue
+            self.released.add(component_id)
+            self.fresh.pop(component_id, None)
+            self.current.pop(component_id, None)
+            self.up.discard(component_id)
 
     def _component_state(self, component_id: str, **changes: Any) -> None:
         """Record one per-component runtime fact, never inventing a component."""
@@ -1662,7 +1699,13 @@ class _Attempt:
         self.update(record)
 
     def _hand_over(self) -> None:
-        """The operation keeps managing the runtime elements that exist now."""
+        """The operation keeps managing the references this attempt still holds.
+
+        Everything released during the attempt is gone from ``current``, so the
+        operation is left exactly with the runtime references that exist for it
+        — never with a stale handle to an element whose reference was already
+        released (§18).
+        """
         self.deployment._handles = tuple(
             self.current[component_id] for component_id in sorted(self.current)
         )

@@ -2278,6 +2278,11 @@ class TestReferenceRelease:
             "readiness_withdrawn",
             "platform_released",
         ], "a detach withdraws the condition and records the release, never a stop"
+        assert deployment._handles == (), (
+            "a released reference is not an active reference any more: a "
+            "complete release leaves this operation holding none, so nothing "
+            "can ever be detached through a stale handle"
+        )
         assert [
             event.event for event in deployment.events()
         ] == journal_before, (
@@ -2333,6 +2338,39 @@ class TestReferenceRelease:
         )
         state_text = deployment.state_path.read_text(encoding="utf-8")
         assert "platform_stopped" not in state_text
+        assert deployment._handles == ("member-b",), (
+            "the operation keeps exactly the references that were not released; "
+            "the released one is not an active reference any more"
+        )
+
+    def test_a_repeated_cleanup_never_detaches_a_released_reference_again(
+        self, tmp_path, instance, manifest
+    ):
+        """A released reference is never handed to the seam a second time (§18)."""
+        deployment = deploy_canonical(tmp_path, instance, manifest)
+        handle = deployment._handles[0]
+        runtime = PartialDetachRuntime(refuse=frozenset({"member-b"}))
+        deployment._runtime = runtime
+        deployment._handles = (handle, "member-b")
+        with pytest.raises(RuntimeError, match="member-b: the member refused"):
+            deployment.release(origin="first-cleanup")
+        assert deployment._handles == ("member-b",)
+        state_after_first = deployment.state_path.read_bytes()
+
+        # the same cleanup again: only the reference whose release refused is
+        # attempted, and a release that released nothing writes nothing
+        with pytest.raises(RuntimeError, match="member-b: the member refused"):
+            deployment.release(origin="second-cleanup")
+
+        assert runtime.attempted == [
+            handle.component_id,
+            "member-b",
+            "member-b",
+        ], "the released reference was never detached again"
+        assert deployment._handles == ("member-b",)
+        assert deployment.state_path.read_bytes() == state_after_first
+        assert deployment.record.ready is False
+        assert deployment.record.running is True
 
     def test_a_release_that_released_nothing_leaves_the_record_untouched(
         self, tmp_path, instance, manifest
@@ -2357,6 +2395,10 @@ class TestReferenceRelease:
         ), "nothing was handed over, so nothing is recorded"
         assert any(
             "no reference was released" in note for note in caught.value.__notes__
+        )
+        assert deployment._handles == (handle,), (
+            "a release that released nothing leaves the references exactly as "
+            "they were"
         )
 
     def test_release_refuses_a_running_operation_without_a_reference(
@@ -2401,6 +2443,9 @@ class TestReferenceRelease:
             "unreleased": ["member-b"],
         }
         assert any("partial" in note for note in caught.value.__notes__)
+        assert handle._handles == (
+            "member-b",
+        ), "the released reference is dropped from the object's active references"
         assert not any(
             action.name == "platform_stopped"
             for action in handle.record.operational_actions

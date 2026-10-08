@@ -477,6 +477,14 @@ class Deployment:
         failing outcomes the runtime's own exception stays the causal failure —
         it is re-raised, annotated with what was and was not released.
 
+        Of the references, only what the seam did not release stays this
+        operation's: every released handle is dropped from the operation's
+        active references, so a repeated cleanup never detaches a released
+        element again and a later operation is never performed through a stale
+        handle. A complete release therefore leaves the operation holding no
+        runtime reference at all, and a release that released nothing leaves the
+        references exactly as they were.
+
         Fail-closed about what it cannot do: an operation that claims a running
         platform but holds no runtime element reaches no runtime, so it releases
         nothing and refuses rather than recording a release that never happened
@@ -492,7 +500,13 @@ class Deployment:
                 "§18, §20). Re-bind the operation with "
                 "deployment_operations.attach first."
             )
-        released, failures = _detach_handles(self._runtime, self._handles)
+        released, failures, remaining = _detach_handles(self._runtime, self._handles)
+        if released:
+            # A released reference is not an active reference any more: the
+            # operation keeps only what it could not release, so a repeated
+            # cleanup never detaches a released element again and no later
+            # operation is performed through a stale handle.
+            self._handles = remaining
         if failures and not released:
             # Nothing was handed over: the record keeps its claim as it was, and
             # the runtime's own exception is the causal failure.
@@ -1153,14 +1167,17 @@ def _handle_label(handle: Any) -> str:
 
 def _detach_handles(
     runtime: Any, handles: Sequence[Any]
-) -> tuple[list[str], list[tuple[str, BaseException]]]:
+) -> tuple[list[str], list[tuple[str, BaseException]], tuple[Any, ...]]:
     """Release every reference this operation holds, total over the seam (§18).
 
     One element that refuses its release must not keep the others from being
     released: a partial hand-over is a real outcome and has to be reportable
     (:meth:`Deployment.release`, :func:`release_references`). Returns what was
-    released and, for everything that was not, the label and the exception the
-    contract's own seam raised.
+    released, for everything that was not the label and the exception the
+    contract's own seam raised, and — third — the handles that remain this
+    operation's references. A released reference is not an active reference: the
+    caller keeps only the third element, so a repeated cleanup never detaches it
+    again and no later operation is performed through a stale handle.
 
     A handle this operation has no seam for is given up without a runtime call —
     the local/synthetic composition has no seam to detach through, and the
@@ -1168,6 +1185,7 @@ def _detach_handles(
     """
     released: list[str] = []
     failures: list[tuple[str, BaseException]] = []
+    remaining: list[Any] = []
     for handle in handles:
         label = _handle_label(handle)
         if runtime is None:
@@ -1177,9 +1195,10 @@ def _detach_handles(
             runtime.stop(handle)
         except Exception as error:  # noqa: BLE001 - the owner's seam
             failures.append((label, error))
+            remaining.append(handle)
         else:
             released.append(label)
-    return released, failures
+    return released, failures, tuple(remaining)
 
 
 def _release_reason(origin: str, failures: Sequence[tuple[str, BaseException]]) -> str:
@@ -1313,16 +1332,22 @@ def release_references(
     :meth:`Deployment.release` (nothing released and the record untouched;
     partial with ``complete: False``; complete) and the same causal exception —
     or left exactly as it was if no release happened at all (ADR-0016 §18, §20).
-    Persisting the moved record stays with the caller, which is the object that
-    owns the state target.
+    As there, only the references the seam did **not** release stay active:
+    released handles are dropped from the object's ``_handles``. Persisting the
+    moved record stays with the caller, which is the object that owns the state
+    target.
     """
     release = getattr(deployment, "release", None)
     if callable(release):
         return release(origin=origin)
-    released, failures = _detach_handles(
+    released, failures, remaining = _detach_handles(
         getattr(deployment, "_runtime", None),
         tuple(getattr(deployment, "_handles", ()) or ()),
     )
+    if released:
+        # Released references stop being this object's active references, exactly
+        # as in :meth:`Deployment.release`.
+        deployment._handles = remaining
     if failures and not released:
         # Nothing was handed over: the record keeps its claim as it was, and the
         # runtime's own exception is the causal failure.
