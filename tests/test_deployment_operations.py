@@ -681,9 +681,12 @@ class TestIdentityAcceptanceGate:
         assert record.failure.stage == "ready"
         assert record.identity_verified is False
         assert record.ready is False
-        assert record.running is False
+        assert (
+            record.running is True
+        ), "the fail-closed release is a detach; the record claims no stopped platform"
         assert record.deployed is False
         assert [event["event"] for event in events][-1] == "deployment_failed"
+        assert not any(event["event"] == "platform_stopped" for event in events)
         assert not any(event["event"] == "deployment_realized" for event in events)
 
     def test_provider_exception_fails_closed_after_ready(
@@ -701,7 +704,10 @@ class TestIdentityAcceptanceGate:
         assert record.failure is not None
         assert record.failure.stage == "ready"
         assert record.identity_verified is False
-        assert record.running is False
+        assert record.ready is False
+        assert (
+            record.running is True
+        ), "the fail-closed release is a detach; the record claims no stopped platform"
         assert record.deployed is False
 
     def test_identity_verified_precedes_realized_at_acceptance_seam(
@@ -929,12 +935,15 @@ class TestHonestDeployedClaim:
         assert ready_stage.detail["ready"] is True
         events = read_events(environment, instance)
         assert any(entry["event"] == "ready_reached" for entry in events)
-        # …and still no deployed claim stands: identity verification failed and
-        # the platform was stopped rather than left running half-verified.
+        # …and still no deployed claim stands: identity verification failed, so
+        # this operation released its references instead of leaving a
+        # half-verified platform claimed as ready.
         assert record.identity_verified is False
         assert record.lifecycle == LIFECYCLE_FAILED
-        assert record.ready is False, "nothing is running, so no ready condition holds"
-        assert record.running is False
+        assert record.ready is False, "no verified condition stands, so none is claimed"
+        assert (
+            record.running is True
+        ), "the release is a detach: it is not evidence that the platform stopped"
         assert record.deployed is False
         assert record.failure is not None
         assert record.failure.stage == "ready"
@@ -956,7 +965,9 @@ class TestHonestDeployedClaim:
         assert record.identity_verified is False
         assert record.stage("ready").status == "completed"
         assert record.ready is False
-        assert record.running is False
+        assert (
+            record.running is True
+        ), "the fail-closed release is a detach; the record claims no stopped platform"
 
 
 # ---------------------------------------------------------------------------
@@ -2263,8 +2274,11 @@ class TestDeploymentStateScenarios:
             deploy(request_for(instance, manifest, environment), runtime=spy)
         record = self.persisted(environment, instance)
         assert record.lifecycle == LIFECYCLE_FAILED
+        # The released references do not become a stopped-platform claim: the
+        # runtime contract's ``stop`` is the detach of §18, so only the
+        # unverifiable operational condition is withdrawn.
         assert (record.running, record.ready, record.identity_verified) == (
-            False,
+            True,
             False,
             False,
         )

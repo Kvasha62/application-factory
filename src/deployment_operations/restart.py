@@ -13,7 +13,7 @@ existing deployment operation::
 
     running
       ↓
-    stop                                    (the platform is honestly stopped)
+    stop                                    (the references are released: detach)
       ↓
     execution/content verification          (the same binding, the same bytes)
       ↓
@@ -46,13 +46,21 @@ What the operation is — and what it is not:
   is *now*. A restart therefore moves ``running``/``ready`` and appends
   runtime-management evidence, and it invents no lifecycle position
   (ADR-0016 §9; ADR-0017 §35).
-* **it is honest about every phase.** After the stop the record claims nothing
-  running or ready; after the start the mere fact that a process exists
-  justifies nothing — ``ready`` is established only by a *fresh*
-  health/readiness verification (ADR-0017 §33–§34); and a failure of the stop,
-  of the execution/content verification, of the start, of the health/readiness
+* **it is honest about every phase.** ``RuntimeAdapter.stop`` is the runtime
+  contract's **detach**: it releases this operation's references to the runtime
+  elements and leaves their fate to their owner (S4 runbook §7), so a detached
+  reference is *not* evidence that the platform stopped. After the stop the
+  record therefore claims no verified readiness and no ``deployed`` platform,
+  while the ``running`` claim stands as the conservative statement that a
+  Running Platform may still be up — and, precisely because the platform is not
+  claimed stopped, a later ``attach`` can re-bind it against the owner's own
+  evidence. After the start the mere fact that a process exists justifies
+  nothing — ``ready`` is established only by a *fresh* health/readiness
+  verification (ADR-0017 §33–§34) — and a failure of the stop, of the
+  execution/content verification, of the start, of the health/readiness
   verification or of the identity re-verification fails the whole attempt, is
-  recorded with its phase and its reasons, and is published as such (§20).
+  recorded with its phase and its reasons, is published as such (§20), and
+  never asserts a stopped platform that no evidence establishes.
 
 The stop/start policy is explicit and closed (:class:`StopStartPolicy`): a plain
 stop never starts anything again, a failure never triggers an automatic restart,
@@ -100,7 +108,6 @@ from deployment_operations.errors import (
 )
 from deployment_operations.events import (
     EVENT_IDENTITY_VERIFIED,
-    EVENT_PLATFORM_STOPPED,
     EVENT_RESTART_COMPLETED,
     EVENT_RESTART_EXECUTION_VERIFIED,
     EVENT_RESTART_FAILED,
@@ -1272,7 +1279,20 @@ class _Attempt:
         self.publish(EVENT_RESTART_REQUESTED, "requested", detail)
 
     def _stop_phase(self) -> None:
-        """Stop every runtime element — and never claim a stop that failed (§18)."""
+        """Release this operation's references to the runtime — a detach (§18).
+
+        ``RuntimeAdapter.stop`` is the runtime contract's **detach**: it releases
+        this operation's reference to a runtime element and leaves that element's
+        fate to the runtime's owner (S4 runbook §7). A detach that answered is
+        therefore **not evidence that the platform stopped**: the member this
+        operation released may still be running under its owner's policy. The
+        record keeps the ``running`` claim it carried — which is what keeps the
+        platform reachable through ``attach`` — and withdraws only the verified
+        operational condition this operation can no longer check, the same
+        conservative transition every fail-closed path of this module uses
+        (§9, §10, §20). Nothing here claims a stopped platform, in deployment
+        state or in the operational journal.
+        """
         errors: list[str] = []
         answers: dict[str, Any] = {}
         for component_id in sorted(self.current):
@@ -1292,9 +1312,10 @@ class _Attempt:
             self.up.discard(component_id)
             self._component_state(component_id, runtime_started=False)
         if errors:
-            # An element is still up: the platform is not stopped, and saying so
-            # is the only honest state. The conservative claim — still running,
-            # no verified readiness — is recorded instead of a false stop.
+            # An element was not released: the platform is not detached, and
+            # saying so is the only honest state. The conservative claim — still
+            # running, no verified readiness — is recorded instead of a false
+            # stop.
             self.update(
                 self.record.withdraw_ready(
                     at=self.now(), reason="a restart stop phase did not complete"
@@ -1304,24 +1325,26 @@ class _Attempt:
                 "stop", "one or more runtime elements refused to stop", errors
             )
 
-        already_stopped = not self.record.running
-        stopped = self.record.mark_stopped(at=self.now())
-        self.update(stopped)
-        if not already_stopped:
-            # The same platform-level signal a plain stop publishes: a restart
-            # stops the platform honestly instead of hiding the stop inside its
-            # own vocabulary.
-            self.publish(
-                EVENT_PLATFORM_STOPPED,
-                "stop",
-                {"stopped": sorted(answers), "restart": True},
-            )
+        claimed_running = self.record.running
+        withdrawn = self.record.withdraw_ready(
+            at=self.now(),
+            reason=(
+                "a restart released this operation's references to the Running "
+                "Platform; a detach is the runtime contract's reference release "
+                "and is not evidence that the platform stopped"
+            ),
+        )
+        if withdrawn is not self.record:
+            self.update(withdrawn)
         detail = {
-            "stopped": sorted(answers),
-            "already_stopped": already_stopped,
+            # The references this phase released — never a claim that what they
+            # pointed at is down.
+            "detached": sorted(answers),
             "answers": answers,
-            "running": stopped.running,
-            "ready": stopped.ready,
+            "claimed_running": claimed_running,
+            "running": self.record.running,
+            "ready": self.record.ready,
+            "physical_stop_established": False,
         }
         self.complete("stop", detail)
         self.publish(EVENT_RESTART_STOPPED, "stop", detail)
@@ -1500,16 +1523,16 @@ class _Attempt:
         self.failed_phase(phase, reason, errors)
         cleanup = self._stop_fresh_elements()
         at = self.now()
-        record = self.record
-        if self.up:
-            # An element this attempt could not stop is still up: the record
-            # keeps claiming a running platform and withdraws only the readiness
-            # it can no longer verify.
-            record = record.withdraw_ready(
-                at=at, reason=f"the restart attempt failed in its {phase} phase"
-            )
-        else:
-            record = record.mark_stopped(at=at)
+        # The record never claims the platform stopped, whatever phase failed:
+        # everything this attempt performed against the runtime is the contract's
+        # detach (``RuntimeAdapter.stop``), and a detach does not establish that
+        # the owner's runtime is down. The conservative claim therefore stands —
+        # a Running Platform this operation can no longer verify — and only the
+        # verified operational condition is withdrawn, exactly as in the stop
+        # phase (§9, §18, §20).
+        record = self.record.withdraw_ready(
+            at=at, reason=f"the restart attempt failed in its {phase} phase"
+        )
         all_errors = [*errors, *cleanup]
         record = record.with_operational_action(
             ACTION_RESTART_FAILED,
@@ -1538,9 +1561,13 @@ class _Attempt:
                 "failure_phase": phase,
                 "reason": reason,
                 "errors": all_errors,
+                # What the record still claims, and the references this attempt
+                # could not release: the failure states both, and claims no
+                # platform that stopped.
                 "running": record.running,
                 "ready": record.ready,
                 "deployed": record.deployed,
+                "references_held": sorted(self.up),
             },
         )
         self._hand_over()
@@ -1570,7 +1597,12 @@ class _Attempt:
         )
 
     def _stop_fresh_elements(self) -> list[str]:
-        """Stop what this attempt started: no uncontrolled element survives it."""
+        """Release what this attempt started: no uncontrolled reference survives.
+
+        The call is the contract's detach, so it releases this attempt's
+        references and never destroys the elements themselves — their lifecycle
+        stays with the runtime's owner (§18).
+        """
         errors: list[str] = []
         for component_id in sorted(self.fresh):
             try:
@@ -1586,7 +1618,11 @@ class _Attempt:
         return errors
 
     def _abandon_fresh_elements(self) -> None:
-        """Stop this attempt's elements without recording a state that cannot be."""
+        """Release this attempt's references without recording what cannot be.
+
+        Used when a state write failed: the attempt keeps acting on the last
+        state it durably wrote, so only the reference release is performed.
+        """
         for component_id in sorted(self.fresh):
             try:
                 self.adapter.stop(self.fresh[component_id])

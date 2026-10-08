@@ -1007,11 +1007,14 @@ def deploy(
         # -- realized / deployed -------------------------------------------
         recorder.realized()
     except DeploymentOperationsError as error:
-        # Fail-closed: nothing half-verified keeps running. The record keeps the
-        # history (the stages that completed, the verification that failed) and
-        # stops claiming a platform that is no longer running (§20). The cleanup
-        # itself is total, so what it could not release is reported with the
-        # failure that called for it instead of replacing it.
+        # Fail-closed: nothing half-verified stays claimed. The record keeps the
+        # history (the stages that completed, the verification that failed),
+        # releases this operation's references to what it started — a detach,
+        # which the record never turns into a claim that the platform stopped —
+        # and withdraws the verified condition it can no longer stand behind
+        # (§18, §20). The cleanup itself is total, so what it could not release
+        # is reported with the failure that called for it instead of replacing
+        # it.
         error.errors.extend(_release_handles(recorder, adapter, handles))
         raise
     except Exception as error:  # noqa: BLE001 - the owner's seam is external code
@@ -1056,10 +1059,13 @@ def _release_handles(
     Detach-only by contract: :class:`RuntimeAdapter.stop` releases this
     operation's reference and never retires what the owner supervises — the
     lifecycle of the Running Platform belongs to its owner (ADR-0016 §18;
-    S4 runbook §7). The record stops claiming a platform that is no longer
-    reached, and only after every handle was released: a stop that failed
-    leaves the previous claim standing rather than asserting a stop that did
-    not happen (§9, §10).
+    S4 runbook §7). A release that succeeded is therefore **not** evidence that
+    the platform stopped: the record withdraws the verified operational
+    condition it can no longer stand behind and keeps its ``running`` claim,
+    which is what leaves the state honest and the platform reachable through
+    :func:`attach` (§9, §10, §20). Only after *every* handle was released is
+    the condition withdrawn: a release that failed leaves the previous claim
+    standing rather than asserting a state that was not established.
 
     Total by construction: the seam is external code, so every handle is
     attempted and everything that could not be released is **returned** as a
@@ -1076,12 +1082,22 @@ def _release_handles(
                 f"{component_id}: the runtime element could not be released "
                 f"({error.__class__.__name__}: {error})"
             )
-    if recorder.record.running and not problems:
+    if not problems:
         try:
-            recorder.update(recorder.record.mark_stopped(at=recorder.clock()))
+            recorder.update(
+                recorder.record.withdraw_ready(
+                    at=recorder.clock(),
+                    reason=(
+                        "a fail-closed deployment released this operation's "
+                        "references to the Running Platform; a detach is the "
+                        "runtime contract's reference release and is not "
+                        "evidence that the platform stopped"
+                    ),
+                )
+            )
         except Exception as error:  # noqa: BLE001 - reported, never raised
             problems.append(
-                "the stopped state of the platform could not be recorded "
+                "the withdrawn readiness of the platform could not be recorded "
                 f"({error.__class__.__name__}: {error})"
             )
     return problems

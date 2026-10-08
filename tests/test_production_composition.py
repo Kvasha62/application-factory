@@ -106,6 +106,32 @@ FORBIDDEN_NAMES = frozenset(
     }
 )
 
+#: Names that would give Deployment & Operations lifecycle control over the
+#: owner's runtime. The production path releases its own references with the
+#: runtime contract's ``stop`` — the detach of ADR-0016 §18 — and never
+#: terminates, kills, shuts down or retires what the owner supervises.
+LIFECYCLE_CONTROL_NAMES = frozenset(
+    {
+        "terminate",
+        "kill",
+        "killpg",
+        "SIGKILL",
+        "SIGTERM",
+        "shutdown",
+        "retire",
+    }
+)
+
+#: The shipped engine modules the production root drives with the owner's own
+#: runtime seam. They are checked with the package itself: the production path
+#: is the package *and* the shipped operations it invokes.
+PRODUCTION_PATH_ENGINE_MODULES = (
+    "deployment.py",
+    "restart.py",
+    "reconciliation.py",
+    "state.py",
+)
+
 #: The one identity file the D&O side owns. It is a local default, not a
 #: production authority, and it must not appear in this environment at all.
 AMBIENT_IDENTITY_FILENAME = "running_platform_identity.json"
@@ -433,6 +459,31 @@ class TestProductionWiring:
                 if name in names:
                     found[name].append(module.name)
         assert found == {name: [] for name in FORBIDDEN_NAMES}, found
+
+    def test_nothing_on_the_production_path_controls_the_owner_runtime(self):
+        """Scenario: no terminate/kill/shutdown/retire in the production path.
+
+        ``RuntimeAdapter.stop`` is the runtime contract's detach: it releases
+        this operation's reference, so the production path may call it and must
+        never reach further — no process handle, no signal, no owner retirement
+        policy. Docstrings may *name* these actions (that is why this reads
+        identifiers out of the syntax tree rather than the file text); no code
+        on the path may use one.
+        """
+        package = Path(sys.modules["deployment_operations.production"].__file__)
+        engine = package.parent.parent
+        modules = [package, *sorted(package.parent.glob("*.py"))]
+        modules += [engine / name for name in PRODUCTION_PATH_ENGINE_MODULES]
+        found = {name: [] for name in LIFECYCLE_CONTROL_NAMES}
+        for module in modules:
+            used = LIFECYCLE_CONTROL_NAMES & _names_used(module)
+            for name in used:
+                found[name].append(module.parent.name + "/" + module.name)
+        assert found == {name: [] for name in LIFECYCLE_CONTROL_NAMES}, found
+        # and the one call the contract does allow is on the path by name, so
+        # this guard is not vacuously true about a path that stops nothing
+        restart = (engine / "restart.py").read_text(encoding="utf-8")
+        assert "adapter.stop(" in restart or "self.adapter.stop(" in restart
 
     def test_a_missing_declaration_is_refused(self):
         with pytest.raises(ProductionCompositionError) as refusal:
@@ -1606,14 +1657,20 @@ class TestRestartBoundary:
 
         assert refusal.value.phase == "start"
         assert "ValueError" in "\n".join(refusal.value.errors)
-        # the fresh start never confirmed: the attempt released what it started
-        # and recorded the platform as not running
+        # the fresh start never confirmed: the attempt released what it started,
+        # and the record claims no stopped platform it did not establish — a
+        # detach is the contract's reference release, not evidence of a stop
         record = only_operation(deployed.environment)
-        assert record.running is False
+        assert record.running is True
         assert record.ready is False
+        assert record.deployed is False
         assert record.failure is None
         assert record.restarts[-1].failure_phase == "start"
         assert [entry.outcome for entry in record.restarts] == [RESTART_FAILED]
+        # and the record and journal claim no stopped platform anywhere
+        assert "platform_stopped" not in [
+            action.name for action in record.operational_actions
+        ]
         # the member the owner supervises is still the owner's, and the runtime
         # that refused is never torn down by the operation that failed
         assert "shutdown" not in cell.runtime_calls()
