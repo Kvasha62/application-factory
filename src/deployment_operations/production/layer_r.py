@@ -3,14 +3,16 @@
 This composition root contains no Running Platform. Layer R is an external
 dependency: it is created, supervised and kept alive — and its actual identity
 facts are produced — by its own owner, outside Deployment & Operations
-(ADR-0016 §18; ADR-0020 §4). Its code therefore lives outside this repository:
-the S4 runbook's ``<RP_CELL_HOME>``, e.g. ``/srv/running-platform/cell``.
+(ADR-0016 §18; ADR-0020 §4). Its code therefore lives outside this repository,
+in the S4 runbook's ``<RP_CELL_HOME>`` — the approved production layout names
+that directory ``/srv/running-platform/cell``.
 
-This module is the only place in Deployment & Operations that reaches for
-Layer R, and it reaches for it through an **explicit declaration**:
+This module is the only place in Deployment & Operations that resolves an
+externally declared Running Platform implementation, and it resolves it through
+an **explicit declaration**:
 
-    <absolute-path.py>:<factory>    the owner's module file and factory, e.g. under
-                                    <RP_CELL_HOME> such as /srv/running-platform/cell
+    <absolute-path.py>:<factory>    the owner's module file and factory under
+                                    <RP_CELL_HOME>
     <dotted.module>:<factory>       the owner's importable module and factory
 
 The declared factory is called once with the declared options as keyword
@@ -96,7 +98,7 @@ class ProductionCompositionError(DeploymentOperationsError):
     A composition failure is not a deployment failure: no operation exists, no
     environment is touched and no runtime element is addressed. It is raised
     before any Deployment & Operations operation is called, and it is never
-    downgraded into a default (ADR-0016 §8, §20).
+    downgraded into a default (ADR-0016 §7, §20).
     """
 
     def __init__(
