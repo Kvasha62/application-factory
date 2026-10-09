@@ -258,7 +258,10 @@ def symlinked_path_components(path: Path) -> list[str]:
     Every component of the path **as spelled** is checked without following
     any of them.  For a relative path the process working directory is the
     anchor and is not itself inspected — the policy covers the spelling the
-    caller supplied.  Returned strings name the offending components.
+    caller supplied.  Inspection **stops at the first symlinked component**:
+    checking any later component would have to resolve the link to reach it,
+    which the policy forbids.  The returned list names that first offending
+    component (at most one).
     """
     found: list[str] = []
     if path.is_absolute():
@@ -271,6 +274,7 @@ def symlinked_path_components(path: Path) -> list[str]:
         current = current / part
         if current.is_symlink():
             found.append(current.as_posix())
+            break
     return found
 
 
@@ -287,11 +291,17 @@ def symlinked_components(target: Path, root: Path) -> list[str]:
     ``target.is_symlink()`` alone is not enough (it inspects only the final
     component) and ``resolve().is_relative_to()`` alone is not enough (an
     in-root redirect passes it).  The final component is included, so this
-    subsumes a plain "target is a symlink" check.
+    subsumes a plain "target is a symlink" check.  Inspection stops at the
+    first symlinked component — when the root path is itself reached through
+    a symlink, nothing below it is inspected at all (reaching it would follow
+    the link).
     """
     found: list[str] = []
     if symlinked_path_components(root):
         found.append(ROOT_MARKER)
+        # Everything below the root can only be reached through that symlink;
+        # not even link detection may follow it.
+        return found
     try:
         relative = target.relative_to(root)
     except ValueError:
@@ -301,6 +311,7 @@ def symlinked_components(target: Path, root: Path) -> list[str]:
         current = current / part
         if current.is_symlink():
             found.append(current.relative_to(root).as_posix())
+            break
     return found
 
 

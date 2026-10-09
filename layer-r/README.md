@@ -78,9 +78,11 @@ secret-looking at all.
   component of the supplied path, from its filesystem anchor (the working
   directory, for a relative path) through the root itself, is checked; a
   symlinked *ancestor* of the root is refused just like a symlinked root.
-  Refusal happens *before* any walk, read, hash or copy (`is_dir` alone would
-  follow the link): `verify`/`generate` report it as `<root>`, the drift check
-  raises `DriftCheckError`, and the exporter raises `ExportRefused`. Symlinked
+  Component inspection stops at the first symlink: nothing behind it is ever
+  accessed afterwards, not even for link detection. Refusal happens *before*
+  any walk, read, hash or copy (`is_dir` alone would follow the link):
+  `verify`/`generate` report it as `<root>`, the drift check raises
+  `DriftCheckError`, and the exporter raises `ExportRefused`. Symlinked
   *tracked roots* (`layer-r/source`, `layer-r/config`) are refused the same
   way.
 

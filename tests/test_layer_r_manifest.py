@@ -28,12 +28,15 @@ from scripts.layer_r_drift_check import (
 )
 from scripts.layer_r_export_bundle import ExportRefused, collect, export
 from scripts.layer_r_manifest import (
+    ROOT_MARKER,
     ManifestError,
     generate_manifest,
     load_manifest,
     main,
     normalize_relative_path,
     sha256_of,
+    symlinked_components,
+    symlinked_path_components,
     tree_files,
     validate_tracked_path,
     verify_tree,
@@ -495,6 +498,82 @@ class TestSymlinkPolicy:
         with pytest.raises(ExportRefused, match="symlink"):
             export(cell_root, out)
         assert not out.exists()  # nothing was copied or even prepared
+
+    def test_symlinked_path_components_stops_at_first_symlink(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Instrumentation: no component behind the first symlink is checked.
+
+        Checking a later component would resolve the symlinked parent to
+        reach it — even ``is_symlink()`` on a descendant follows it — which
+        the no-follow guarantee forbids.
+        """
+        real = tmp_path / "real"
+        (real / "child" / "root").mkdir(parents=True)
+        link = tmp_path / "link"
+        link.symlink_to(real, target_is_directory=True)
+
+        checked: list[Path] = []
+        original = Path.is_symlink
+
+        def spy(self: Path) -> bool:
+            checked.append(self)
+            return original(self)
+
+        monkeypatch.setattr(Path, "is_symlink", spy)
+        found = symlinked_path_components(link / "child" / "root")
+        assert found == [str(link)]
+        assert link in checked  # the spy really observed the walk
+        assert checked[-1] == link  # inspection stopped at the first symlink
+        assert all(other == link or not other.is_relative_to(link) for other in checked)
+
+    def test_symlinked_components_stops_at_first_symlink_below_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "root"
+        (root / "real").mkdir(parents=True)
+        (root / "real" / "file.py").write_text(CLEAN, encoding="utf-8")
+        redirect = root / "redirect"
+        redirect.symlink_to(root / "real", target_is_directory=True)
+
+        checked: list[Path] = []
+        original = Path.is_symlink
+
+        def spy(self: Path) -> bool:
+            checked.append(self)
+            return original(self)
+
+        monkeypatch.setattr(Path, "is_symlink", spy)
+        found = symlinked_components(redirect / "file.py", root)
+        assert found == ["redirect"]
+        assert checked[-1] == redirect  # nothing behind the link was checked
+        assert all(
+            other == redirect or not other.is_relative_to(redirect) for other in checked
+        )
+
+    def test_symlinked_components_stops_when_root_is_behind_a_symlink(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_parent = tmp_path / "real-parent"
+        (real_parent / "root" / "sub").mkdir(parents=True)
+        (real_parent / "root" / "sub" / "file.py").write_text(CLEAN, encoding="utf-8")
+        (tmp_path / "root-parent").symlink_to(real_parent, target_is_directory=True)
+        root = tmp_path / "root-parent" / "root"
+
+        checked: list[Path] = []
+        original = Path.is_symlink
+
+        def spy(self: Path) -> bool:
+            checked.append(self)
+            return original(self)
+
+        monkeypatch.setattr(Path, "is_symlink", spy)
+        found = symlinked_components(root / "sub" / "file.py", root)
+        assert found == [ROOT_MARKER]
+        # The walk stopped at the symlinked ancestor: nothing at or below the
+        # root path (reachable only through the link) was inspected.
+        assert checked[-1] == tmp_path / "root-parent"
+        assert all(not other.is_relative_to(root) for other in checked)
 
 
 class TestDriftCheck:
