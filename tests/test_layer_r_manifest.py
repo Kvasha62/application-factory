@@ -1,10 +1,12 @@
 """Layer R manifest / drift / export tooling — policy and read-only guarantees.
 
 These tests are the CI gate for the Layer R source-control machinery
-(``layer-r/``). They prove the fail-closed classification policy, the manifest
-integrity rules, and that the drift check and export bundle never write to the
-tree they inspect. No production behavior and no production evidence is
-produced here.
+(``layer-r/``). They call the real tool functions (``verify_tree``,
+``generate_manifest``, ``compare``, ``export``, ``main``) and prove the
+fail-closed classification and path policy, the symlink non-following rules,
+the manifest integrity rules, and that the drift check and export bundle never
+write to the tree they inspect. No production behavior and no production
+evidence is produced here.
 """
 
 from __future__ import annotations
@@ -14,14 +16,25 @@ from pathlib import Path
 
 import pytest
 
-from scripts.layer_r_drift_check import CHANGED, EXTRA, IN_SYNC, MISSING, compare
-from scripts.layer_r_export_bundle import ExportRefused, export
+from scripts.layer_r_drift_check import (
+    CHANGED,
+    EXTRA,
+    IN_SYNC,
+    MISSING,
+    UNSAFE,
+    DriftCheckError,
+    compare,
+)
+from scripts.layer_r_export_bundle import ExportRefused, collect, export
 from scripts.layer_r_manifest import (
     ManifestError,
     generate_manifest,
     load_manifest,
+    main,
+    normalize_relative_path,
     sha256_of,
     tree_files,
+    validate_tracked_path,
     verify_tree,
     write_manifest,
 )
@@ -42,6 +55,117 @@ def classed(root: Path) -> dict:
 
 def statuses(report: dict) -> dict[str, str]:
     return {row["host_path"] or row["path"]: row["status"] for row in report["results"]}
+
+
+def tree_digests(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): sha256_of(path)
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def bad_path_manifest(path_value: str) -> dict:
+    return {
+        "manifest_version": 1,
+        "entries": [
+            {
+                "path": path_value,
+                "sha256": "1" * 64,
+                "class": "source",
+                "host_path": "cell.py",
+                "origin": "tests",
+            }
+        ],
+    }
+
+
+class TestPathPolicy:
+    @pytest.mark.parametrize(
+        "unsafe",
+        [
+            "/etc/passwd",
+            "layer-r/source/../config/x.py",
+            "layer-r/source/../../etc/passwd",
+            "layer-r/source/./x.py",
+            "layer-r/source//x.py",
+            "layer-r/source/x.py/",
+            "layer-r\\source\\x.py",
+            "C:/layer-r/source/x.py",
+            "layer-r/source-evil/file.py",
+            "layer-r/sourceevil/file.py",
+            "layer-r/other/file.py",
+            "layer-r/source",
+            "elsewhere/cell.py",
+            "",
+        ],
+    )
+    def test_unsafe_manifest_paths_are_refused(self, unsafe: str) -> None:
+        assert validate_tracked_path(unsafe) is None
+
+    def test_canonical_tracked_path_is_accepted(self) -> None:
+        assert (
+            validate_tracked_path("layer-r/source/cell.py") == "layer-r/source/cell.py"
+        )
+        assert validate_tracked_path("layer-r/config/environment.json") == (
+            "layer-r/config/environment.json"
+        )
+        assert validate_tracked_path("layer-r/source/pkg/mod.py") == (
+            "layer-r/source/pkg/mod.py"
+        )
+
+    @pytest.mark.parametrize(
+        "unsafe",
+        [
+            "/abs",
+            "a/../b",
+            "a/./b",
+            "a//b",
+            "a/b/",
+            "a\\b",
+            "C:/a",
+            "..",
+            "",
+        ],
+    )
+    def test_normalize_rejects_ambiguous_or_escaping_variants(
+        self, unsafe: str
+    ) -> None:
+        assert normalize_relative_path(unsafe) is None
+
+    def test_prefix_sibling_entry_is_rejected_in_the_manifest(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        errors = verify_tree(root, bad_path_manifest("layer-r/source-evil/file.py"))
+        assert any("canonical relative POSIX" in error for error in errors)
+
+    @pytest.mark.parametrize(
+        "unsafe",
+        [
+            "/etc/passwd",
+            "layer-r/source/../config/x.py",
+            "layer-r\\source\\x.py",
+            "layer-r/source/./x.py",
+            "layer-r/source/x.py/",
+        ],
+    )
+    def test_unsafe_entries_are_rejected_by_verify(self, unsafe: str) -> None:
+        root = Path(__file__).resolve().parent.parent
+        errors = verify_tree(root, bad_path_manifest(unsafe))
+        assert any("canonical relative POSIX" in error for error in errors)
+
+    def test_host_path_rejects_parent_traversal(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        manifest = bad_path_manifest("layer-r/source/x.py")
+        manifest["entries"][0]["host_path"] = "../outside/cell.py"
+        errors = verify_tree(root, manifest)
+        assert any("host_path" in error and "refused" in error for error in errors)
+
+    def test_duplicate_entries_are_refused(self, tmp_path: Path) -> None:
+        build_tree(tmp_path)
+        manifest = classed(tmp_path)
+        manifest["entries"].append(dict(manifest["entries"][0]))
+        errors = verify_tree(tmp_path, manifest)
+        assert any("duplicate" in error for error in errors)
 
 
 class TestManifestPolicy:
@@ -102,19 +226,12 @@ class TestManifestPolicy:
         errors = verify_tree(tmp_path, manifest)
         assert any("secret-looking" in error for error in errors)
 
-    def test_verify_rejects_path_outside_tracked_roots(self, tmp_path: Path) -> None:
-        build_tree(tmp_path)
-        manifest = classed(tmp_path)
-        manifest["entries"][0]["path"] = "elsewhere/cell.py"
-        errors = verify_tree(tmp_path, manifest)
-        assert any("must live under" in error for error in errors)
-
     def test_verify_rejects_absolute_host_path(self, tmp_path: Path) -> None:
         build_tree(tmp_path)
         manifest = classed(tmp_path)
         manifest["entries"][0]["host_path"] = "/srv/running-platform/cell/cell.py"
         errors = verify_tree(tmp_path, manifest)
-        assert any("relative to the host" in error for error in errors)
+        assert any("host_path" in error and "refused" in error for error in errors)
 
     def test_committed_manifest_verifies(self) -> None:
         root = Path(__file__).resolve().parent.parent
@@ -128,11 +245,55 @@ class TestManifestPolicy:
         assert tree_files(tmp_path) == ["layer-r/source/cell.py"]
 
 
+class TestSymlinkPolicy:
+    def test_verify_rejects_symlink_escaping_the_root(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        build_tree(repo)
+        manifest = classed(repo)  # generated while the tree is clean
+        outside = tmp_path / "outside-target.txt"
+        outside.write_text('SERVICE_TOKEN = "abcdef0123456789"\n', encoding="utf-8")
+        (repo / "layer-r" / "source" / "cell.py").unlink()
+        (repo / "layer-r" / "source" / "cell.py").symlink_to(outside)
+        errors = verify_tree(repo, manifest)
+        assert any("symlink" in error for error in errors)
+        # The symlink was not hashed through: no secret finding on the target.
+        assert not any("secret-looking" in error for error in errors)
+
+    def test_generate_refuses_symlinks(self, tmp_path: Path) -> None:
+        build_tree(tmp_path)
+        outside = tmp_path / "outside-target.txt"
+        outside.write_text(CLEAN, encoding="utf-8")
+        (tmp_path / "layer-r" / "source" / "link.py").symlink_to(outside)
+        with pytest.raises(ManifestError, match="symlinks"):
+            generate_manifest(tmp_path, class_for={"layer-r/source/link.py": "source"})
+
+    def test_verify_rejects_symlinked_tracked_root(self, tmp_path: Path) -> None:
+        real = tmp_path / "real-source"
+        real.mkdir()
+        (real / "cell.py").write_text(CLEAN, encoding="utf-8")
+        (tmp_path / "layer-r").mkdir()
+        (tmp_path / "layer-r" / "source").symlink_to(real, target_is_directory=True)
+        manifest = bad_path_manifest("layer-r/source/cell.py")
+        errors = verify_tree(tmp_path, manifest)
+        assert any("symlink" in error for error in errors)
+
+    def test_in_tree_symlink_to_sibling_is_still_refused(self, tmp_path: Path) -> None:
+        build_tree(tmp_path)
+        manifest = classed(tmp_path)  # generated while the tree is clean
+        (tmp_path / "layer-r" / "source" / "other.py").write_text(
+            CLEAN, encoding="utf-8"
+        )
+        (tmp_path / "layer-r" / "source" / "cell.py").unlink()
+        (tmp_path / "layer-r" / "source" / "cell.py").symlink_to("other.py")
+        errors = verify_tree(tmp_path, manifest)
+        assert any("symlink" in error for error in errors)
+
+
 class TestDriftCheck:
     def _pair(self, tmp_path: Path) -> tuple[Path, dict]:
         build_tree(tmp_path)
         host = tmp_path / "host-cell"
-        (host / "layer-r" / "source").mkdir(parents=True)
+        host.mkdir()
         manifest = classed(tmp_path)
         entry = manifest["entries"][0]
         entry["host_path"] = "cell.py"
@@ -172,20 +333,39 @@ class TestDriftCheck:
         report = compare(host, manifest)
         assert report["in_sync"] is True
 
+    def test_symlinked_target_is_unsafe_and_never_followed(
+        self, tmp_path: Path
+    ) -> None:
+        host, manifest = self._pair(tmp_path)
+        outside = tmp_path / "outside-target.txt"
+        outside.write_text(CLEAN, encoding="utf-8")
+        (host / "cell.py").unlink()
+        (host / "cell.py").symlink_to(outside)
+        before = tree_digests(tmp_path)
+        report = compare(host, manifest)
+        assert report["in_sync"] is False
+        assert statuses(report)["cell.py"] == UNSAFE
+        assert tree_digests(tmp_path) == before  # nothing read wrote anything
+
+    def test_unsafe_host_path_value_is_refused(self, tmp_path: Path) -> None:
+        host, manifest = self._pair(tmp_path)
+        manifest["entries"][0]["host_path"] = "../escape/cell.py"
+        with pytest.raises(DriftCheckError):
+            compare(host, manifest)
+
+    def test_symlink_outside_manifest_is_reported_unsafe(self, tmp_path: Path) -> None:
+        host, manifest = self._pair(tmp_path)
+        outside = tmp_path / "outside-target.txt"
+        outside.write_text(CLEAN, encoding="utf-8")
+        (host / "rogue-link").symlink_to(outside)
+        report = compare(host, manifest)
+        assert statuses(report)["rogue-link"] == UNSAFE
+
     def test_drift_check_never_writes_the_host_tree(self, tmp_path: Path) -> None:
         host, manifest = self._pair(tmp_path)
-        before = {
-            path.relative_to(host).as_posix(): sha256_of(path)
-            for path in sorted(host.rglob("*"))
-            if path.is_file()
-        }
+        before = tree_digests(host)
         compare(host, manifest)
-        after = {
-            path.relative_to(host).as_posix(): sha256_of(path)
-            for path in sorted(host.rglob("*"))
-            if path.is_file()
-        }
-        assert before == after
+        assert tree_digests(host) == before
 
 
 class TestExportBundle:
@@ -215,9 +395,41 @@ class TestExportBundle:
             'SERVICE_TOKEN = "abcdef0123456789"\n', encoding="utf-8"
         )
         out = tmp_path / "bundle"
+        before = tree_digests(cell)
         with pytest.raises(ExportRefused):
             export(cell, out)
         assert not out.exists()
+        assert tree_digests(cell) == before  # refusal copies nothing, mutates nothing
+
+    def test_symlink_payload_aborts_before_any_copy(self, tmp_path: Path) -> None:
+        cell = tmp_path / "cell"
+        cell.mkdir()
+        (cell / "clean.py").write_text(CLEAN, encoding="utf-8")
+        outside = tmp_path / "outside-target.txt"
+        outside.write_text(CLEAN, encoding="utf-8")
+        (cell / "evil.py").symlink_to(outside)
+        out = tmp_path / "bundle"
+        before = tree_digests(cell)
+        with pytest.raises(ExportRefused, match="symlink"):
+            export(cell, out)
+        assert not out.exists()
+        assert tree_digests(cell) == before
+
+    def test_collect_flags_escaping_symlink_as_unsafe(self, tmp_path: Path) -> None:
+        cell = tmp_path / "cell"
+        (cell / "sub").mkdir(parents=True)
+        outside = tmp_path / "outside-target.txt"
+        outside.write_text(CLEAN, encoding="utf-8")
+        (cell / "sub" / "escape.py").symlink_to(outside)
+        relatives, unsafe = collect(cell, ("*.py",))
+        assert relatives == []
+        assert unsafe == ["sub/escape.py"]
+        out = tmp_path / "bundle"
+        before = tree_digests(tmp_path)
+        with pytest.raises(ExportRefused):
+            export(cell, out, includes=("*.py",))
+        assert not out.exists()
+        assert tree_digests(tmp_path) == before
 
     def test_out_must_not_be_inside_the_cell(self, tmp_path: Path) -> None:
         cell = tmp_path / "cell"
@@ -244,6 +456,41 @@ class TestExportBundle:
         (cell / "runtime.log").write_text("log\n", encoding="utf-8")
         bundle = export(cell, tmp_path / "bundle", dry_run=True)
         assert [entry["path"] for entry in bundle["files"]] == ["producer.py"]
+
+
+class TestMainEntryPoint:
+    def test_verify_exit_codes(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        build_tree(tmp_path)
+        manifest_path = tmp_path / "layer-r" / "SOURCE_MANIFEST.json"
+        write_manifest(manifest_path, classed(tmp_path))
+        assert main(["verify", "--root", str(tmp_path)]) == 0
+
+        (tmp_path / "layer-r" / "source" / "cell.py").write_text(
+            "value = 2\n", encoding="utf-8"
+        )
+        assert main(["verify", "--root", str(tmp_path)]) == 1
+        assert "FAILED" in capsys.readouterr().err
+
+        manifest_path.unlink()
+        assert main(["verify", "--root", str(tmp_path)]) == 2
+
+    def test_generate_refuses_symlink_via_cli(self, tmp_path: Path) -> None:
+        build_tree(tmp_path)
+        outside = tmp_path / "outside-target.txt"
+        outside.write_text(CLEAN, encoding="utf-8")
+        (tmp_path / "layer-r" / "source" / "link.py").symlink_to(outside)
+        code = main(
+            [
+                "generate",
+                "--root",
+                str(tmp_path),
+                "--default-class",
+                "source",
+            ]
+        )
+        assert code == 2
 
 
 class TestWriteManifest:

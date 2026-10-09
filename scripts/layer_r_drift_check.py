@@ -13,7 +13,14 @@ Usage (on the Running Platform host, by its owner)::
     python3 scripts/layer_r_drift_check.py \\
         --host-root /srv/running-platform/cell --manifest /tmp/manifest.json
 
-Exit codes: ``0`` in sync · ``1`` drift (changed / missing / extra files) ·
+Path and symlink policy.  ``entry.host_path`` must be a canonical relative
+POSIX path (see :func:`scripts.layer_r_manifest.normalize_relative_path`);
+absolute paths, ``..`` and ambiguous spellings are refused.  A symlinked
+target is **never followed or hashed** — it is reported as ``unsafe`` and
+counts as drift, as does any entry that resolves outside the host root and any
+non-regular file.  Symlinked directories are not descended into.
+
+Exit codes: ``0`` in sync · ``1`` drift (changed / missing / extra / unsafe) ·
 ``2`` usage or read error.  Output is stdout only (``--json`` for machine
 form); nothing is ever created, modified or removed under ``--host-root``.
 """
@@ -23,13 +30,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
+
+from scripts.layer_r_manifest import normalize_relative_path
 
 IN_SYNC = "in-sync"
 CHANGED = "changed"
 MISSING = "missing"
 EXTRA = "extra"
+UNSAFE = "unsafe"
 
 _SKIP_DIRS = {".git", "__pycache__"}
 _SKIP_SUFFIXES = {".pyc", ".log"}
@@ -48,27 +59,47 @@ def sha256_of(path: Path) -> str:
 
 
 def _host_path(host_root: Path, host_path: str) -> Path:
-    relative = Path(host_path)
-    if relative.is_absolute() or ".." in relative.parts:
+    canonical = normalize_relative_path(host_path)
+    if canonical is None:
         message = (
-            f"manifest host_path {host_path!r} must be relative to the host "
-            "cell root and must not contain '..'"
+            f"manifest host_path {host_path!r} must be a canonical relative POSIX "
+            "path under the host cell root; absolute paths, '..', backslashes and "
+            "non-canonical spellings are refused"
         )
         raise DriftCheckError(message)
-    return host_root / relative
+    return host_root / canonical
 
 
-def _walk_host_files(host_root: Path) -> set[str]:
+def _walk_host(host_root: Path) -> tuple[set[str], set[str]]:
+    """(regular files, unsafe paths) under ``host_root``; symlinks never followed."""
     found: set[str] = set()
-    for path in host_root.rglob("*"):
-        if path.is_dir():
-            continue
-        if any(part in _SKIP_DIRS for part in path.relative_to(host_root).parts):
-            continue
-        if path.suffix in _SKIP_SUFFIXES:
-            continue
-        found.add(path.relative_to(host_root).as_posix())
-    return found
+    unsafe: set[str] = set()
+    for dirpath, dirnames, filenames in os.walk(host_root, followlinks=False):
+        dirnames[:] = [name for name in dirnames if name not in _SKIP_DIRS]
+        for name in list(dirnames):
+            entry = Path(dirpath) / name
+            if entry.is_symlink():
+                unsafe.add(entry.relative_to(host_root).as_posix())
+                dirnames.remove(name)
+        for name in filenames:
+            entry = Path(dirpath) / name
+            relative = entry.relative_to(host_root).as_posix()
+            if entry.is_symlink() or not entry.is_file():
+                unsafe.add(relative)
+            elif entry.suffix in _SKIP_SUFFIXES:
+                continue
+            else:
+                found.add(relative)
+    return found, unsafe
+
+
+def _resolves_inside(target: Path, host_root: Path) -> bool:
+    try:
+        resolved = target.resolve()
+        base = host_root.resolve()
+    except OSError:
+        return False
+    return resolved == base or resolved.is_relative_to(base)
 
 
 def compare(host_root: Path, manifest: dict) -> dict:
@@ -103,9 +134,39 @@ def compare(host_root: Path, manifest: dict) -> dict:
             continue
         target = _host_path(host_root, host_path)
         expected.add(Path(host_path).as_posix())
-        if not target.is_file():
+        if target.is_symlink():
+            results.append(
+                {
+                    "path": repo_path,
+                    "host_path": host_path,
+                    "status": UNSAFE,
+                    "note": "symlink; never followed or hashed",
+                }
+            )
+            continue
+        if not target.exists():
             results.append(
                 {"path": repo_path, "host_path": host_path, "status": MISSING}
+            )
+            continue
+        if not target.is_file():
+            results.append(
+                {
+                    "path": repo_path,
+                    "host_path": host_path,
+                    "status": UNSAFE,
+                    "note": "not a regular file",
+                }
+            )
+            continue
+        if not _resolves_inside(target, host_root):
+            results.append(
+                {
+                    "path": repo_path,
+                    "host_path": host_path,
+                    "status": UNSAFE,
+                    "note": "resolves outside the host root; never read",
+                }
             )
             continue
         observed = sha256_of(target)
@@ -120,8 +181,18 @@ def compare(host_root: Path, manifest: dict) -> dict:
             }
         )
 
-    for extra in sorted(_walk_host_files(host_root) - expected):
+    present, unsafe = _walk_host(host_root)
+    for extra in sorted(present - expected):
         results.append({"path": "", "host_path": extra, "status": EXTRA})
+    for path_value in sorted(unsafe - expected):
+        results.append(
+            {
+                "path": "",
+                "host_path": path_value,
+                "status": UNSAFE,
+                "note": "symlink or non-regular file on host",
+            }
+        )
 
     drifted = [row for row in results if row["status"] != IN_SYNC]
     return {

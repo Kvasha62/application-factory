@@ -5,10 +5,18 @@ Run by the Running Platform owner **on the host** (migration step M1 of
 ``/srv/running-platform/cell``) and writes a reviewable bundle elsewhere —
 never into the cell root, never mutating a single byte of the host tree.
 
-Fail-closed by policy: any file whose content looks like a secret aborts the
-export before anything is copied.  Secrets, mutable runtime state and
-generated/runtime data are out of scope of the bundle by construction (see the
-classification in ``layer-r/README.md``).
+Fail-closed by policy.  The whole payload is scanned **before** anything is
+copied, and the export aborts without copying a single file if any violation
+is found:
+
+* secret-looking content (see ``scripts/layer_r_manifest.SECRET_PATTERNS``);
+* a symlink or other non-regular file anywhere in the payload (symlinks are
+  never followed and have no safe semantics here);
+* a file whose resolved path escapes the cell root;
+* a non-canonical relative path.
+
+Secrets, mutable runtime state and generated/runtime data are out of scope of
+the bundle by construction (see the classification in ``layer-r/README.md``).
 
 Usage::
 
@@ -27,12 +35,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from scripts.layer_r_manifest import SECRET_PATTERNS
+from scripts.layer_r_manifest import SECRET_PATTERNS, normalize_relative_path
 
 DEFAULT_INCLUDES = ("*.py", "*.json", "*.toml", "*.yaml", "*.yml", "*.md", "*.txt")
 SUGGESTED_CLASS_BY_SUFFIX = {
@@ -53,23 +62,57 @@ def _looks_like_secret(text: str) -> list[str]:
     return [name for name, pattern in SECRET_PATTERNS if pattern.search(text)]
 
 
-def collect(cell_root: Path, includes: tuple[str, ...]) -> list[str]:
-    """Relative POSIX paths of exportable files under ``cell_root``."""
-    found: list[str] = []
-    for path in sorted(cell_root.rglob("*")):
-        relative = path.relative_to(cell_root)
-        if any(part in _SKIP_DIRS for part in relative.parts):
-            continue
-        if not path.is_file() or path.suffix in _SKIP_SUFFIXES:
-            continue
-        if any(path.match(pattern) for pattern in includes):
-            found.append(relative.as_posix())
-    return found
+def _resolves_inside(target: Path, cell_root: Path) -> bool:
+    try:
+        resolved = target.resolve()
+        base = cell_root.resolve()
+    except OSError:
+        return False
+    return resolved == base or resolved.is_relative_to(base)
 
 
-def scan_for_secrets(cell_root: Path, relatives: list[str]) -> list[str]:
-    """Violation lines for every secret-looking or unreadable file (empty = clean)."""
-    violations: list[str] = []
+def collect(cell_root: Path, includes: tuple[str, ...]) -> tuple[list[str], list[str]]:
+    """(exportable files, unsafe paths) under ``cell_root``; no symlink followed.
+
+    Unsafe paths are symlinks (file or directory — the walk never descends
+    through them), non-regular files, and any entry that is not a canonical
+    relative path.  Paths are cell-root-relative POSIX strings.
+    """
+    files: list[str] = []
+    unsafe: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(cell_root, followlinks=False):
+        dirnames[:] = [name for name in dirnames if name not in _SKIP_DIRS]
+        for name in list(dirnames):
+            entry = Path(dirpath) / name
+            if entry.is_symlink():
+                unsafe.append(entry.relative_to(cell_root).as_posix())
+                dirnames.remove(name)
+        for name in filenames:
+            entry = Path(dirpath) / name
+            relative = entry.relative_to(cell_root).as_posix()
+            if entry.is_symlink() or not entry.is_file():
+                unsafe.append(relative)
+                continue
+            if entry.suffix in _SKIP_SUFFIXES:
+                continue
+            if normalize_relative_path(relative) is None:
+                unsafe.append(relative)
+                continue
+            if not _resolves_inside(entry, cell_root):
+                unsafe.append(relative)
+                continue
+            if any(entry.match(pattern) for pattern in includes):
+                files.append(relative)
+    return sorted(files), sorted(unsafe)
+
+
+def scan_payload(cell_root: Path, relatives: list[str], unsafe: list[str]) -> list[str]:
+    """Violation lines for the whole payload (empty = clean).  Nothing is copied."""
+    violations = [
+        f"{relative}: symlink or non-regular file; symlinks are never followed "
+        "and are refused in an export payload"
+        for relative in unsafe
+    ]
     for relative in relatives:
         target = cell_root / relative
         try:
@@ -107,8 +150,8 @@ def export(
         message = f"out {out_root} must not be inside the cell root {cell_root}"
         raise ExportRefused(message)
 
-    relatives = collect(cell_root, includes)
-    violations = scan_for_secrets(cell_root, relatives)
+    relatives, unsafe = collect(cell_root, includes)
+    violations = scan_payload(cell_root, relatives, unsafe)
     if violations:
         raise ExportRefused(
             "export refused; resolve these first:\n" + "\n".join(violations)

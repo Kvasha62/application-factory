@@ -58,6 +58,22 @@ missing files, non-UTF-8 content, unclassified files and secret-looking
 content. `scripts/layer_r_export_bundle.py` refuses to export anything
 secret-looking at all.
 
+## Path and symlink policy (enforced by all three tools)
+
+- Manifest `path` values must be canonical relative POSIX file paths under
+  exactly `layer-r/source/` or `layer-r/config/` — segment-wise, not
+  prefix-wise (`layer-r/source-evil/` does not match). Absolute paths, `..` /
+  `.` segments, empty segments, backslashes, drive letters, trailing slashes
+  and any non-canonical spelling are refused; duplicates after normalization
+  are impossible because ambiguous spellings are refused first.
+- Manifest `host_path` values (and every path the drift check touches) follow
+  the same canonical-relative rule under the host cell root.
+- **Symlinks and other non-regular files are forbidden** anywhere in
+  `layer-r/source`, `layer-r/config` and an export payload: nothing behind a
+  symlink is ever followed, hashed or copied, and a resolved path must stay
+  inside the expected root. The exporter aborts before copying a single file
+  on any violation; the drift check reports `unsafe` and stays read-only.
+
 ## Ownership rules (must hold for every future commit here)
 
 1. **Layer R stays owner-side.** Nothing in `src/deployment_operations` or

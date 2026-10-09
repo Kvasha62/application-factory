@@ -8,6 +8,16 @@ commit by definition: the manifest of that commit is the specification of the
 deployed bytes, and :mod:`scripts.layer_r_drift_check` compares the host
 against it without mutating anything.
 
+Path policy (fail-closed).  ``entry.path`` must be a canonical relative POSIX
+file path whose segments place it under exactly ``layer-r/source/`` or
+``layer-r/config/`` — absolute paths, ``..`` / ``.`` segments, empty segments,
+backslashes, trailing slashes, drive letters and any non-canonical spelling are
+rejected, and prefix siblings such as ``layer-r/source-evil/`` do not match.
+``entry.host_path`` is a canonical relative POSIX path under the host cell root
+(empty = pending import).  Symlinks and other non-regular files are forbidden
+anywhere in the tracked tree: they are never followed, and a resolved path must
+remain inside the repository root.
+
 Classification policy (see ``layer-r/README.md``): every tracked file carries
 an explicit class —
 
@@ -26,9 +36,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 MANIFEST_VERSION = 1
 DEFAULT_MANIFEST_PATH = "layer-r/SOURCE_MANIFEST.json"
@@ -51,6 +62,7 @@ SECRET_PATTERNS = (
     ),
 )
 
+_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 _SKIP_NAMES = {"__pycache__"}
 _SKIP_SUFFIXES = {".pyc"}
 
@@ -60,7 +72,7 @@ class ManifestError(Exception):
 
 
 def sha256_of(path: Path) -> str:
-    """Content identity of one file, read-only."""
+    """Content identity of one regular file, read-only."""
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(65536), b""):
@@ -73,23 +85,93 @@ def secret_findings(text: str) -> list[str]:
     return [name for name, pattern in SECRET_PATTERNS if pattern.search(text)]
 
 
-def _is_tracked_candidate(path: Path) -> bool:
-    if path.name in _SKIP_NAMES or path.suffix in _SKIP_SUFFIXES:
-        return False
-    return path.is_file()
+def normalize_relative_path(value: object) -> str | None:
+    """The canonical POSIX relative form of ``value``, or ``None`` if unsafe.
+
+    Rejects: non-strings, empty strings, NUL, backslashes (a path separator on
+    some hosts — ambiguous here), absolute paths, Windows drive letters, empty
+    segments, ``.`` and ``..`` segments, trailing slashes, and any spelling
+    that is not its own canonical form (``a//b``, ``a/./b``, …).  An accepted
+    value therefore names exactly one location, which is what makes
+    string-equality duplicate detection sound.
+    """
+    if not isinstance(value, str) or not value or "\x00" in value:
+        return None
+    if "\\" in value:
+        return None
+    if value.startswith("/") or _WINDOWS_DRIVE_RE.match(value):
+        return None
+    if value.endswith("/"):
+        return None
+    parts = value.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        return None
+    canonical = PurePosixPath(value).as_posix()
+    if canonical != value:
+        return None
+    return canonical
+
+
+def validate_tracked_path(value: object) -> str | None:
+    """``value`` as a canonical manifest path under a tracked root, else ``None``.
+
+    Segment-wise, not prefix-wise: ``layer-r/source-evil/file.py`` is rejected
+    even though it shares the ``layer-r/source`` prefix.
+    """
+    canonical = normalize_relative_path(value)
+    if canonical is None:
+        return None
+    parts = canonical.split("/")
+    if len(parts) < 3:
+        return None
+    if parts[0] != "layer-r" or parts[1] not in ("source", "config"):
+        return None
+    return canonical
+
+
+def scan_tracked(root: Path) -> tuple[list[str], list[str]]:
+    """(regular files, unsafe paths) under the tracked roots.
+
+    Nothing behind a symlink is ever followed: a symlink — file or directory —
+    is reported as unsafe and the walk does not descend through it.  Non-regular
+    entries (fifos, sockets, devices) are unsafe too.  Paths are root-relative
+    POSIX strings.
+    """
+    files: list[str] = []
+    unsafe: list[str] = []
+    layer_r = root / "layer-r"
+    if layer_r.is_symlink():
+        unsafe.append("layer-r")
+        return files, sorted(unsafe)
+    for tracked in TRACKED_ROOTS:
+        base = root / tracked
+        if base.is_symlink():
+            unsafe.append(tracked)
+            continue
+        if not base.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+            dirnames[:] = [name for name in dirnames if name not in _SKIP_NAMES]
+            for name in list(dirnames):
+                entry = Path(dirpath) / name
+                if entry.is_symlink():
+                    unsafe.append(entry.relative_to(root).as_posix())
+                    dirnames.remove(name)
+            for name in filenames:
+                entry = Path(dirpath) / name
+                relative = entry.relative_to(root).as_posix()
+                if entry.suffix in _SKIP_SUFFIXES:
+                    continue
+                if entry.is_symlink() or not entry.is_file():
+                    unsafe.append(relative)
+                else:
+                    files.append(relative)
+    return sorted(files), sorted(unsafe)
 
 
 def tree_files(root: Path) -> list[str]:
-    """Every regular file under the tracked roots, as root-relative POSIX paths."""
-    found: list[str] = []
-    for tracked in TRACKED_ROOTS:
-        base = root / tracked
-        if not base.is_dir():
-            continue
-        for path in sorted(base.rglob("*")):
-            if _is_tracked_candidate(path):
-                found.append(path.relative_to(root).as_posix())
-    return sorted(found)
+    """Every regular non-symlink file under the tracked roots (root-relative)."""
+    return scan_tracked(root)[0]
 
 
 def load_manifest(path: Path) -> dict:
@@ -112,9 +194,12 @@ def _entry_errors(entry: object) -> list[str]:
     path_value = entry.get("path")
     if not isinstance(path_value, str) or not path_value:
         return ["entry.path is required"]
-    if not path_value.startswith(TRACKED_ROOTS):
+    if validate_tracked_path(path_value) is None:
         errors.append(
-            f"{path_value}: entry.path must live under one of {TRACKED_ROOTS}"
+            f"{path_value}: entry.path must be a canonical relative POSIX file "
+            "path under 'layer-r/source/' or 'layer-r/config/'; absolute paths, "
+            "'.', '..', empty segments, backslashes and non-canonical spellings "
+            "are refused"
         )
     digest = entry.get("sha256")
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
@@ -129,16 +214,26 @@ def _entry_errors(entry: object) -> list[str]:
     host_path = entry.get("host_path")
     if not isinstance(host_path, str):
         errors.append(f"{path_value}: entry.host_path must be a string")
-    else:
-        host = Path(host_path)
-        if host.is_absolute() or ".." in host.parts:
-            errors.append(
-                f"{path_value}: entry.host_path must be relative to the host "
-                "cell root and must not contain '..'"
-            )
+    elif host_path and normalize_relative_path(host_path) is None:
+        errors.append(
+            f"{path_value}: entry.host_path must be a canonical relative POSIX "
+            "path under the host cell root (or '' while pending import); "
+            "absolute paths, '..', backslashes and non-canonical spellings "
+            "are refused"
+        )
     if not isinstance(entry.get("origin"), str) or not entry.get("origin"):
         errors.append(f"{path_value}: entry.origin is required")
     return errors
+
+
+def _resolves_inside(target: Path, root: Path) -> bool:
+    """True when ``target`` resolves to a location inside ``root``."""
+    try:
+        resolved = target.resolve()
+        base = root.resolve()
+    except OSError:
+        return False
+    return resolved == base or resolved.is_relative_to(base)
 
 
 def verify_tree(root: Path, manifest: dict) -> list[str]:
@@ -163,14 +258,36 @@ def verify_tree(root: Path, manifest: dict) -> list[str]:
                     errors.append(f"{path_value}: duplicate manifest entry")
                 seen.add(path_value)
 
+    files, unsafe = scan_tracked(root)
+    for path_value in unsafe:
+        if path_value not in seen:
+            errors.append(
+                f"{path_value}: symlinks and non-regular files are forbidden "
+                "in the Layer R tree (nothing behind a symlink is followed)"
+            )
+
     for path_value in sorted(seen):
         target = root / path_value
         entry = next(
             (e for e in entries if isinstance(e, dict) and e.get("path") == path_value),
             None,
         )
-        if not target.is_file():
+        if target.is_symlink():
+            errors.append(
+                f"{path_value}: is a symlink; symlinks are forbidden in the "
+                "Layer R tree and are never hashed"
+            )
+            continue
+        if not target.exists():
             errors.append(f"{path_value}: listed in the manifest but missing")
+            continue
+        if not target.is_file():
+            errors.append(f"{path_value}: not a regular file")
+            continue
+        if not _resolves_inside(target, root):
+            errors.append(
+                f"{path_value}: resolves outside the repository root and is refused"
+            )
             continue
         if entry is None:
             continue
@@ -193,7 +310,7 @@ def verify_tree(root: Path, manifest: dict) -> list[str]:
         for finding in secret_findings(text):
             errors.append(f"{path_value}: secret-looking content ({finding})")
 
-    for path_value in tree_files(root):
+    for path_value in files:
         if path_value not in seen:
             errors.append(f"{path_value}: present in the tree but not in the manifest")
     return errors
@@ -211,7 +328,8 @@ def generate_manifest(
 
     Class, ``host_path`` and ``origin`` of previously listed files are carried
     over.  A new file takes its class from ``class_for`` or ``default_class``;
-    without either, generation fails closed rather than guessing.
+    without either, generation fails closed rather than guessing.  Symlinks and
+    non-regular files are refused outright — they have no safe semantics here.
     """
     class_for = class_for or {}
     known: dict[str, dict] = {}
@@ -220,8 +338,16 @@ def generate_manifest(
             if isinstance(entry, dict) and isinstance(entry.get("path"), str):
                 known[entry["path"]] = entry
 
+    paths, unsafe = scan_tracked(root)
+    if unsafe:
+        message = (
+            "symlinks and non-regular files are forbidden in the Layer R tree: "
+            + ", ".join(unsafe)
+        )
+        raise ManifestError(message)
+
     entries: list[dict] = []
-    for path_value in tree_files(root):
+    for path_value in paths:
         prior = known.get(path_value)
         if prior is not None:
             classification = str(prior.get("class"))
