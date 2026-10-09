@@ -334,6 +334,82 @@ class TestSymlinkPolicy:
         assert statuses(report)["redirect/cell.py"] == UNSAFE
         assert report["in_sync"] is False
 
+    def test_compare_refuses_symlinked_host_root_before_hashing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Review finding: the supplied host root itself is a symlink to a dir."""
+        real = tmp_path / "real-host"
+        real.mkdir()
+        secret = 'SERVICE_TOKEN = "abcdef0123456789"\n'
+        (real / "cell.py").write_text(secret, encoding="utf-8")
+        host_root = tmp_path / "host-root"
+        host_root.symlink_to(real, target_is_directory=True)
+        manifest = {
+            "manifest_version": 1,
+            "entries": [
+                {
+                    "path": "layer-r/source/cell.py",
+                    # Matches the real content: had anything been walked and
+                    # hashed through the root link, the entry would verify.
+                    "sha256": hashlib.sha256(secret.encode()).hexdigest(),
+                    "class": "source",
+                    "host_path": "cell.py",
+                    "origin": "tests",
+                }
+            ],
+        }
+
+        def fail(*args: object, **kwargs: object) -> object:
+            raise AssertionError("host root symlink was followed")
+
+        monkeypatch.setattr("scripts.layer_r_drift_check._walk_host", fail)
+        monkeypatch.setattr("scripts.layer_r_drift_check.sha256_of", fail)
+        with pytest.raises(DriftCheckError, match="symlink") as excinfo:
+            compare(host_root, manifest)
+        message = str(excinfo.value)
+        assert "walked, read or hashed" in message
+        assert "secret-looking" not in message
+
+    def test_verify_refuses_symlinked_tree_root(self, tmp_path: Path) -> None:
+        """Review finding: the supplied tree root itself is a symlink to a dir."""
+        real = tmp_path / "real-tree"
+        build_tree(real)
+        secret = 'SERVICE_TOKEN = "abcdef0123456789"\n'
+        (real / "layer-r" / "source" / "cell.py").write_text(secret, encoding="utf-8")
+        manifest = classed(real)  # hashes generated over the real tree
+        root_link = tmp_path / "tree-root"
+        root_link.symlink_to(real, target_is_directory=True)
+        errors = verify_tree(root_link, manifest)
+        assert any("<root>" in error for error in errors)
+        assert any("symlink" in error for error in errors)
+        # Proves the content behind the root link was never read: reading it
+        # would flag the secret-looking content (its hash matches the manifest).
+        assert not any("secret-looking" in error for error in errors)
+
+    def test_generate_refuses_symlinked_root(self, tmp_path: Path) -> None:
+        real = tmp_path / "real-tree"
+        build_tree(real)
+        root_link = tmp_path / "tree-root"
+        root_link.symlink_to(real, target_is_directory=True)
+        with pytest.raises(ManifestError, match="symlinks"):
+            generate_manifest(root_link, class_for={"layer-r/source/cell.py": "source"})
+
+    def test_collect_and_export_refuse_symlinked_cell_root(
+        self, tmp_path: Path
+    ) -> None:
+        real = tmp_path / "real-cell"
+        (real / "layer-r" / "source").mkdir(parents=True)
+        (real / "layer-r" / "source" / "cell.py").write_text(
+            'SERVICE_TOKEN = "abcdef0123456789"\n', encoding="utf-8"
+        )
+        cell_root = tmp_path / "cell-root"
+        cell_root.symlink_to(real, target_is_directory=True)
+        files, unsafe = collect(cell_root, ("layer-r/source",))
+        assert files == []
+        assert unsafe == ["<root>"]
+        with pytest.raises(ExportRefused, match="symlink"):
+            export(cell_root, tmp_path / "out")
+
 
 class TestDriftCheck:
     def _pair(self, tmp_path: Path) -> tuple[Path, dict]:

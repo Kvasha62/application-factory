@@ -46,6 +46,9 @@ DEFAULT_MANIFEST_PATH = "layer-r/SOURCE_MANIFEST.json"
 TRACKED_ROOTS = ("layer-r/source", "layer-r/config")
 ALLOWED_CLASSES = ("source", "deployable-configuration", "host-specific-template")
 
+#: Marker name under which ``symlinked_components`` reports a symlinked root.
+ROOT_MARKER = "<root>"
+
 #: Content that must never appear in any tracked file.  These patterns are a
 #: last line of defense, not a substitute for review: export refuses the file
 #: first (``scripts/layer_r_export_bundle.py``), this catches later edits.
@@ -134,11 +137,19 @@ def scan_tracked(root: Path) -> tuple[list[str], list[str]]:
 
     Nothing behind a symlink is ever followed: a symlink — file or directory —
     is reported as unsafe and the walk does not descend through it.  Non-regular
-    entries (fifos, sockets, devices) are unsafe too.  Paths are root-relative
-    POSIX strings.
+    entries (fifos, sockets, devices) are unsafe too.  A symlinked ``root``
+    itself is refused before any walk and reported as ``ROOT_MARKER``.  Paths
+    are root-relative POSIX strings.
     """
     files: list[str] = []
     unsafe: list[str] = []
+    if root.is_symlink():
+        # The supplied root itself must not be a symlink: every path under it
+        # would be reached through a symlinked directory.  Refuse before any
+        # walk — ``os.walk`` and ``is_dir``/``is_symlink`` on children would
+        # follow the root link while resolving intermediate components.
+        unsafe.append(ROOT_MARKER)
+        return files, sorted(unsafe)
     layer_r = root / "layer-r"
     if layer_r.is_symlink():
         unsafe.append("layer-r")
@@ -237,21 +248,26 @@ def _resolves_inside(target: Path, root: Path) -> bool:
 
 
 def symlinked_components(target: Path, root: Path) -> list[str]:
-    """Root-relative names of symlinked components between ``root`` and ``target``.
+    """Root-relative names of symlinked components on the way to ``target``.
 
-    Checks **every** component of the path — the intermediate directories
-    included — without following any of them: a target reached through a
-    symlinked directory is refused even when that directory resolves inside
-    the trusted root.  ``target.is_symlink()`` alone is not enough (it inspects
-    only the final component) and ``resolve().is_relative_to()`` alone is not
-    enough (an in-root redirect passes it).  The final component is included,
-    so this subsumes a plain "target is a symlink" check.
+    The supplied ``root`` itself is inspected first and reported as
+    ``ROOT_MARKER`` when it is a symlink — every path under a symlinked root is
+    reached through a symlink and is refused.  Otherwise **every** component
+    below the root — the intermediate directories included — is checked without
+    following any of them: a target reached through a symlinked directory is
+    refused even when that directory resolves inside the trusted root.
+    ``target.is_symlink()`` alone is not enough (it inspects only the final
+    component) and ``resolve().is_relative_to()`` alone is not enough (an
+    in-root redirect passes it).  The final component is included, so this
+    subsumes a plain "target is a symlink" check.
     """
+    found: list[str] = []
+    if root.is_symlink():
+        found.append(ROOT_MARKER)
     try:
         relative = target.relative_to(root)
     except ValueError:
-        return [str(target)]
-    found: list[str] = []
+        return found + [str(target)]
     current = root
     for part in relative.parts:
         current = current / part

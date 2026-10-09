@@ -104,6 +104,14 @@ def _resolves_inside(target: Path, host_root: Path) -> bool:
 
 def compare(host_root: Path, manifest: dict) -> dict:
     """Compare ``host_root`` against ``manifest``; read-only by construction."""
+    if host_root.is_symlink():
+        # ``is_dir`` would follow the root link and the walk below would read
+        # and hash through it.  The supplied root itself must not be a symlink.
+        message = (
+            f"host root {host_root} is a symlink; nothing behind it "
+            "is ever walked, read or hashed"
+        )
+        raise DriftCheckError(message)
     if not host_root.is_dir():
         message = f"host root {host_root} is not a directory"
         raise DriftCheckError(message)

@@ -42,6 +42,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from scripts.layer_r_manifest import (
+    ROOT_MARKER,
     SECRET_PATTERNS,
     normalize_relative_path,
     symlinked_components,
@@ -80,10 +81,17 @@ def collect(cell_root: Path, includes: tuple[str, ...]) -> tuple[list[str], list
 
     Unsafe paths are symlinks (file or directory — the walk never descends
     through them), non-regular files, and any entry that is not a canonical
-    relative path.  Paths are cell-root-relative POSIX strings.
+    relative path.  A symlinked ``cell_root`` itself is refused before any
+    walk and reported as ``ROOT_MARKER``.  Paths are cell-root-relative POSIX
+    strings.
     """
     files: list[str] = []
     unsafe: list[str] = []
+    if cell_root.is_symlink():
+        # A symlinked cell root would redirect the whole walk through a
+        # symlink.  Refuse before walking anything (reported as ROOT_MARKER).
+        unsafe.append(ROOT_MARKER)
+        return sorted(files), sorted(unsafe)
     for dirpath, dirnames, filenames in os.walk(cell_root, followlinks=False):
         dirnames[:] = [name for name in dirnames if name not in _SKIP_DIRS]
         for name in list(dirnames):
@@ -148,6 +156,14 @@ def export(
     export before any copy happens.  Nothing is ever written under
     ``cell_root``; ``out_root`` must not live inside it.
     """
+    if cell_root.is_symlink():
+        # ``is_dir`` would follow the link and everything below would be read
+        # through it.  The supplied cell root itself must not be a symlink.
+        message = (
+            f"cell root {cell_root} is a symlink; nothing behind it "
+            "is ever walked, read or copied"
+        )
+        raise ExportRefused(message)
     if not cell_root.is_dir():
         message = f"cell root {cell_root} is not a directory"
         raise ExportRefused(message)
