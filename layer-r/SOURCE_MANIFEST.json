@@ -1,0 +1,9 @@
+{
+  "entries": [],
+  "layer_r_tree": "layer-r",
+  "manifest_version": 1,
+  "tracked_roots": [
+    "layer-r/source",
+    "layer-r/config"
+  ]
+}
