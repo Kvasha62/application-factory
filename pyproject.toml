@@ -5,6 +5,7 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115.0",
     "pydantic>=2.9.0",
+    "httpx2==2.13.1",
 ]
 
 [project.optional-dependencies]
@@ -14,7 +15,6 @@ dev = [
     "pytest>=8.3.0",
     "ruff==0.16.6",
     "black==26.5.1",
-    "httpx2==2.13.1",
 ]
 
 [tool.pytest.ini_options]
