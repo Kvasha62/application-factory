@@ -34,7 +34,11 @@ import os
 import sys
 from pathlib import Path
 
-from scripts.layer_r_manifest import normalize_relative_path, symlinked_components
+from scripts.layer_r_manifest import (
+    normalize_relative_path,
+    symlinked_components,
+    symlinked_path_components,
+)
 
 IN_SYNC = "in-sync"
 CHANGED = "changed"
@@ -104,11 +108,15 @@ def _resolves_inside(target: Path, host_root: Path) -> bool:
 
 def compare(host_root: Path, manifest: dict) -> dict:
     """Compare ``host_root`` against ``manifest``; read-only by construction."""
-    if host_root.is_symlink():
-        # ``is_dir`` would follow the root link and the walk below would read
-        # and hash through it.  The supplied root itself must not be a symlink.
+    linked = symlinked_path_components(host_root)
+    if linked:
+        # ``is_symlink``/``is_dir`` inspect only the final component (and
+        # ``is_dir`` follows even that).  A root reached through a symlink —
+        # itself or a symlinked ancestor — would redirect the whole walk,
+        # read and hash through the link.  Refuse before any of that.
         message = (
-            f"host root {host_root} is a symlink; nothing behind it "
+            f"host root {host_root} is reached through symlinked "
+            f"component(s) {', '.join(linked)}; nothing behind it "
             "is ever walked, read or hashed"
         )
         raise DriftCheckError(message)

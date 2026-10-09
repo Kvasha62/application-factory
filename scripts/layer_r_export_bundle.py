@@ -46,6 +46,7 @@ from scripts.layer_r_manifest import (
     SECRET_PATTERNS,
     normalize_relative_path,
     symlinked_components,
+    symlinked_path_components,
 )
 
 DEFAULT_INCLUDES = ("*.py", "*.json", "*.toml", "*.yaml", "*.yml", "*.md", "*.txt")
@@ -81,15 +82,16 @@ def collect(cell_root: Path, includes: tuple[str, ...]) -> tuple[list[str], list
 
     Unsafe paths are symlinks (file or directory — the walk never descends
     through them), non-regular files, and any entry that is not a canonical
-    relative path.  A symlinked ``cell_root`` itself is refused before any
-    walk and reported as ``ROOT_MARKER``.  Paths are cell-root-relative POSIX
-    strings.
+    relative path.  A ``cell_root`` reached through a symlink — the root
+    itself or any ancestor — is refused before any walk and reported as
+    ``ROOT_MARKER``.  Paths are cell-root-relative POSIX strings.
     """
     files: list[str] = []
     unsafe: list[str] = []
-    if cell_root.is_symlink():
-        # A symlinked cell root would redirect the whole walk through a
-        # symlink.  Refuse before walking anything (reported as ROOT_MARKER).
+    if symlinked_path_components(cell_root):
+        # A cell root reached through a symlink — itself or a symlinked
+        # ancestor — would redirect the whole walk through the link.  Refuse
+        # before walking anything (reported as ROOT_MARKER).
         unsafe.append(ROOT_MARKER)
         return sorted(files), sorted(unsafe)
     for dirpath, dirnames, filenames in os.walk(cell_root, followlinks=False):
@@ -156,11 +158,15 @@ def export(
     export before any copy happens.  Nothing is ever written under
     ``cell_root``; ``out_root`` must not live inside it.
     """
-    if cell_root.is_symlink():
-        # ``is_dir`` would follow the link and everything below would be read
-        # through it.  The supplied cell root itself must not be a symlink.
+    linked = symlinked_path_components(cell_root)
+    if linked:
+        # ``is_symlink``/``is_dir`` inspect only the final component (and
+        # ``is_dir`` follows even that).  A root reached through a symlink —
+        # itself or a symlinked ancestor — would redirect every read and copy
+        # through the link.  Refuse before any of that.
         message = (
-            f"cell root {cell_root} is a symlink; nothing behind it "
+            f"cell root {cell_root} is reached through symlinked "
+            f"component(s) {', '.join(linked)}; nothing behind it "
             "is ever walked, read or copied"
         )
         raise ExportRefused(message)

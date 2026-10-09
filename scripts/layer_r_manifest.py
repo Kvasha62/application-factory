@@ -137,17 +137,19 @@ def scan_tracked(root: Path) -> tuple[list[str], list[str]]:
 
     Nothing behind a symlink is ever followed: a symlink — file or directory —
     is reported as unsafe and the walk does not descend through it.  Non-regular
-    entries (fifos, sockets, devices) are unsafe too.  A symlinked ``root``
-    itself is refused before any walk and reported as ``ROOT_MARKER``.  Paths
-    are root-relative POSIX strings.
+    entries (fifos, sockets, devices) are unsafe too.  A ``root`` reached
+    through a symlink — the root itself or any ancestor — is refused before
+    any walk and reported as ``ROOT_MARKER``.  Paths are root-relative POSIX
+    strings.
     """
     files: list[str] = []
     unsafe: list[str] = []
-    if root.is_symlink():
-        # The supplied root itself must not be a symlink: every path under it
-        # would be reached through a symlinked directory.  Refuse before any
-        # walk — ``os.walk`` and ``is_dir``/``is_symlink`` on children would
-        # follow the root link while resolving intermediate components.
+    if symlinked_path_components(root):
+        # The supplied root path must not be reached through a symlink — the
+        # root itself or any ancestor of it.  Every path under it would be
+        # reached through a symlinked directory.  Refuse before any walk —
+        # ``os.walk`` and ``is_dir``/``is_symlink`` on children would follow
+        # the link while resolving intermediate components.
         unsafe.append(ROOT_MARKER)
         return files, sorted(unsafe)
     layer_r = root / "layer-r"
@@ -247,12 +249,38 @@ def _resolves_inside(target: Path, root: Path) -> bool:
     return resolved == base or resolved.is_relative_to(base)
 
 
+def symlinked_path_components(path: Path) -> list[str]:
+    """Symlinked components of the supplied ``path`` — anchor through final.
+
+    ``Path.is_symlink()`` inspects only the final component: a root supplied
+    *through* a symlinked parent directory (``/tmp/link/cell`` where
+    ``/tmp/link`` is a symlink) is reached via a symlink like any other path.
+    Every component of the path **as spelled** is checked without following
+    any of them.  For a relative path the process working directory is the
+    anchor and is not itself inspected — the policy covers the spelling the
+    caller supplied.  Returned strings name the offending components.
+    """
+    found: list[str] = []
+    if path.is_absolute():
+        current = Path(path.anchor)
+        remaining = path.parts[1:]
+    else:
+        current = Path(".")
+        remaining = path.parts
+    for part in remaining:
+        current = current / part
+        if current.is_symlink():
+            found.append(current.as_posix())
+    return found
+
+
 def symlinked_components(target: Path, root: Path) -> list[str]:
     """Root-relative names of symlinked components on the way to ``target``.
 
-    The supplied ``root`` itself is inspected first and reported as
-    ``ROOT_MARKER`` when it is a symlink — every path under a symlinked root is
-    reached through a symlink and is refused.  Otherwise **every** component
+    The supplied ``root`` itself is inspected first — together with its own
+    ancestors, via :func:`symlinked_path_components` — and reported as
+    ``ROOT_MARKER`` when the root path is reached through a symlink: every
+    path under such a root is refused.  Otherwise **every** component
     below the root — the intermediate directories included — is checked without
     following any of them: a target reached through a symlinked directory is
     refused even when that directory resolves inside the trusted root.
@@ -262,7 +290,7 @@ def symlinked_components(target: Path, root: Path) -> list[str]:
     subsumes a plain "target is a symlink" check.
     """
     found: list[str] = []
-    if root.is_symlink():
+    if symlinked_path_components(root):
         found.append(ROOT_MARKER)
     try:
         relative = target.relative_to(root)

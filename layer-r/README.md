@@ -73,11 +73,14 @@ secret-looking at all.
   symlink is ever followed, hashed or copied, and a resolved path must stay
   inside the expected root. The exporter aborts before copying a single file
   on any violation; the drift check reports `unsafe` and stays read-only.
-- **The supplied root itself must not be a symlink** — the tree root, the
-  drift-check host root and the export cell root alike. A symlinked root is
-  refused *before* any walk, read or hash (`is_dir` alone would follow the
-  link): `verify`/`generate` report it as `<root>`, the drift check raises
-  `DriftCheckError`, and the exporter raises `ExportRefused`. Symlinked
+- **The supplied root path must not be reached through any symlink** — the
+  tree root, the drift-check host root and the export cell root alike. Every
+  component of the supplied path, from its filesystem anchor (the working
+  directory, for a relative path) through the root itself, is checked; a
+  symlinked *ancestor* of the root is refused just like a symlinked root.
+  Refusal happens *before* any walk, read, hash or copy (`is_dir` alone would
+  follow the link): `verify`/`generate` report it as `<root>`, the drift check
+  raises `DriftCheckError`, and the exporter raises `ExportRefused`. Symlinked
   *tracked roots* (`layer-r/source`, `layer-r/config`) are refused the same
   way.
 

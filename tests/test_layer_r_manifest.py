@@ -410,6 +410,92 @@ class TestSymlinkPolicy:
         with pytest.raises(ExportRefused, match="symlink"):
             export(cell_root, tmp_path / "out")
 
+    def test_compare_refuses_host_root_behind_symlinked_parent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Review finding: a symlinked ANCESTOR of the supplied host root."""
+        real_parent = tmp_path / "real-parent"
+        (real_parent / "cell").mkdir(parents=True)
+        secret = 'SERVICE_TOKEN = "abcdef0123456789"\n'
+        (real_parent / "cell" / "cell.py").write_text(secret, encoding="utf-8")
+        (tmp_path / "root-parent").symlink_to(real_parent, target_is_directory=True)
+        host_root = tmp_path / "root-parent" / "cell"
+        manifest = {
+            "manifest_version": 1,
+            "entries": [
+                {
+                    "path": "layer-r/source/cell.py",
+                    # Matches the real content: had anything been walked and
+                    # hashed through the ancestor link, the entry would verify.
+                    "sha256": hashlib.sha256(secret.encode()).hexdigest(),
+                    "class": "source",
+                    "host_path": "cell.py",
+                    "origin": "tests",
+                }
+            ],
+        }
+
+        def fail(*args: object, **kwargs: object) -> object:
+            raise AssertionError("symlinked ancestor of the host root was followed")
+
+        monkeypatch.setattr("scripts.layer_r_drift_check._walk_host", fail)
+        monkeypatch.setattr("scripts.layer_r_drift_check.sha256_of", fail)
+        with pytest.raises(DriftCheckError, match="symlink") as excinfo:
+            compare(host_root, manifest)
+        message = str(excinfo.value)
+        assert "walked, read or hashed" in message
+        assert "root-parent" in message  # the symlinked ancestor is named
+        assert "secret-looking" not in message
+
+    def test_verify_refuses_tree_root_behind_symlinked_parent(
+        self, tmp_path: Path
+    ) -> None:
+        real_parent = tmp_path / "real-parent"
+        (real_parent / "tree" / "layer-r" / "source").mkdir(parents=True)
+        secret = 'SERVICE_TOKEN = "abcdef0123456789"\n'
+        (real_parent / "tree" / "layer-r" / "source" / "cell.py").write_text(
+            secret, encoding="utf-8"
+        )
+        manifest = generate_manifest(
+            real_parent / "tree", class_for={"layer-r/source/cell.py": "source"}
+        )
+        (tmp_path / "root-parent").symlink_to(real_parent, target_is_directory=True)
+        root_link = tmp_path / "root-parent" / "tree"
+        errors = verify_tree(root_link, manifest)
+        assert any("<root>" in error for error in errors)
+        assert any("symlink" in error for error in errors)
+        # Proves the content behind the ancestor link was never read: reading
+        # it would flag the secret-looking content (hash matches the manifest).
+        assert not any("secret-looking" in error for error in errors)
+
+    def test_generate_refuses_root_behind_symlinked_parent(
+        self, tmp_path: Path
+    ) -> None:
+        real_parent = tmp_path / "real-parent"
+        build_tree(real_parent / "tree")
+        (tmp_path / "root-parent").symlink_to(real_parent, target_is_directory=True)
+        root_link = tmp_path / "root-parent" / "tree"
+        with pytest.raises(ManifestError, match="symlinks"):
+            generate_manifest(root_link, class_for={"layer-r/source/cell.py": "source"})
+
+    def test_export_refuses_cell_root_behind_symlinked_parent(
+        self, tmp_path: Path
+    ) -> None:
+        real_parent = tmp_path / "real-parent"
+        (real_parent / "cell" / "layer-r" / "source").mkdir(parents=True)
+        (real_parent / "cell" / "layer-r" / "source" / "cell.py").write_text(
+            'SERVICE_TOKEN = "abcdef0123456789"\n', encoding="utf-8"
+        )
+        (tmp_path / "root-parent").symlink_to(real_parent, target_is_directory=True)
+        cell_root = tmp_path / "root-parent" / "cell"
+        files, unsafe = collect(cell_root, ("layer-r/source",))
+        assert files == []
+        assert unsafe == ["<root>"]
+        out = tmp_path / "out"
+        with pytest.raises(ExportRefused, match="symlink"):
+            export(cell_root, out)
+        assert not out.exists()  # nothing was copied or even prepared
+
 
 class TestDriftCheck:
     def _pair(self, tmp_path: Path) -> tuple[Path, dict]:
