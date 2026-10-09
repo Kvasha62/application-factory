@@ -43,6 +43,36 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
+      - name: Verify production-only TestClient dependency and probes
+        run: |
+          python -m venv /tmp/application-factory-runtime-venv
+          /tmp/application-factory-runtime-venv/bin/python -m pip install --upgrade pip
+          /tmp/application-factory-runtime-venv/bin/python -m pip install .
+          /tmp/application-factory-runtime-venv/bin/python - <<'PY'
+          from fastapi import FastAPI
+          from fastapi.testclient import TestClient
+
+          app = FastAPI()
+
+          @app.get("/health")
+          def health():
+              return {"status": "ok"}
+
+          @app.get("/ready")
+          def ready():
+              return {"status": "ready"}
+
+          with TestClient(app) as client:
+              health = client.get("/health")
+              ready = client.get("/ready")
+              assert health.status_code == 200, health.text
+              assert health.json() == {"status": "ok"}, health.text
+              assert ready.status_code == 200, ready.text
+              assert ready.json() == {"status": "ready"}, ready.text
+
+          print("Production-only TestClient and health/readiness probes: OK")
+          PY
+
       - name: Dependency check (machine-verifiable, ARCHITECTURE.md §27)
         run: |
           python -m pip install pip-audit==2.10.1
