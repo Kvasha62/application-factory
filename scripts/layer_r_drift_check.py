@@ -34,7 +34,7 @@ import os
 import sys
 from pathlib import Path
 
-from scripts.layer_r_manifest import normalize_relative_path
+from scripts.layer_r_manifest import normalize_relative_path, symlinked_components
 
 IN_SYNC = "in-sync"
 CHANGED = "changed"
@@ -134,13 +134,17 @@ def compare(host_root: Path, manifest: dict) -> dict:
             continue
         target = _host_path(host_root, host_path)
         expected.add(Path(host_path).as_posix())
-        if target.is_symlink():
+        linked = symlinked_components(target, host_root)
+        if linked:
             results.append(
                 {
                     "path": repo_path,
                     "host_path": host_path,
                     "status": UNSAFE,
-                    "note": "symlink; never followed or hashed",
+                    "note": (
+                        "reached through symlinked component(s) "
+                        f"{', '.join(linked)}; never followed or hashed"
+                    ),
                 }
             )
             continue

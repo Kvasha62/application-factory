@@ -236,6 +236,30 @@ def _resolves_inside(target: Path, root: Path) -> bool:
     return resolved == base or resolved.is_relative_to(base)
 
 
+def symlinked_components(target: Path, root: Path) -> list[str]:
+    """Root-relative names of symlinked components between ``root`` and ``target``.
+
+    Checks **every** component of the path — the intermediate directories
+    included — without following any of them: a target reached through a
+    symlinked directory is refused even when that directory resolves inside
+    the trusted root.  ``target.is_symlink()`` alone is not enough (it inspects
+    only the final component) and ``resolve().is_relative_to()`` alone is not
+    enough (an in-root redirect passes it).  The final component is included,
+    so this subsumes a plain "target is a symlink" check.
+    """
+    try:
+        relative = target.relative_to(root)
+    except ValueError:
+        return [str(target)]
+    found: list[str] = []
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            found.append(current.relative_to(root).as_posix())
+    return found
+
+
 def verify_tree(root: Path, manifest: dict) -> list[str]:
     """All policy violations of ``root`` against ``manifest`` (empty = conforming)."""
     errors: list[str] = []
@@ -272,10 +296,12 @@ def verify_tree(root: Path, manifest: dict) -> list[str]:
             (e for e in entries if isinstance(e, dict) and e.get("path") == path_value),
             None,
         )
-        if target.is_symlink():
+        linked = symlinked_components(target, root)
+        if linked:
             errors.append(
-                f"{path_value}: is a symlink; symlinks are forbidden in the "
-                "Layer R tree and are never hashed"
+                f"{path_value}: reached through symlinked component(s) "
+                f"{', '.join(linked)}; symlinks are forbidden in the Layer R "
+                "tree and nothing behind them is ever hashed or read"
             )
             continue
         if not target.exists():

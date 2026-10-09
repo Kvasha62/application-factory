@@ -11,6 +11,7 @@ evidence is produced here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -287,6 +288,51 @@ class TestSymlinkPolicy:
         (tmp_path / "layer-r" / "source" / "cell.py").symlink_to("other.py")
         errors = verify_tree(tmp_path, manifest)
         assert any("symlink" in error for error in errors)
+
+    def test_verify_refuses_entry_behind_in_root_symlinked_directory(
+        self, tmp_path: Path
+    ) -> None:
+        """Review finding: an intermediate symlink to an IN-ROOT directory."""
+        repo = tmp_path / "repo"
+        build_tree(repo)
+        real = repo / "layer-r" / "source" / "real"
+        real.mkdir()
+        (real / "file.py").write_text(
+            'SERVICE_TOKEN = "abcdef0123456789"\n', encoding="utf-8"
+        )
+        (repo / "layer-r" / "source" / "redirect").symlink_to(
+            real, target_is_directory=True
+        )
+        manifest = bad_path_manifest("layer-r/source/redirect/file.py")
+        errors = verify_tree(repo, manifest)
+        assert any("symlinked component" in error for error in errors)
+        # Proves the target was never read or hashed through the redirect.
+        assert not any("secret-looking" in error for error in errors)
+
+    def test_compare_refuses_entry_behind_in_root_symlinked_directory(
+        self, tmp_path: Path
+    ) -> None:
+        """Review finding in the drift check: hash matches, yet must stay unsafe."""
+        host = tmp_path / "host"
+        (host / "real").mkdir(parents=True)
+        (host / "real" / "cell.py").write_text(CLEAN, encoding="utf-8")
+        (host / "redirect").symlink_to(host / "real", target_is_directory=True)
+        manifest = {
+            "manifest_version": 1,
+            "entries": [
+                {
+                    "path": "layer-r/source/cell.py",
+                    "sha256": hashlib.sha256(CLEAN.encode()).hexdigest(),
+                    "class": "source",
+                    "host_path": "redirect/cell.py",
+                    "origin": "tests",
+                }
+            ],
+        }
+        report = compare(host, manifest)
+        # If the redirect were followed the status would be in-sync.
+        assert statuses(report)["redirect/cell.py"] == UNSAFE
+        assert report["in_sync"] is False
 
 
 class TestDriftCheck:

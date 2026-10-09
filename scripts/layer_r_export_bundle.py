@@ -41,7 +41,11 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from scripts.layer_r_manifest import SECRET_PATTERNS, normalize_relative_path
+from scripts.layer_r_manifest import (
+    SECRET_PATTERNS,
+    normalize_relative_path,
+    symlinked_components,
+)
 
 DEFAULT_INCLUDES = ("*.py", "*.json", "*.toml", "*.yaml", "*.yml", "*.md", "*.txt")
 SUGGESTED_CLASS_BY_SUFFIX = {
@@ -91,6 +95,9 @@ def collect(cell_root: Path, includes: tuple[str, ...]) -> tuple[list[str], list
             entry = Path(dirpath) / name
             relative = entry.relative_to(cell_root).as_posix()
             if entry.is_symlink() or not entry.is_file():
+                unsafe.append(relative)
+                continue
+            if symlinked_components(entry, cell_root):
                 unsafe.append(relative)
                 continue
             if entry.suffix in _SKIP_SUFFIXES:
