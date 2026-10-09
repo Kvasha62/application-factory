@@ -319,8 +319,10 @@ def test_the_handle_the_call_path_issues_is_opaque(prepared, producer_factory):
     assert str(prepared["environment_id"]) not in token
     assert str(instance["instance_digest"]).removeprefix("sha256:")[:12] not in token
     assert str(prepared["manifest_digest"]).removeprefix("sha256:")[:12] not in token
+    # Check the opaque nonce body, not the ``ev-`` prefix: a random body
+    # beginning with ``a`` would otherwise falsely match the substring ``-a``.
     for structure in ("#", "-a", "observation", "restart", "dep-"):
-        assert structure not in token, structure
+        assert structure not in body, structure
 
 
 def test_the_handle_does_not_encode_the_expected_digest(prepared, producer_factory):

@@ -88,7 +88,7 @@ Because that list is exhaustive, ownership of the runtime can be relocated to La
 
 One host the owner controls. Two OS users. **Layer R is stood up first and runs standalone**: a supervised cell manager plus the producer, both owned by `<RP_OWNER_USER>`. Layer O then *attaches* to it through the runtime seam and verifies it through the S4 seam. First production composition: **one member, `tenant_authority` 0.1.0** (§5).
 
-No container orchestrator, database or listening port is required: component stores are in-memory dataclasses (`tenant_authority/store.py:37-43`), health is answered in-process through `fastapi.testclient.TestClient` (`runtime_worker.py:1367-1382`), and the only dependencies are `fastapi` + `pydantic` (`pyproject.toml:5-8`).
+No container orchestrator, database or listening port is required: component stores are in-memory dataclasses (`tenant_authority/store.py:37-43`), health is answered in-process through `fastapi.testclient.TestClient` (`runtime_worker.py:1367-1382`), and the runtime dependencies are `fastapi`, `pydantic` and `httpx2` (`pyproject.toml:5-9`).
 
 Rejected: driving the cell from a CI runner (factory-side automation would become the identity source, ADR-0020 §4); letting `deploy()` spawn and own the members (revision 1's error, and the reason for this revision).
 
@@ -257,6 +257,8 @@ git clone <REPO_URL> ~/application-factory && cd ~/application-factory
 git checkout <SHA>                 # record this SHA as evidence
 python3.13 -V                      # >= 3.13 (P2)
 python3.13 -m pip install .
+# Verify that Starlette's TestClient dependency is available before bootstrap.
+python3.13 -c 'from fastapi import FastAPI; from fastapi.testclient import TestClient; app = FastAPI(); TestClient(app); print("TestClient OK")'
 ```
 
 ### Step 1 — users and directories

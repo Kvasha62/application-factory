@@ -16,9 +16,9 @@ WORKDIR /opt/application-factory
 
 COPY . .
 
-# fastapi / pydantic are the project's declared runtime dependencies
-# (pyproject.toml); httpx2 is the HTTP client the component runtime worker uses
-# to exercise a component's published ASGI contract during a probe.
+# The project's runtime dependencies are declared in pyproject.toml.
+# httpx2 is required by Starlette's TestClient, which the component runtime
+# worker uses to exercise a component's published ASGI contract during a probe.
 RUN pip install --no-cache-dir \
     "fastapi>=0.115.0" \
     "pydantic>=2.9.0" \
