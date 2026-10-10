@@ -58,7 +58,6 @@ def test_compose_declares_two_separated_sides_and_no_credentials() -> None:
     assert "local/Dockerfile.dno" in text
     # Inspect each top-level service block independently. Counting occurrences
     # alone would miss both declarations accidentally being placed in one service.
-
     service_headers = list(re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):\s*$", text))
     service_blocks = {
         match.group(1): text[
