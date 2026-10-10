@@ -23,6 +23,7 @@ name: application-factory-local-running-platform
 
 services:
   running-platform:
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     build:
       context: ..
       dockerfile: local/Dockerfile.running-platform
@@ -61,6 +62,7 @@ services:
     restart: "no"
 
   dno:
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     build:
       context: ..
       dockerfile: local/Dockerfile.dno

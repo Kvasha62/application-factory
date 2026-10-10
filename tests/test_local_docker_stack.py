@@ -55,6 +55,7 @@ def test_compose_declares_two_separated_sides_and_no_credentials() -> None:
     assert "dno:" in text
     assert "local/Dockerfile.running-platform" in text
     assert "local/Dockerfile.dno" in text
+    assert text.count('user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"') == 2
     # The stack carries no credentials and no GitHub Environment material:
     # no compose secrets, no token variables, no credential keys.
     assert "secrets:" not in text
