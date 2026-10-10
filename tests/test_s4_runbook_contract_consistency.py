@@ -74,16 +74,13 @@ def test_runbook_contamination_anchor_matches_the_code() -> None:
     text = _runbook()
     assert "owner_state.py:117-120" in text
     assert "owner_state.py:72" not in text
-    assert (
-        "It does not currently reject every possible expected-derived field by name."
-        in text
-    )
-    assert (
-        "not as a verified guarantee of the current implementation." in text
-    )
-    assert (
-        "MUST NOT emit deployment identifiers or other expected-derived material."
-        in text
+    assert all(
+        phrase in text
+        for phrase in (
+            "It does not currently reject every possible expected-derived field by name.",
+            "not as a verified guarantee of the current implementation.",
+            "MUST NOT emit deployment identifiers or other expected-derived material.",
+        )
     )
     assert "refuse to accept, any document containing" not in text
 
