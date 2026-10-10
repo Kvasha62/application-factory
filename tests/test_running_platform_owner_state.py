@@ -140,6 +140,17 @@ def test_snapshot_source_preserves_duplicate_membership_for_validation() -> None
         provider.observe_identity(BINDING)
 
 
+def test_snapshot_source_rejects_empty_membership() -> None:
+    owner_state = state(membership=ActualMembership(True, ()))
+
+    provider = OwnerSuppliedPlatformIdentityProvider(
+        OwnerStateSnapshotSource(Reader(owner_state))
+    )
+
+    with pytest.raises(ActualIdentityUnavailable, match="membership is empty"):
+        provider.observe_identity(BINDING)
+
+
 def test_snapshot_source_rejects_stale_owner_state() -> None:
     provider = OwnerSuppliedPlatformIdentityProvider(
         OwnerStateSnapshotSource(Reader(state(freshness_current=False)))
