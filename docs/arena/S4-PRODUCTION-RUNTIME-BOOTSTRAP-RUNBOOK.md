@@ -53,19 +53,19 @@ Both are constructor-injected parameters of the existing public API; neither is 
 
 | Seam | Contract | Injection point | Direction |
 |---|---|---|---|
-| **Runtime / control seam** | `RuntimeAdapter` — `materialize`, `migrate`, `start`, `attach`, `request`, `stop` (`runtime.py:221-263`, "The seam between the deployment operation and its environment") | `deploy(request, runtime=…)` (`deployment.py:639-646`); `attach(request, runtime=…)` (`deployment.py:1391`); `restart(request, runtime=…)` (`restart.py:361-367`) | Layer O → Layer R: requests only |
-| **S4 identity seam** | `PlatformIdentityProvider` (`platform_identity.py:289-299`), realized by `OwnerSuppliedPlatformIdentityProvider` over `RunningPlatformIdentitySource.observe(binding) -> ActualPlatformSnapshot` (`platform_identity_source.py:52-57`, `:60-111`) | `deploy(..., identity_provider=…)` (`deployment.py:643`); `reconcile(..., identity_provider=…)` (`reconciliation.py:179-182`); `restart(..., identity_provider=…)` (`restart.py:365`) | Layer R → Layer O: evidence only |
+| **Runtime / control seam** | `RuntimeAdapter` — `materialize`, `migrate`, `start`, `attach`, `request`, `stop` (`runtime.py:269-312`, "The seam between the deployment operation and its environment") | `deploy(request, runtime=…)` (`deployment.py:719-723`); `attach(request, runtime=…)` (`deployment.py:1538`); `restart(request, runtime=…)` (`restart.py:371-377`) | Layer O → Layer R: requests only |
+| **S4 identity seam** | `PlatformIdentityProvider` (`platform_identity.py:289-299`), realized by `OwnerSuppliedPlatformIdentityProvider` over `RunningPlatformIdentitySource.observe(binding) -> ActualPlatformSnapshot` (`platform_identity_source.py:57-62`, `:65-121`) | `deploy(..., identity_provider=…)` (`deployment.py:723`); `reconcile(..., identity_provider=…)` (`reconciliation.py:184-187`); `restart(..., identity_provider=…)` (`restart.py:375`) | Layer R → Layer O: evidence only |
 
 **The complete list of things Layer O can do to the runtime** — verified by enumeration of every adapter call inside `deploy()`:
 
 | Call | Anchor |
 |---|---|
-| `adapter.materialize(element)` | `deployment.py:950` |
-| `adapter.start(element)` | `deployment.py:1024` |
-| `adapter.request(handle, OP_START)` | `deployment.py:1039` |
-| `adapter.migrate(element)` | `deployment.py:1104` |
-| `adapter.request(handle, OP_PROBE)` | `deployment.py:1222` |
-| `adapter.stop(handle)` | `deployment.py:921` (fail-closed) and `Deployment.stop()` `:344-346` |
+| `adapter.materialize(element)` | `deployment.py:1042` |
+| `adapter.start(element)` | `deployment.py:1116` |
+| `adapter.request(handle, OP_START)` | `deployment.py:1131` |
+| `adapter.migrate(element)` | `deployment.py:1251` |
+| `adapter.request(handle, OP_PROBE)` | `deployment.py:1369` |
+| `adapter.stop(handle)` | `deployment.py:1013` (fail-closed) and `Deployment.stop()` `:391-426` |
 
 Because that list is exhaustive, ownership of the runtime can be relocated to Layer R **without changing D&O**: Layer O only ever issues those six requests, and the RP-owned adapter decides what each one means inside Layer R.
 
@@ -74,11 +74,11 @@ Because that list is exhaustive, ownership of the runtime can be relocated to La
 ### 0.4 Why `deploy()` is not the runtime owner
 
 1. `deploy()` never touches a member process itself. Every runtime effect is one of the six adapter calls above; the default `LocalProcessRuntime` is only a **default**, replaced by injection at `deployment.py:769` (`adapter: RuntimeAdapter = runtime or LocalProcessRuntime(source_paths=paths)`).
-2. `RuntimeHandle.process` is dereferenced **only inside `LocalProcessRuntime`** (`runtime.py:954`, `:998`). Nothing in `deployment.py`, `restart.py` or `reconciliation.py` reads it, so an RP-owned adapter may define its own handle payload — the handle is a **reference to a Layer R runtime element**, not a process Layer O owns.
+2. `RuntimeHandle.process` is dereferenced **only inside `LocalProcessRuntime`** (`runtime.py:1008`, `:1052`). Nothing in `deployment.py`, `restart.py` or `reconciliation.py` reads it, so an RP-owned adapter may define its own handle payload — the handle is a **reference to a Layer R runtime element**, not a process Layer O owns.
 3. `Deployment.stop()` is documented as "An operational action, not a lifecycle change" (`deployment.py:312-333`) and is idempotent. Under this runbook it means: *release Layer O's attachment and stop claiming a Running Platform in the record*. Whether a member runtime actually terminates is Layer R's policy decision.
 4. The platform's existence is therefore not a function of any Layer O object's lifetime — which §12.1 proves operationally (I1a, I1b, I2, I3).
 
-**Consequence, and a hard requirement on the RP-owned adapter:** `deploy()` calls `adapter.stop(handle)` for every handle when any stage fails (`deployment.py:916-921`). If `stop` destroyed runtime, a failed orchestration attempt would tear down Layer R. **`stop` MUST be detach-only.** See §7.
+**Consequence, and a hard requirement on the RP-owned adapter:** `deploy()` calls `adapter.stop(handle)` for every handle when any stage fails (`deployment.py:1010-1013`). If `stop` destroyed runtime, a failed orchestration attempt would tear down Layer R. **`stop` MUST be detach-only.** See §7.
 
 ---
 
@@ -137,11 +137,11 @@ The `<RUNTIME_ROOT>` denial is the load-bearing control: after a real run it con
 | Bind pinned content into a member slot | **Layer R** (executes) | On Layer O's `adapter.materialize(element)` request; digest verified against the pin |
 | Run component migrations for one deployment | **Layer O orchestrates**, Layer R executes | `adapter.migrate(element)` (ADR-0016 §14, §18) |
 | Establish health/readiness facts | **Layer R** | The member's own `/health`, `/ready` (`tenant_authority/api.py:142-153`) |
-| **Evaluate** health/readiness and decide acceptance | **Layer O** | `adapter.request(handle, OP_PROBE)` → `deployment.py:1222` |
+| **Evaluate** health/readiness and decide acceptance | **Layer O** | `adapter.request(handle, OP_PROBE)` → `deployment.py:1369` |
 | Verify identity correspondence | **Layer O** | S4 seam; `deployment.py:898-912` |
 | Stop claiming a Running Platform (record) | **Layer O** | `Deployment.stop()` → `mark_stopped` |
 | Decide whether a member runtime terminates | **Layer R** | Its own policy, on a detach request |
-| Upgrade / rollback / reconcile | **Layer O orchestrates** | `upgrade(..., runtime=…, identity_provider=…)`, `rollback(...)`, `reconcile(..., identity_provider=…)`; reconciliation "takes no runtime action of any kind" (`reconciliation.py:179-186`) |
+| Upgrade / rollback / reconcile | **Layer O orchestrates** | `upgrade(..., runtime=…, identity_provider=…)`, `rollback(...)`, `reconcile(..., identity_provider=…)`; reconciliation "takes no runtime action of any kind" (`reconciliation.py:184-191`) |
 | Produce actual identity facts | **Layer R** | The producer (ADR-0020 §4) |
 
 **What is allowed through the S4 seam:** exactly one direction — Layer R supplies independently grounded actual evidence for one evaluation; Layer O validates it, projects it through the existing canonicalization and compares. Nothing else crosses it: no control, no lifecycle command, no expected state, no credential.
@@ -187,15 +187,15 @@ The member runtime protocol implementation may be the shipped `deployment_operat
 | 8 | Branding | `<PLATFORM_STATE_DIR>/branding.json`; absence recorded explicitly (`state:"ABSENT"`), never omitted | new Layer R capability |
 | 9 | Extensions | `<PLATFORM_STATE_DIR>/extensions.json`; no component contract exposes an extension point, so absence must still be recorded explicitly | new Layer R capability |
 
-**Two values that must never be confused.** The *deployment id* is the durable, expected-derived record identity — `dep-{platform_id}-{environment_id}-{first 12 hex of instance_digest}-a{attempt}` (`state.py:146-165`) — and the *binding basis* is the evaluating side's own note of which record a binding was derived from (`deployment-record:<deployment_id>`, `deployment.py:254-256`). Both are expected-derived, both stay on the Layer O side, and **neither is a correlation value**. The *evaluation handle* H is a different value in a different role: a fresh opaque random nonce — `ev-` + 32 hex characters = 128 bits (`deployment.py:194-213`) — issued by the evaluating operation for exactly one evaluation. H names no platform, no environment and no attempt, carries no digest or digest prefix, states no position and is never parsed to derive one. **H is the only correlation value that crosses this seam.**
+**Two values that must never be confused.** The *deployment id* is the durable, expected-derived record identity — `dep-{platform_id}-{environment_id}-{first 12 hex of instance_digest}-a{attempt}` (`state.py:146-165`) — and the *binding basis* is the evaluating side's own note of which record a binding was derived from (`deployment-record:<deployment_id>`, `deployment.py:254-256`). Both are expected-derived, both stay on the Layer O side, and **neither is a correlation value**. The *evaluation handle* H is a different value in a different role: a fresh opaque random nonce — `ev-` + 32 hex characters = 128 bits (`deployment.py:194-213`) — issued by the evaluating operation for exactly one evaluation. H names no platform, no environment and no attempt, carries no digest or digest prefix, states no position and is never parsed to derive one. **H is the only correlation value that crosses this seam.** (Terminology: the same opaque value is called the *evaluation handle* in this runbook, crosses the shipped transport as the request field `binding_token`, and is echoed back as `correlation.token`; all three names denote H.)
 
-**What the producer categorically never receives from Layer O or expected state:** the deployment id, the binding basis, or any expected-derived value, or any part or derivative of these; the Platform Instance document or its `instance_digest`; the Manifest document; expected component bindings; expected configuration; expected Golden Bundle; expected branding/extensions; the `DeploymentRecord`; the deployment request; `platform_id`, `environment_id`, `attempt`; any path under `<RUNTIME_ROOT>`; any credential. Its entire input per evaluation is `{"op":"observe","handle":"<H>"}` — the handle of §8 and nothing else — and its answer must state that same handle in its `correlation` statement (§10 step 11).
+**What the producer categorically never receives from Layer O or expected state:** the deployment id, the binding basis, or any expected-derived value, or any part or derivative of these; the Platform Instance document or its `instance_digest`; the Manifest document; expected component bindings; expected configuration; expected Golden Bundle; expected branding/extensions; the `DeploymentRecord`; the deployment request; `platform_id`, `environment_id`, `attempt`; any path under `<RUNTIME_ROOT>`; any credential. Its entire input per evaluation is `{"binding_token":"<H>"}` (`POST /observe`) — the evaluation handle H of §8 and nothing else — and its answer must state that same handle in its `correlation` statement (§10 step 11).
 
 ---
 
 ## 7. The RP-owned runtime adapter (the runtime seam implementation)
 
-Layer R implements `RuntimeAdapter` (`runtime.py:221-263`). Semantics are fixed by §0.4 and §4:
+Layer R implements `RuntimeAdapter` (`runtime.py:269-312`). Semantics are fixed by §0.4 and §4:
 
 | Method | Required Layer R semantics | Forbidden |
 |---|---|---|
@@ -204,11 +204,11 @@ Layer R implements `RuntimeAdapter` (`runtime.py:221-263`). Semantics are fixed 
 | `start(element)` | **Attach** to an existing Layer R member runtime, or ask the cell manager to create one under Layer R's own supervision; return a handle that is a **reference** to the Layer R element | Returning a process whose lifetime Layer O controls; creating a runtime outside Layer R's supervision |
 | `request(handle, op, timeout=…)` | Forward `OP_START` / `OP_PROBE` to the Layer R element within the deadline | Synthesizing an answer; consulting expected state |
 | `stop(handle)` | **Detach**: release Layer O's reference and let Layer R apply its own policy to the member | Killing the layer, the supervisor, the producer, or another deployment's runtime |
-| `attach(element)` | Return a handle to the member Layer R **already supervises** for exactly this element, or refuse (`runtime.py:238`) | Creating, starting, restarting or migrating anything; returning a handle for an element Layer R does not supervise |
+| `attach(element)` | Return a handle to the member Layer R **already supervises** for exactly this element, or refuse (`runtime.py:981-992`) | Creating, starting, restarting or migrating anything; returning a handle for an element Layer R does not supervise |
 
 Two verified facts make this Level A:
-- `RuntimeHandle.process` is dereferenced only inside `LocalProcessRuntime` (`runtime.py:954`, `:998`), so the handle payload is Layer R's to define — **no D&O change**.
-- `deploy()`'s fail-closed path calls `adapter.stop(handle)` for every handle (`deployment.py:916-921`), so a detach-only `stop` is what keeps a failed orchestration attempt from destroying Layer R.
+- `RuntimeHandle.process` is dereferenced only inside `LocalProcessRuntime` (`runtime.py:1008`, `:1052`), so the handle payload is Layer R's to define — **no D&O change**.
+- `deploy()`'s fail-closed path calls `adapter.stop(handle)` for every handle (`deployment.py:1010-1013`), so a detach-only `stop` is what keeps a failed orchestration attempt from destroying Layer R.
 
 **Mandatory:** the RP-owned adapter is injected as `runtime=`. Using the default `LocalProcessRuntime` (`deployment.py:769`) would make Layer O the runtime owner and is a STOP condition (§14).
 
@@ -272,7 +272,7 @@ sudo install -d -o <RP_OWNER_USER> -g <RP_OWNER_USER> -m 0750 <RP_CELL_HOME>
 
 ### Step 2 — write the Layer R components in `<RP_CELL_HOME>` (owner code, outside the repository)
 - `cell_manager` — supervises member runtimes, maintains `<PLATFORM_STATE_DIR>/members/`, owns runtime lifecycle.
-- `producer` — answers `{"op":"observe","handle":…}` with the nine-surface document of §10 step 11.
+- `producer` — answers the `POST /observe` request `{"binding_token":…}` with the nine-surface document of §10 step 11.
 - `rp_runtime_adapter` — the `RuntimeAdapter` implementation of §7.
 - `s4_adapter` — the `RunningPlatformIdentitySource` implementation of §8.
 
@@ -336,7 +336,7 @@ python3.13 -m platform_instance digest   /tmp/instance.json      # → D_expecte
 ```
 The instance carries `configuration: {"tenant_authority": {"platform_id": "<PLATFORM_ID>"}}` and `golden_bundle: null` — the producer must report configuration as `PRESENT` and the bundle as `ABSENT` with complete inventory, or `D_actual` cannot match.
 
-### Step 9 — the environment document (exact accepted key set: `environment_id`, `runtime_root`, `bindings[{component_id, deployment_module, deployment_factory, migrations?, import_paths?}]`, `configuration_overlay?`, `artifact_cache?`, `python_executable?`, `probe_timeout_seconds?` — `environment.py:188-267`)
+### Step 9 — the environment document (exact accepted key set: `environment_id`, `runtime_root`, `bindings[{component_id, deployment_module, deployment_factory, migrations?, import_paths?}]`, `configuration_overlay?`, `artifact_cache?`, `python_executable?`, `probe_timeout_seconds?` — `environment.py:231-363`)
 ```json
 {
   "environment_id": "<ENVIRONMENT_ID>",
@@ -387,7 +387,7 @@ One JSON object per evaluation, mirroring the field set the existing owner-surfa
   "extensions":     {"state": "ABSENT"},  "branding": {"state": "ABSENT"}
 }
 ```
-**The `handle` in the request is the opaque per-evaluation handle H of §8 — never the deployment id and never the binding basis.** The producer receives H (§6: it is the only correlation value crossing this seam) and must return it in `correlation.token` as an echo, stating alongside it its own binding identity (`scope`, `sequence`, `target`) and its attribution (`authority`, `basis`, `established_at`); D&O refuses the answer as `UNAVAILABLE` unless that statement agrees with the binding the evaluation established (`require_correlated_evidence`, `platform_identity.py:339`) — an equal handle alone establishes nothing. The producer must refuse to emit, and the adapter refuse to accept, any document containing `instance_digest`, `expected_instance`, the deployment id or any expected-derived material (`running_platform/owner_state.py:72`). The `correlation` statement is the producer's own fact: the request carries nothing but H, so no expected identity can be echoed back into it.
+**The `binding_token` in the request carries the opaque per-evaluation handle H of §8 — never the deployment id and never the binding basis.** The producer receives H (§6: it is the only correlation value crossing this seam) and must return it in `correlation.token` as an echo, stating alongside it its own binding identity (`scope`, `sequence`, `target`) and its attribution (`authority`, `basis`, `established_at`); D&O refuses the answer as `UNAVAILABLE` unless that statement agrees with the binding the evaluation established (`require_correlated_evidence`, `platform_identity.py:339`) — an equal handle alone establishes nothing. The producer must refuse to emit, and the adapter refuse to accept, any document containing `instance_digest`, `expected_instance`, the deployment id or any expected-derived material. The shipped surface validation refuses a document carrying top-level `instance_digest` or `expected_instance` keys (`running_platform/owner_state.py:117-120`); the local stand-in producer has no refuse-to-emit check yet, and an expected-derived key that still appeared in a document could never become actual evidence (projection copies only known fields, `platform_identity.py:410-442`). The `correlation` statement is the producer's own fact: the request carries nothing but H, so no expected identity can be echoed back into it.
 
 ### Step 12 — negative control (must fail closed)
 Run the composition root with the S4 seam unavailable (producer stopped or answering a foreign handle). Expected: `IdentityVerificationFailed: identity/version/digest verification failed; the platform is not deployed` — **and Layer R must still be running afterwards** (check `systemctl status` and re-ask the producer). This proves a failed orchestration attempt destroys nothing it does not own.
@@ -456,7 +456,7 @@ I1a, I1b, I2 and I3 are the acceptance evidence for "Running Platform ≠ D&O or
 | A5 | Incomplete → refusal | `membership_established=false`, incomplete bundle inventory, any `UNKNOWN` field | `UNAVAILABLE` | `_validate_components`, `_validate_golden_bundle_inventory` |
 | A6 | Duplicate → refusal | The same `component_id` twice | `UNAVAILABLE` | `_validate_components` |
 | A7 | Extra / missing member → MISMATCH | A member in the cell absent from the answer, or an expected member absent | `MISMATCH`, never silently ignored | projection + digest equality (`test_extra_actual_component_is_mismatch:273`, `test_missing_expected_component_is_mismatch:285`) |
-| A8 | Expected-state contamination → refusal | Surface carries `instance_digest`/`expected_instance`, or echoes `D_expected` | refusal | `running_platform/owner_state.py:72`; plus the step 12 negative control |
+| A8 | Expected-state contamination → refusal | Surface carries `instance_digest`/`expected_instance`, or echoes `D_expected` | refusal | `running_platform/owner_state.py:117-120`; plus the step 12 negative control |
 | A9 | Timeout → refusal | Producer stalls past `<BOUND_SECONDS>`, then answers late | refusal; never acceptance | owner-side adapter |
 | A10 | Boundary non-forwarding | Tap every byte adapter→producer | No expected-derived value, no secret, no `<RUNTIME_ROOT>` path crosses | owner-side adapter |
 | **A11** | **Runtime-ownership non-forwarding** | Inspect the RP-owned adapter | `stop` is detach-only; no Layer O code path terminates a Layer R runtime; a failed `deploy()` leaves Layer R intact (step 12) | §7 + step 12 |
@@ -471,8 +471,8 @@ Unchanged in substance from revision 1; the owner column now reflects the two-la
 | RF | Closed by | Status after this runbook |
 |---|---|---|
 | RF-1 | §0–§9 change no contract, boundary or intake; the owner ticks Level A in D7 | **READY AFTER BOOTSTRAP** |
-| RF-2 | §10 step 10 composition root (attaches only) + `<RP_OWNER_USER>` ownership of both adapters; the public API already threads `runtime=` and `identity_provider=` (`deployment.py:639-646`, `upgrade.py:235→292`, `rollback.py:246→303`, `reconciliation.py:179-182`) | **READY AFTER BOOTSTRAP** |
-| RF-3 | §10 steps 2 and 11 — `{"op","handle"}` out, one nine-surface document back | **READY AFTER BOOTSTRAP** |
+| RF-2 | §10 step 10 composition root (attaches only) + `<RP_OWNER_USER>` ownership of both adapters; the public API already threads `runtime=` and `identity_provider=` (`deployment.py:719-723`, `upgrade.py:235→292`, `rollback.py:246→303`, `reconciliation.py:184-187`) | **READY AFTER BOOTSTRAP** |
+| RF-3 | §10 steps 2 and 11 — `{"binding_token"}` out, one nine-surface document back | **READY AFTER BOOTSTRAP** |
 | RF-4 | §8 — per-evaluation handle, no caching, `<BOUND_SECONDS>` | **READY AFTER BOOTSTRAP** (value is owner input) |
 | RF-5 | Steps 0–5 (D1 environment, scope = the cell's own member registry, production status) | **OWNER DECISION + OWNER ACTION** |
 | RF-6 | `<RP_OWNER_USER>` + `<RP_OWNER_HANDLE>` (D2); separation proven at step 3 and by I1a–I3 | **OWNER DECISION** |
@@ -513,7 +513,7 @@ Implementation of Issue #128 stays blocked while any of these holds:
 
 | # | Finding | Evidence | What it needs |
 |---|---|---|---|
-| **F-1 — CLOSED (implemented, Level B, no Level C ADR).** Re-binding is now an explicit operation: `deployment_operations.attach(request, *, runtime, identity_provider)` (`deployment.py:1391`) fresh-reads the authoritative record, re-verifies the exact instance, binds only elements Layer R already supervises through `RuntimeAdapter.attach` (`runtime.py:238`, `LocalProcessRuntime` refuses at `:927`), re-verifies the actual identity through the unchanged S4 seam, records one `platform_attached` operational action, and creates/starts/stops/restarts/migrates nothing. Cold `Deployment.stop()` fails closed (`deployment.py:335`). Tests: `tests/test_deployment_operations_attach.py`. *Original finding, kept for history:* **No re-attach contract.** `Deployment(` is constructed in exactly one place — the return of `deploy()` (`deployment.py:926`) — and there is no `attach` / `reattach` / `resume` / `adopt` API anywhere in `src/deployment_operations/`. `state.py:1262 load_record` returns a `DeploymentRecord`, not a `Deployment`, and `ReconciliationRequest.deployment` requires a `Deployment` (`reconciliation.py:136`). So a **fresh** Layer O process cannot resume orchestration of an already-standing Layer R from persisted state | grep for `Deployment(` and for `def attach|reattach|resume|adopt` | Either a new contract function (e.g. `attach(deployment_id, *, runtime, identity_provider) -> Deployment`) or an owner ruling on who re-attaches. **A contract change ⇒ its own work item; if it alters the deployment model, a Level C ADR.** Not implemented here |
+| **F-1 — CLOSED (implemented, Level B, no Level C ADR).** Re-binding is now an explicit operation: `deployment_operations.attach(request, *, runtime, identity_provider)` (`deployment.py:1391`) fresh-reads the authoritative record, re-verifies the exact instance, binds only elements Layer R already supervises through `RuntimeAdapter.attach` (`runtime.py:981-992`, `LocalProcessRuntime` refuses at `:927`), re-verifies the actual identity through the unchanged S4 seam, records one `platform_attached` operational action, and creates/starts/stops/restarts/migrates nothing. Cold `Deployment.stop()` fails closed (`deployment.py:335`). Tests: `tests/test_deployment_operations_attach.py`. *Original finding, kept for history:* **No re-attach contract.** `Deployment(` is constructed in exactly one place — the return of `deploy()` (`deployment.py:926`) — and there is no `attach` / `reattach` / `resume` / `adopt` API anywhere in `src/deployment_operations/`. `state.py:1272 load_record` returns a `DeploymentRecord`, not a `Deployment`, and `ReconciliationRequest.deployment` requires a `Deployment` (`reconciliation.py:136`). So a **fresh** Layer O process cannot resume orchestration of an already-standing Layer R from persisted state | grep for `Deployment(` and for `def attach|reattach|resume|adopt` | Either a new contract function (e.g. `attach(deployment_id, *, runtime, identity_provider) -> Deployment`) or an owner ruling on who re-attaches. **A contract change ⇒ its own work item; if it alters the deployment model, a Level C ADR.** Not implemented here |
 | **F-2** | **One textual hook could be misread.** `docs/ARCHITECTURE.md:130` says the Running Platform "получается из Platform Instance стадией Deployment & Operations", and ADR-0016 §4/§18 give D&O the transition and "operational control". Read strictly these do **not** make D&O the owner of the runtime layer, so no ADR change is strictly required for this runbook | `ARCHITECTURE.md:130`; ADR-0016 line 79, §18 | A one-line Level A documentation clarification that *realization into a standing runtime layer ≠ ownership of that layer*. Recommended, not performed |
 | **F-3** | **Runbook placement.** This file lives under `docs/arena/`, which is not listed in `docs/DOCUMENTATION_BASELINE.md` §2 canonical sources | `DOCUMENTATION_BASELINE.md` §2 | Owner decides whether to register Arena runbooks in the baseline. Not modified here (scope) |
 | **F-4** | **Layer R's import posture.** If Layer R reuses the shipped `deployment_operations.runtime_worker` protocol, it imports a D&O package module. That is a protocol implementation, not ownership, but the owner may prefer zero such dependency | `runtime_worker.py`; §5 | Owner's packaging decision |
@@ -523,7 +523,7 @@ Implementation of Issue #128 stays blocked while any of these holds:
 
 ## 16. Verification status of this revision
 
-**Verified in the repository [V]:** every anchor cited above — `deploy()`'s injectable `runtime` and `identity_provider` (`deployment.py:639-646`), the six adapter call sites inside `deploy()` (`:921, :950, :1024, :1039, :1104, :1222`), the default adapter (`:769`) and default identity provider (`:761-767`), `Deployment.stop()` semantics (`:311-360`, with the adapter call at `:346`), the single `Deployment(` construction inside `deploy()` (`:926`), `RuntimeAdapter` (`runtime.py:221-263`), `RuntimeHandle.process` dereferenced only at `runtime.py:954, :998`, `restart(..., runtime=…, identity_provider=…)` (`restart.py:361-367, :379`), `reconcile(..., identity_provider=…)` and "takes no runtime action of any kind" (`reconciliation.py:179-200`), `ReconciliationRequest.deployment: Deployment` (`:136`), `state.py:1262 load_record`, the environment loader key set and overlay rules (`environment.py:188-267, :405`), `ASSEMBLABLE_MANIFEST_STATES` (`platform_instance/validation.py:73`), the CLI's provider-less `deploy(request)` call (`deployment_operations/__main__.py:129`), its `--keep-running` default-to-stop semantics (`:82-86`, `:145-146`), `_secrets` (`:51-63`), ADR-0016 §18 and line 79, `ARCHITECTURE.md:130`, `.github/workflows/publish-component-artifacts.yml:6-8`.
+**Verified in the repository [V]:** every anchor cited above — `deploy()`'s injectable `runtime` and `identity_provider` (`deployment.py:719-723`), the six adapter call sites of the deploy path (`deployment.py:1013, :1042, :1116, :1131, :1251, :1369`), the default adapter (`:849`) and default identity provider (`:841-848`), `Deployment.stop()` semantics (`:362-446`, with the adapter call at `:426`), the single `Deployment(` construction inside `deploy()` (`:1018`), `RuntimeAdapter` (`runtime.py:269-312`), `RuntimeHandle.process` dereferenced only at `runtime.py:1008, :1052`, `restart(..., runtime=…, identity_provider=…)` (`restart.py:371-377`), `reconcile(..., identity_provider=…)` and "takes no runtime action of any kind" (`reconciliation.py:184-201`), `ReconciliationRequest.deployment: Deployment` (`:141`), `state.py:1272 load_record`, the environment loader key set and overlay rules (`environment.py:231-363, :660`), `ASSEMBLABLE_MANIFEST_STATES` (`platform_instance/validation.py:73`), the CLI's provider-less `deploy(request)` call (`deployment_operations/__main__.py:129`), its `--keep-running` default-to-stop semantics (`:82-86`, `:145-146`), `_secrets` (`:51-63`), ADR-0016 §18 and line 79, `docs/ARCHITECTURE.md:130`, `.github/workflows/publish-component-artifacts.yml:6-8`.
 
 **Executed previously on this chain (revision 1, re-confirmed as the mechanism this revision relies on):** the full factory chain `composer validate → compose → lifecycle act → platform_manifest validate → platform_instance assemble/validate/digest` producing `D_expected = sha256:90531f5d8623de140ec2b9361a8dd414a87643837fd160402d123195b6dd6634`; `load_environment` on the exact §9 document; `deploy(..., identity_provider=OwnerSuppliedPlatformIdentityProvider(...))` with `provenance="ATTESTED"` reaching `lifecycle=realized, ready=True, identity_verified=True, deployed=True`; the negative control failing closed; the Composer closure table as it stood in revision 1 (§5; those counts are historical and are superseded by the current-main resolutions now listed there); the `<RUNTIME_ROOT>` layout and `runtime.json` key list of §3; the S4 seam probe (MATCH / drift MISMATCH / stale / incomplete / `UNKNOWN` / duplicate / contamination refused). That probe also recorded **foreign token → `MATCH`**: under the superseded model the seam compared nothing and the token was the derived deployment id. That observation is what ADR-0020 §18 correlation now closes — see §8, where D&O refuses it in-band.
 
