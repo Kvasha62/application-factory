@@ -73,7 +73,7 @@ Because that list is exhaustive, ownership of the runtime can be relocated to La
 
 ### 0.4 Why `deploy()` is not the runtime owner
 
-1. `deploy()` never touches a member process itself. Every runtime effect is one of the six adapter calls above; the default `LocalProcessRuntime` is only a **default**, replaced by injection at `deployment.py:769` (`adapter: RuntimeAdapter = runtime or LocalProcessRuntime(source_paths=paths)`).
+1. `deploy()` never touches a member process itself. Every runtime effect is one of the six adapter calls above; the default `LocalProcessRuntime` is only a **default**, replaced by injection at `deployment.py:849` (`adapter: RuntimeAdapter = runtime or LocalProcessRuntime(source_paths=paths)`).
 2. `RuntimeHandle.process` is dereferenced **only inside `LocalProcessRuntime`** (`runtime.py:1008`, `:1052`). Nothing in `deployment.py`, `restart.py` or `reconciliation.py` reads it, so an RP-owned adapter may define its own handle payload — the handle is a **reference to a Layer R runtime element**, not a process Layer O owns.
 3. `Deployment.stop()` is documented as "An operational action, not a lifecycle change" (`deployment.py:312-333`) and is idempotent. Under this runbook it means: *release Layer O's attachment and stop claiming a Running Platform in the record*. Whether a member runtime actually terminates is Layer R's policy decision.
 4. The platform's existence is therefore not a function of any Layer O object's lifetime — which §12.1 proves operationally (I1a, I1b, I2, I3).
@@ -138,7 +138,7 @@ The `<RUNTIME_ROOT>` denial is the load-bearing control: after a real run it con
 | Run component migrations for one deployment | **Layer O orchestrates**, Layer R executes | `adapter.migrate(element)` (ADR-0016 §14, §18) |
 | Establish health/readiness facts | **Layer R** | The member's own `/health`, `/ready` (`tenant_authority/api.py:142-153`) |
 | **Evaluate** health/readiness and decide acceptance | **Layer O** | `adapter.request(handle, OP_PROBE)` → `deployment.py:1369` |
-| Verify identity correspondence | **Layer O** | S4 seam; `deployment.py:898-912` |
+| Verify identity correspondence | **Layer O** | S4 seam; `deployment.py:984-1004` |
 | Stop claiming a Running Platform (record) | **Layer O** | `Deployment.stop()` → `mark_stopped` |
 | Decide whether a member runtime terminates | **Layer R** | Its own policy, on a detach request |
 | Upgrade / rollback / reconcile | **Layer O orchestrates** | `upgrade(..., runtime=…, identity_provider=…)`, `rollback(...)`, `reconcile(..., identity_provider=…)`; reconciliation "takes no runtime action of any kind" (`reconciliation.py:184-191`) |
@@ -210,7 +210,7 @@ Two verified facts make this Level A:
 - `RuntimeHandle.process` is dereferenced only inside `LocalProcessRuntime` (`runtime.py:1008`, `:1052`), so the handle payload is Layer R's to define — **no D&O change**.
 - `deploy()`'s fail-closed path calls `adapter.stop(handle)` for every handle (`deployment.py:1010-1013`), so a detach-only `stop` is what keeps a failed orchestration attempt from destroying Layer R.
 
-**Mandatory:** the RP-owned adapter is injected as `runtime=`. Using the default `LocalProcessRuntime` (`deployment.py:769`) would make Layer O the runtime owner and is a STOP condition (§14).
+**Mandatory:** the RP-owned adapter is injected as `runtime=`. Using the default `LocalProcessRuntime` (`deployment.py:849`) would make Layer O the runtime owner and is a STOP condition (§14).
 
 ---
 
@@ -449,7 +449,7 @@ I1a, I1b, I2 and I3 are the acceptance evidence for "Running Platform ≠ D&O or
 
 | # | Case | Injected condition | Required result | Enforced at |
 |---|---|---|---|---|
-| A1 | MATCH | Complete, current, correctly correlated actual identity | `MATCH` → `identity_verified` → `realized` | `deployment.py:898-915` |
+| A1 | MATCH | Complete, current, correctly correlated actual identity | `MATCH` → `identity_verified` → `realized` | `deployment.py:984-1004` |
 | A2 | Drift → MISMATCH | One identity-bearing value changed | `MISMATCH`, never `UNAVAILABLE` | `platform_identity.py:493-494` |
 | A3 | Stale → refusal | `freshness_current=false`, an earlier handle, or an answer for an earlier binding | `UNAVAILABLE` | `require_correlated_evidence`; `validate_actual_evidence` |
 | A4 | Foreign correlation → refusal | An answer stating another handle (never issued, or issued for an earlier evaluation), another binding space, another position or another platform | `UNAVAILABLE`, never `MATCH` | `require_correlated_evidence` (in D&O, in-band) **and** the owner-side adapter |
@@ -491,7 +491,7 @@ Unchanged in substance from revision 1; the owner column now reflects the two-la
 Implementation of Issue #128 stays blocked while any of these holds:
 
 1. Steps 0–5 are incomplete — Layer R does not exist standalone, or I1a has not been evidenced.
-2. **The runtime seam is not injected** — i.e. the default `LocalProcessRuntime` (`deployment.py:769`) or the default S1 identity provider (`deployment.py:761-767`) would be used. Either makes Layer O the runtime owner and reintroduces revision 1's defect.
+2. **The runtime seam is not injected** — i.e. the default `LocalProcessRuntime` (`deployment.py:849`) or the default S1 identity provider (`deployment.py:841-848`) would be used. Either makes Layer O the runtime owner and reintroduces revision 1's defect.
 3. The RP-owned adapter's `stop` is not detach-only, or any Layer O path can terminate a Layer R runtime, its supervisor or its producer.
 4. The signed D8 authorization is not on Issue #128 (RF-10).
 5. The first Issue #128 proof must remain scoped to exactly `{tenant_authority}`; a broader composition is outside this runbook and requires a separate owner-approved bootstrap decision. Although `identity` 0.4.0 now has a deployment module, this runbook has not executed that broader composition; `idempotency` and `saga` are D2=B shared libraries, not standalone runtime members.

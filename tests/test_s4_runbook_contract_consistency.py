@@ -91,3 +91,18 @@ def test_runbook_verified_anchors_match_the_definitions() -> None:
     text = _runbook()
     assert "`deployment.py:194-213`" in text
     assert "`platform_identity.py:339`" in text
+
+    # The corrected S4 runbook anchors must continue to identify the
+    # implementation they describe.
+    assert "`deployment.py:841-848`" in text
+    assert "`deployment.py:849`" in text
+    assert "`deployment.py:984-1004`" in text
+
+    assert "if identity_provider is None:" in _source_line(deployment_module, 841)
+    assert "OwnerStateSnapshotSource(" in _source_line(deployment_module, 843)
+    assert (
+        "adapter: RuntimeAdapter = runtime or LocalProcessRuntime(source_paths=paths)"
+        in _source_line(deployment_module, 849)
+    )
+    assert "_verify_running_platform_identity(" in _source_line(deployment_module, 984)
+    assert "recorder.identity_verified()" in _source_line(deployment_module, 1004)
