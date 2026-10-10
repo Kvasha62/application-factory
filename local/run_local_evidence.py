@@ -241,6 +241,10 @@ class DockerStack:
         self._env["RP_DELAY_SECONDS"] = str(delay_seconds)
         # The host work directory is mounted at /work inside both containers.
         self._env["AF_WORK_DIR"] = str(work_dir)
+        # Run local containers as the invoking host user where UID/GID
+        # are available, so bind-mounted evidence remains user-writable.
+        self._env["LOCAL_UID"] = str(os.getuid() if hasattr(os, "getuid") else 1000)
+        self._env["LOCAL_GID"] = str(os.getgid() if hasattr(os, "getgid") else 1000)
 
     def _compose(self, *args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         # Git Bash/MSYS rewrites arguments that look like POSIX paths (for

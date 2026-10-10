@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -55,6 +56,24 @@ def test_compose_declares_two_separated_sides_and_no_credentials() -> None:
     assert "dno:" in text
     assert "local/Dockerfile.running-platform" in text
     assert "local/Dockerfile.dno" in text
+    # Inspect each top-level service block independently. Counting occurrences
+    # alone would miss both declarations accidentally being placed in one service.
+    service_headers = list(re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):\s*$", text))
+    service_blocks = {
+        match.group(1): text[
+            match.start() : (
+                service_headers[index + 1].start()
+                if index + 1 < len(service_headers)
+                else len(text)
+            )
+        ]
+        for index, match in enumerate(service_headers)
+    }
+    expected_user = '    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"'
+    assert "user: " in service_blocks["running-platform"]
+    assert expected_user in service_blocks["running-platform"]
+    assert "user: " in service_blocks["dno"]
+    assert expected_user in service_blocks["dno"]
     # The stack carries no credentials and no GitHub Environment material:
     # no compose secrets, no token variables, no credential keys.
     assert "secrets:" not in text
