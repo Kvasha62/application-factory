@@ -741,6 +741,70 @@ def bind_execution(
     )
 
 
+def execution_binding_from_document(
+    document: Mapping[str, Any],
+) -> ExecutionBinding:
+    """The execution binding a deployment state document states (§9, §10).
+
+    The inverse of :meth:`ExecutionBinding.document`, for the operations that
+    must hand out — or re-execute — content an earlier operation already bound:
+    a restart re-applies the binding its record pins instead of inventing one,
+    and the binding it re-applies is re-verified against the bytes on disk
+    before it is used. A document that does not state a complete binding is
+    refused, never completed with a default.
+    """
+    component_id = document.get("component_id")
+    kind = document.get("kind")
+    root = document.get("root")
+    roots = document.get("roots")
+    untrusted = document.get("untrusted")
+    modules = document.get("modules")
+    if (
+        not isinstance(component_id, str)
+        or not component_id
+        or not isinstance(kind, str)
+        or not kind
+        or not isinstance(root, str)
+        or not isinstance(roots, (list, tuple))
+        or not isinstance(untrusted, (list, tuple))
+        or not isinstance(modules, (list, tuple))
+        or not modules
+    ):
+        raise DeploymentExecutionFailed(
+            [
+                (
+                    "the recorded execution binding is incomplete; there is no "
+                    "verified content this operation could hand out or execute"
+                )
+            ]
+        )
+    bound: list[BoundModule] = []
+    for entry in modules:
+        module = entry.get("module") if isinstance(entry, Mapping) else None
+        path = entry.get("path") if isinstance(entry, Mapping) else None
+        digest = entry.get("digest") if isinstance(entry, Mapping) else None
+        if not all(
+            isinstance(value, str) and value for value in (module, path, digest)
+        ):
+            raise DeploymentExecutionFailed(
+                [
+                    (
+                        "the recorded execution binding names an incomplete "
+                        "module binding; the content cannot be verified against it"
+                    )
+                ]
+            )
+        bound.append(BoundModule(module=module, path=Path(path), digest=digest))
+    return ExecutionBinding(
+        component_id=component_id,
+        kind=kind,
+        root=Path(root),
+        roots=tuple(Path(str(entry)) for entry in roots),
+        untrusted=tuple(Path(str(entry)) for entry in untrusted),
+        modules=tuple(bound),
+    )
+
+
 def verify_bound_content(binding: ExecutionBinding) -> tuple[str, ...]:
     """Re-read bound content and compare it with what the engine bound (§9).
 
@@ -1112,4 +1176,5 @@ __all__ = [
     "RuntimeHandle",
     "RuntimeProcessError",
     "build_elements",
+    "execution_binding_from_document",
 ]

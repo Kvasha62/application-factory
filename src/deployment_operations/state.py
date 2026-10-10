@@ -201,6 +201,12 @@ class ComponentRecord:
     artifact_digest: str | None
     materialized: bool = False
     artifact_verified: bool = False
+    #: Whether this deployment operation holds a started runtime element for the
+    #: component. It is the operation's own bookkeeping — not a statement about
+    #: the runtime's lifecycle: releasing a reference (the runtime contract's
+    #: ``stop``) clears it here while the element itself stays its owner's, and
+    #: whether a member runtime terminates is that owner's policy (ADR-0016 §18;
+    #: S4 runbook §7).
     runtime_started: bool = False
     #: The content this deployment bound to the component's process before it
     #: was started, and the digests the engine computed for it (§9, §10).
@@ -534,8 +540,8 @@ class DeploymentRecord:
         running now (``running``), the verified operational condition holds
         (``ready``, ADR-0017 §33) and what is actually running was verified
         against the pinned instance (``identity_verified``). Each of these is
-        necessary — ``ready`` alone is not sufficient (§34) — and a platform
-        whose runtime elements are no longer running holds no such claim.
+        necessary — ``ready`` alone is not sufficient (§34) — and a record that
+        does not claim a running platform holds no such claim.
         """
         return (
             self.lifecycle == LIFECYCLE_REALIZED
@@ -670,16 +676,25 @@ class DeploymentRecord:
         return replace(self, running=running, updated_at=at)
 
     def mark_stopped(self, *, at: str) -> DeploymentRecord:
-        """Record that the platform's runtime elements are no longer running (§18).
+        """Record that this operation stops claiming a Running Platform (§18).
 
         An operational action, not a lifecycle transition: ``realized`` states
         what this deployment operation did — it realized the verified instance —
         while the operational conditions state how the platform is **now**. A
-        stopped platform is running nothing, holds no verified operational
-        condition (``ready`` is a condition *of the Running Platform*, §33), and
-        therefore holds no ``deployed`` claim (§10). Nothing here invents a
-        lifecycle position: ``stopped`` is not one of the positions established
-        by ADR-0016 §9, and this record does not create one.
+        stopped platform holds no verified operational condition (``ready`` is a
+        condition *of the Running Platform*, §33) and therefore holds no
+        ``deployed`` claim (§10). Nothing here invents a lifecycle position:
+        ``stopped`` is not one of the positions established by ADR-0016 §9, and
+        this record does not create one.
+
+        This is the transition of the explicit plain stop — the operator's own
+        ``Deployment.stop()``, Layer O giving up its claim. It is **not** what a
+        runtime contract's ``stop`` implies: that operation is a **detach** (it
+        releases this operation's reference and leaves the element's lifecycle to
+        its owner, S4 runbook §7), so a detach is never recorded here — the
+        record keeps ``running`` and withdraws only the verified operational
+        condition (:meth:`withdraw_ready`), which is what keeps a platform that
+        may still be up reachable through ``attach``.
         """
         if not self.running:
             return self
@@ -689,16 +704,19 @@ class DeploymentRecord:
     def withdraw_ready(self, *, at: str, reason: str) -> DeploymentRecord:
         """Withdraw ``ready`` without claiming a stop that did not happen (§18, §20).
 
-        ``mark_stopped`` states that the platform's runtime elements are down;
-        an operational action that could not complete — a stop one element
-        refused, a start that never happened, a health/readiness verification
-        that failed — leaves the platform in a state that is *not* a verified
-        ready one, while some element may still be up. Claiming ``stopped``
-        there would be as false as keeping ``ready``: this transition therefore
-        withdraws only the verified operational condition, records why, and
-        leaves ``running`` exactly as it was. No lifecycle position changes, no
-        ``platform_stopped`` action is invented, and ``identity_verified`` keeps
-        stating what the deployment operation verified (§9).
+        ``mark_stopped`` states that this operation stops claiming a Running
+        Platform; an operational action that could not complete — a stop one
+        element refused, a start that never happened, a health/readiness
+        verification that failed — leaves the platform in a state that is *not*
+        a verified ready one, while some element may still be up. The same holds
+        for a reference the operation **released**: a runtime contract's ``stop``
+        is a detach, and a detach is not evidence that the platform stopped
+        (ADR-0016 §18, §20). Claiming ``stopped`` in either situation would be as
+        false as keeping ``ready``: this transition therefore withdraws only the
+        verified operational condition, records why, and leaves ``running``
+        exactly as it was. No lifecycle position changes, no ``platform_stopped``
+        action is invented, and ``identity_verified`` keeps stating what the
+        deployment operation verified (§9).
         """
         if not self.ready:
             return self
@@ -756,7 +774,14 @@ class DeploymentRecord:
     def mark_superseded(
         self, *, at: str, detail: Mapping[str, Any] | None = None
     ) -> DeploymentRecord:
-        """Mark this realized deployment as superseded by an accepted upgrade."""
+        """Mark this realized deployment as superseded by an accepted upgrade.
+
+        The upgrade hands the platform over to its replacement: this operation
+        releases its references — the detach of ADR-0016 §18, recorded as
+        ``platform_released`` — and the record keeps its ``running`` claim,
+        because nothing established that the superseded platform's runtime ever
+        stopped. That decision belongs to the runtime's owner (S4 runbook §7).
+        """
         if not self.deployed:
             raise InvalidDeploymentStateTransition(
                 "only an honest deployed record can be superseded"
@@ -769,20 +794,38 @@ class DeploymentRecord:
     def mark_rolled_back(
         self, *, at: str, detail: Mapping[str, Any] | None = None
     ) -> DeploymentRecord:
-        """Record rollback only after the previous Running Platform has stopped."""
-        stopped = any(
-            action.name == "platform_stopped" for action in self.operational_actions
+        """Record rollback after this operation released its references (§18).
+
+        A rollback does not stop the previous Running Platform and must not
+        claim to have done so: the rollback releases *its own* references —
+        the runtime contract's **detach** (S4 runbook §7) — and the platform's
+        own lifecycle stays its owner's decision. The gate therefore requires
+        exactly what such a hand-over establishes: the verified operational
+        condition is withdrawn, the release is recorded as an operational
+        action (``platform_released``), and the identity/version/digest
+        verification still stands. ``running`` is not required to be false —
+        the platform may still be up, and :meth:`mark_stopped` is the explicit
+        plain stop's claim, never this one's.
+
+        The recorded release must be a **complete** one (``complete: True``): a
+        hand-over that released only some of the operation's references is not a
+        rollback that could be recorded, and rounding it to one would be the
+        false claim this transition exists to prevent.
+        """
+        released = any(
+            action.name == "platform_released" and action.detail.get("complete") is True
+            for action in self.operational_actions
         )
         if (
             self.lifecycle != LIFECYCLE_REALIZED
-            or self.running
             or self.ready
             or not self.identity_verified
             or self.failure is not None
-            or not stopped
+            or not released
         ):
             raise InvalidDeploymentStateTransition(
-                "only a verified realized deployment stopped by rollback can be rolled back"
+                "only a verified realized deployment whose references were "
+                "all released can be rolled back"
             )
         record = replace(self, lifecycle=LIFECYCLE_ROLLED_BACK, updated_at=at)
         return record.with_operational_action(

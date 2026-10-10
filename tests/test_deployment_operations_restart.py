@@ -157,7 +157,6 @@ from deployment_operations.verification import compute_content_digest
 #: The whole cycle of one restart attempt, in the order it must run (AC 11).
 CYCLE_EVENTS: tuple[str, ...] = (
     EVENT_RESTART_REQUESTED,
-    EVENT_PLATFORM_STOPPED,
     EVENT_RESTART_STOPPED,
     EVENT_RESTART_EXECUTION_VERIFIED,
     EVENT_RUNTIME_STARTED,
@@ -244,6 +243,14 @@ class _FakeProcess:
 class FakeRuntime:
     """A runtime adapter double: it records what was asked and answers honestly.
 
+    ``detach_only=False`` (the default) models a runtime whose ``stop``
+    terminates what it started — the local composition's own implementation.
+    ``detach_only=True`` models the production contract: ``stop`` is the
+    **detach** of S4 runbook §7, it releases the caller's reference and the
+    member keeps running under its owner's policy, so a test can prove that the
+    engine never turns a released reference into a claim that the platform
+    stopped.
+
     It stands for the environment of a deployment operation whose runtime
     elements are already up. Everything the restart slice may ask of an adapter
     is answered from the element it was given — including the identity and the
@@ -265,6 +272,8 @@ class FakeRuntime:
     neither provisions a slot nor executes a migration again (ADR-0017 §11).
     """
 
+    #: When true, ``stop`` releases the reference and leaves the member alive.
+    detach_only: bool = False
     fail_stop: frozenset[str] = frozenset()
     fail_start: frozenset[str] = frozenset()
     fail_start_answer: frozenset[str] = frozenset()
@@ -339,11 +348,18 @@ class FakeRuntime:
                 f"{component_id}: the runtime element refused to stop"
             )
         was_alive = handle.process.poll() is None
-        self.live.pop(component_id, None)
         self.stops.append(component_id)
-        handle.process.alive = False
+        if not self.detach_only:
+            self.live.pop(component_id, None)
+            handle.process.alive = False
+            return {
+                "status": "stopped",
+                "was_running": was_alive,
+            }
+        # The detach of the production contract: the reference is released, the
+        # member stays alive and its owner decides what happens to it.
         return {
-            "status": "stopped",
+            "status": "detached",
             "was_running": was_alive,
         }
 
@@ -734,6 +750,123 @@ def synthetic_platform(
         verification=verification,
         environment_id=environment_id,
     )
+
+
+def synthetic_platform_with_member(
+    tmp_path: Path,
+    instance: Any,
+    manifest: Mapping[str, Any],
+    verification: InstanceVerification,
+    *,
+    member_id: str = "member_b",
+) -> tuple[SyntheticPlatform, RuntimeHandle]:
+    """The same realized operation, with one more runtime member and its handle.
+
+    What a deployment of several components leaves behind: the second member is
+    pinned in the authoritative record, carries its own execution binding and
+    prepared runtime spec of the same content, and is held as a runtime
+    reference of the operation. The member is added to the record, the verified
+    identity and the state file together, so nothing disagrees about which
+    members this operation has — which is what a hand-over over several
+    references needs in order to be exercised where one member answers and
+    another refuses.
+
+    The returned operation's ``element``/``component_id`` remain the first
+    member's; the second member is the returned handle (and the record's second
+    component). ``platform.record`` is the record as it was before the member
+    was added: the authoritative one is ``platform.persisted()``.
+    """
+    platform = synthetic_platform(tmp_path, instance, manifest, verification)
+    record = platform.deployment.record
+    first = platform.deployment._handles[0]
+    binding = replace(platform.component, component_id=member_id)
+    source = tmp_path / f"verified-source-{member_id}"
+    source.mkdir(parents=True, exist_ok=True)
+    module_path = source / "bound_component.py"
+    module_path.write_bytes(BOUND_CONTENT)
+    workspace = platform.workspace.parent / member_id
+    workspace.mkdir(parents=True, exist_ok=True)
+    spec = workspace / "runtime.json"
+    execution = replace(
+        platform.element.execution,
+        component_id=member_id,
+        root=source,
+        roots=(source,),
+        untrusted=(workspace,),
+        modules=(
+            BoundModule(
+                module="bound_component",
+                path=module_path,
+                digest=compute_content_digest(module_path),
+            ),
+        ),
+    )
+    element = replace(
+        platform.element,
+        component=binding,
+        spec_path=spec,
+        workspace=workspace,
+        binding=replace(
+            platform.element.binding, component_id=member_id, import_paths=(source,)
+        ),
+        source_paths=(source,),
+        execution=execution,
+    )
+    spec.write_text(
+        json.dumps(
+            {
+                "$comment": "Runtime spec of one component of one operation (§8).",
+                "deployment_id": element.deployment_id,
+                "environment_id": element.environment_id,
+                "platform_id": element.platform_id,
+                "instance_digest": element.instance_digest,
+                "manifest": {
+                    "manifest_id": record.manifest_id,
+                    "manifest_version": record.manifest_version,
+                    "manifest_digest": record.manifest_digest,
+                },
+                "component": binding.document(),
+                "configuration": {},
+                "artifact_source": element.artifact_source.document(),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    entry = replace(
+        record.components[0],
+        component_id=member_id,
+        execution=execution.document(),
+        observed_execution=execution.document(),
+    )
+    record = record.with_components((*record.components, entry), at=AT)
+    platform.deployment._store.write(record)
+    platform.deployment.record = record
+    platform.deployment.verification = replace(
+        verification, components=(*verification.components, binding)
+    )
+    handle = RuntimeHandle(
+        element=element,
+        process=_FakeProcess(alive=record.running),
+        started=record.running,
+    )
+    platform.deployment._handles = (first, handle)
+    platform.runtime.live[member_id] = handle
+    platform.runtime.live[platform.component_id] = first
+    return platform, handle
+
+
+def _leave_nothing_running(deployment: Deployment) -> None:
+    """Test hygiene: stop through the operation while it still holds references.
+
+    An attempt that released every reference it held leaves the operation with
+    none, and a stop then reaches no runtime: it is refused instead of being
+    performed through a released handle. There is nothing to clean up through
+    the operation then — what happened to the processes is asserted by the test
+    itself, which keeps the handles it observed.
+    """
+    if deployment._handles:
+        deployment.stop()
 
 
 def _pinned_identity(platform: SyntheticPlatform) -> dict[str, Any]:
@@ -1667,7 +1800,15 @@ class TestIdentityPreservation:
         assert platform.runtime.starts == []
         assert platform.runtime.live == {}
         record = platform.persisted()
-        assert (record.running, record.ready, record.deployed) == (False, False, False)
+        assert (record.running, record.ready, record.deployed) == (
+            True,
+            False,
+            False,
+        ), (
+            "the detach released this operation's references: no verified "
+            "readiness and no deployed platform stand, and the record does not "
+            "claim a platform it never saw stop"
+        )
         attempt = record.restarts[-1]
         assert attempt.outcome == RESTART_FAILED
         assert attempt.failure_phase == "execution_verification"
@@ -1677,10 +1818,13 @@ class TestIdentityPreservation:
         )
         assert platform.event_names() == [
             EVENT_RESTART_REQUESTED,
-            EVENT_PLATFORM_STOPPED,
             EVENT_RESTART_STOPPED,
             EVENT_RESTART_FAILED,
         ]
+        assert EVENT_PLATFORM_STOPPED not in platform.event_names(), (
+            "a released reference is not a stopped platform, so the journal "
+            "carries no platform-stopped signal"
+        )
         assert EVENT_RESTART_EXECUTION_VERIFIED not in platform.event_names()
         assert EVENT_RUNTIME_STARTED not in platform.event_names()
 
@@ -1709,7 +1853,7 @@ class TestIdentityPreservation:
 
         assert caught.value.phase == "identity_verification"
         record = platform.persisted()
-        assert (record.running, record.ready, record.deployed) == (False, False, False)
+        assert (record.running, record.ready, record.deployed) == (True, False, False)
         assert record.restarts[-1].failure_phase == "identity_verification"
         assert EVENT_IDENTITY_VERIFIED not in platform.event_names()
         assert platform.runtime.live == {}
@@ -1732,7 +1876,7 @@ class TestIdentityPreservation:
 
         record = platform.persisted()
         assert record.restarts[-1].failure_phase == "identity_verification"
-        assert (record.running, record.ready, record.deployed) == (False, False, False)
+        assert (record.running, record.ready, record.deployed) == (True, False, False)
 
 
 # ---------------------------------------------------------------------------
@@ -1743,10 +1887,16 @@ class TestIdentityPreservation:
 class TestHonestState:
     """Stopped is stopped, started is not ready, and failed is never success."""
 
-    def test_after_the_stop_the_platform_is_neither_ready_nor_running(
+    def test_after_the_stop_the_record_claims_no_ready_platform_and_no_stop(
         self, platform: SyntheticPlatform
     ) -> None:
-        """AC 4 — observed from inside the attempt, between two of its phases."""
+        """AC 4 — observed from inside the attempt, between two of its phases.
+
+        The stop phase is the contract's detach: it releases this operation's
+        references. What the record states afterwards is exactly that — no
+        verified readiness, no ``deployed`` platform, and no claim that the
+        platform stopped, which a released reference cannot establish.
+        """
         seen: dict[str, DeploymentRecord] = {}
         platform.runtime.before_start = lambda element: seen.setdefault(
             "record", platform.persisted()
@@ -1756,11 +1906,60 @@ class TestHonestState:
 
         assert result.completed is True
         mid = seen["record"]
-        assert (mid.running, mid.ready, mid.deployed) == (False, False, False)
-        assert [action.name for action in mid.operational_actions][-1] == (
-            "platform_stopped"
+        assert (mid.running, mid.ready, mid.deployed) == (True, False, False), (
+            "the running claim stands (the member may still be up under its "
+            "owner's policy), readiness is withdrawn, no deployed platform is "
+            "claimed"
         )
+        assert [action.name for action in mid.operational_actions] == [
+            "readiness_withdrawn"
+        ], "a detach records the withdrawal of readiness, never a stop"
         assert mid.components[0].runtime_started is False
+
+    def test_a_released_reference_is_never_a_stopped_platform(
+        self, platform: SyntheticPlatform
+    ) -> None:
+        """The stop phase of a detach-only runtime claims no stop anywhere.
+
+        The scenario the production contract describes: the member the detach
+        released is still up and still the runtime's own element when the
+        record states what it knows — and nothing on the journal or in
+        deployment state claims otherwise.
+        """
+        platform.runtime.detach_only = True
+        released = platform.deployment._handles[0]
+        assert released.process.poll() is None, "the member is up before the restart"
+        seen: dict[str, Any] = {}
+
+        def observe(_: RuntimeElement) -> None:
+            seen["record"] = platform.persisted()
+            seen["member_alive"] = released.process.poll() is None
+
+        platform.runtime.before_start = observe
+
+        assert platform.restart().completed is True
+
+        mid = seen["record"]
+        assert (mid.running, mid.ready) == (True, False)
+        assert seen["member_alive"] is True, (
+            "the member the detach released is still running while the record "
+            "states what it knows: no verified readiness, no deployed platform "
+            "— and no stopped platform either"
+        )
+        assert released.process.poll() is None, (
+            "the released member outlives the detach: this operation released a "
+            "reference and terminated nothing"
+        )
+        state_text = Path(platform.deployment.state_path).read_text(encoding="utf-8")
+        journal_text = Path(platform.deployment.events_path).read_text(encoding="utf-8")
+        assert "platform_stopped" not in state_text
+        assert "platform_stopped" not in journal_text
+        assert EVENT_PLATFORM_STOPPED not in platform.event_names()
+        stop_phase = platform.attempt().phase("stop")
+        assert stop_phase.detail["detached"] == [platform.component_id]
+        assert stop_phase.detail["running"] is True
+        assert stop_phase.detail["ready"] is False
+        assert stop_phase.detail["physical_stop_established"] is False
 
     def test_a_started_process_claims_no_readiness_of_its_own(
         self, platform: SyntheticPlatform
@@ -1825,9 +2024,16 @@ class TestHonestState:
 
         assert caught.value.phase == "start"
         record = platform.persisted()
-        assert (record.running, record.ready, record.deployed) == (False, False, False)
+        assert (record.running, record.ready, record.deployed) == (
+            True,
+            False,
+            False,
+        ), (
+            "the stop phase detached this operation's references; the record "
+            "never turns that into a stopped platform"
+        )
         assert [action.name for action in record.operational_actions] == [
-            "platform_stopped",
+            "readiness_withdrawn",
             "platform_restart_failed",
         ]
         assert record.components[0].runtime_started is False
@@ -1841,7 +2047,6 @@ class TestHonestState:
         )
         assert platform.event_names() == [
             EVENT_RESTART_REQUESTED,
-            EVENT_PLATFORM_STOPPED,
             EVENT_RESTART_STOPPED,
             EVENT_RESTART_EXECUTION_VERIFIED,
             EVENT_RESTART_FAILED,
@@ -1857,7 +2062,11 @@ class TestHonestState:
             platform.restart()
 
         record = platform.persisted()
-        assert record.running is False
+        assert (
+            record.running is True
+        ), "nothing this attempt reached established that the platform stopped"
+        assert record.ready is False
+        assert record.deployed is False
         assert record.components[0].runtime_started is False
         assert platform.runtime.live == {}
         assert record.restarts[-1].failure_phase == "start"
@@ -1873,7 +2082,7 @@ class TestHonestState:
 
         assert caught.value.phase == "health_check"
         record = platform.persisted()
-        assert (record.running, record.ready, record.deployed) == (False, False, False)
+        assert (record.running, record.ready, record.deployed) == (True, False, False)
         entry = record.components[0]
         assert entry.healthy is False
         assert entry.health is not None
@@ -1901,7 +2110,7 @@ class TestHonestState:
             platform.restart()
 
         record = platform.persisted()
-        assert (record.running, record.ready, record.deployed) == (False, False, False)
+        assert (record.running, record.ready, record.deployed) == (True, False, False)
         assert record.restarts[-1].failure_phase == "health_check"
         assert platform.runtime.live == {}
 
@@ -1975,7 +2184,7 @@ class TestHonestState:
 
         assert result.completed is True
         attempt = platform.attempt()
-        assert attempt.phase("stop").detail["already_stopped"] is True
+        assert attempt.phase("stop").detail["claimed_running"] is False
         assert EVENT_PLATFORM_STOPPED not in platform.event_names()
         assert [action.name for action in platform.persisted().operational_actions] == [
             "platform_stopped",
@@ -2038,10 +2247,12 @@ class TestRetryAndConcurrency:
         with pytest.raises(RestartFailed):
             platform.restart()
 
-        assert platform.runtime.live == {}
-        assert all(
-            handle.process.poll() is not None for handle in platform.deployment._handles
-        ), "the operation keeps managing elements that exist — and none is alive"
+        assert platform.runtime.live == {}, "no runtime element is alive"
+        assert platform.deployment._handles == (), (
+            "the references the attempt released are not this operation's "
+            "active references any more: it keeps exactly the ones whose "
+            "release refused, and none refused"
+        )
         calls = [name for name, _ in platform.runtime.calls]
         assert calls.count("start") == 1
         assert calls.count("stop") == 2, "the attempt's stop, then its own cleanup"
@@ -2050,19 +2261,32 @@ class TestRetryAndConcurrency:
     def test_a_controlled_retry_is_a_separately_identified_attempt(
         self, platform: SyntheticPlatform
     ) -> None:
-        """Adversarial 14 — a retry adds an attempt, it never rewrites one."""
-        platform.runtime.unhealthy = frozenset({platform.component_id})
-        with refusal(RestartFailed, r"did not establish ready"):
+        """Adversarial 14 — a retry adds an attempt, it never rewrites one.
+
+        The first attempt fails with its reference still held — the member
+        refused to be released — so the retry has a reference of its own to
+        work with. A reference that *was* released is never used again: an
+        attempt like that leaves the operation holding none (see
+        ``TestPartialHandOver``), and a retry is refused before any runtime
+        action instead of being performed through a stale handle.
+        """
+        platform.runtime.fail_stop = frozenset({platform.component_id})
+        handle = platform.deployment._handles[0]
+        with refusal(RestartFailed, r"refused to stop"):
             platform.restart()
+        assert platform.deployment._handles == (
+            handle,
+        ), "nothing was released, so the reference is still the operation's"
         first = platform.attempt()
         assert (first.outcome, first.sequence) == (RESTART_FAILED, 1)
         assert first.restart_id.endswith("#attempt:1")
+        assert first.failure_phase == "stop"
         assert (
             first.phase("identity_verification").status == STAGE_PENDING
         ), "the failed attempt never reached the identity confirmation"
         assert platform.owner.bindings == []
 
-        platform.runtime.unhealthy = frozenset()
+        platform.runtime.fail_stop = frozenset()
         second_id = derive_restart_id(platform.deployment)
         assert second_id.endswith("#attempt:2")
 
@@ -2077,7 +2301,7 @@ class TestRetryAndConcurrency:
             RESTART_COMPLETED,
         ]
         assert record.restarts[0] == first, "the failed attempt was not rewritten"
-        assert record.restarts[0].failure_phase == "health_check"
+        assert record.restarts[0].failure_phase == "stop"
         assert record.restarts[1].restart_id == second_id
         assert (record.running, record.ready, record.deployed) == (True, True, True)
         assert record.restarted is True
@@ -2213,6 +2437,240 @@ class TestRetryAndConcurrency:
 
 
 # ---------------------------------------------------------------------------
+# AC 13 / §18, §20 — a hand-over over several references is never rounded
+# ---------------------------------------------------------------------------
+
+
+class TestPartialHandOver:
+    """One member released, another refusing: only the unreleased one stays.
+
+    ``RuntimeAdapter.stop`` is the runtime contract's **detach** — the release
+    of this operation's reference — so a stop phase over several references can
+    be partial (ADR-0016 §18, §20). The released members are not active
+    references any more: the operation keeps exactly the references whose
+    release refused, a repeated cleanup never detaches a released member again,
+    and no later operation is performed through a stale handle.
+    """
+
+    @staticmethod
+    def partial(
+        tmp_path: Path, instance: Any, manifest: Mapping[str, Any], verification: Any
+    ) -> tuple[SyntheticPlatform, RuntimeHandle, RuntimeHandle]:
+        """Two members, of which the second refuses to be released."""
+        platform, member_b = synthetic_platform_with_member(
+            tmp_path, instance, manifest, verification
+        )
+        platform.runtime.fail_stop = frozenset({member_b.component_id})
+        return platform, platform.deployment._handles[0], member_b
+
+    def test_a_partial_detach_keeps_only_the_reference_that_refused(
+        self,
+        tmp_path: Path,
+        instance: Any,
+        manifest: Mapping[str, Any],
+        verification: Any,
+    ) -> None:
+        platform, member_a, member_b = self.partial(
+            tmp_path, instance, manifest, verification
+        )
+        desired = _pinned_identity(platform)
+
+        with refusal(RestartFailed, r"refused to stop") as caught:
+            platform.restart()
+
+        assert caught.value.phase == "stop"
+        # every reference was attempted; only the first one answered
+        assert sorted(
+            entry for entry in platform.runtime.calls if entry[0] == "stop"
+        ) == sorted(
+            [("stop", member_a.component_id), ("stop", member_b.component_id)], key=str
+        ), "every reference was attempted, in the order the operation holds"
+        assert platform.runtime.stops == [member_a.component_id]
+        # the released reference is gone from the operation; the refusing one stays
+        assert platform.deployment._handles == (
+            member_b,
+        ), "the operation keeps exactly the references that were not released"
+        assert member_a.process.poll() is not None, "the released member is down"
+        assert member_b.process.poll() is None, "the refusing member is untouched"
+        assert platform.runtime.live == {member_b.component_id: member_b}
+
+        # persisted state is the honest partial: a platform that may still be up,
+        # no verified condition, and never a stopped platform
+        record = platform.persisted()
+        assert (record.running, record.ready, record.deployed) == (True, False, False)
+        assert record.identity_verified is True, "what was verified is not unlearned"
+        attempt = record.restarts[-1]
+        assert attempt.outcome == RESTART_FAILED
+        assert attempt.failure_phase == "stop"
+        assert attempt.phase("stop").status == STAGE_FAILED
+        assert attempt.phase_order() == ("requested", "stop")
+        assert [
+            entry.component_id
+            for entry in record.components
+            if entry.runtime_started is False
+        ] == [member_a.component_id], "the record states which member was released"
+        action = record.operational_actions[-1]
+        assert action.name == "platform_restart_failed"
+        assert action.detail["released"] == [member_a.component_id]
+        assert action.detail["references_held"] == [member_b.component_id]
+        assert "platform_stopped" not in [
+            entry.name for entry in record.operational_actions
+        ]
+        state_text = platform.deployment.state_path.read_text(encoding="utf-8")
+        assert "platform_stopped" not in state_text
+        event = platform.events()[-1]
+        assert event["event"] == EVENT_RESTART_FAILED
+        assert event["detail"]["released"] == [member_a.component_id]
+        assert event["detail"]["references_held"] == [member_b.component_id]
+        assert event["detail"]["running"] is True
+        assert event["detail"]["deployed"] is False
+        # desired state is not touched by any of this
+        assert _pinned_identity(platform) == desired
+
+    def test_a_repeated_cleanup_never_detaches_a_released_member_again(
+        self,
+        tmp_path: Path,
+        instance: Any,
+        manifest: Mapping[str, Any],
+        verification: Any,
+    ) -> None:
+        platform, member_a, member_b = self.partial(
+            tmp_path, instance, manifest, verification
+        )
+        with refusal(RestartFailed, r"refused to stop"):
+            platform.restart()
+        after_attempt = list(platform.runtime.calls)
+        state_after_attempt = platform.deployment.state_path.read_bytes()
+
+        # a retry is refused input-side, before any runtime action: the record
+        # pins a member this operation no longer holds, and a restart never
+        # rebuilds references from desired state
+        with refusal(DeploymentInputRejected, r"holds no runtime element for it"):
+            platform.restart()
+
+        assert platform.runtime.calls == after_attempt, "no released handle was used"
+        assert platform.deployment.state_path.read_bytes() == state_after_attempt
+        assert platform.deployment._handles == (member_b,)
+
+        # a repeated cleanup of the references attempts only the member whose
+        # release refused — the released member is never detached a second time
+        with refusal(RuntimeProcessError, r"refused to stop"):
+            platform.deployment.release(origin="repeat-cleanup")
+
+        assert sorted(
+            entry for entry in platform.runtime.calls if entry[0] == "stop"
+        ) == sorted(
+            [
+                ("stop", member_a.component_id),
+                ("stop", member_b.component_id),
+                ("stop", member_b.component_id),
+            ],
+            key=str,
+        ), "the released member was never detached a second time"
+        assert platform.deployment._handles == (
+            member_b,
+        ), "nothing was released by the repeated cleanup, so nothing changed"
+        assert (
+            platform.deployment.state_path.read_bytes() == state_after_attempt
+        ), "a cleanup that released nothing writes nothing"
+
+    def test_a_complete_hand_over_leaves_no_reference_to_stop_again(
+        self,
+        tmp_path: Path,
+        instance: Any,
+        manifest: Mapping[str, Any],
+        verification: Any,
+    ) -> None:
+        platform, member_b = synthetic_platform_with_member(
+            tmp_path, instance, manifest, verification
+        )
+        member_a = platform.deployment._handles[0]
+        platform.runtime.unhealthy = frozenset({member_b.component_id})
+
+        with refusal(RestartFailed, r"did not establish ready"):
+            platform.restart()
+
+        # both references were released by the stop phase, and the elements the
+        # attempt started were released by its own cleanup
+        released_once = sorted([member_a.component_id, member_b.component_id])
+        assert (
+            platform.runtime.stops[:2] == released_once
+        ), "the stop phase detached both"
+        assert (
+            platform.runtime.stops[2:] == released_once
+        ), "the attempt's own cleanup released the elements it started"
+        assert platform.deployment._handles == (), (
+            "a released reference is not an active reference, so the operation "
+            "keeps none"
+        )
+        assert platform.runtime.live == {}
+        calls = [name for name, _ in platform.runtime.calls]
+        assert calls.count("stop") == 4, "the detach of both, then both cleanups"
+        record = platform.persisted()
+        assert (record.running, record.ready, record.deployed) == (True, False, False)
+        assert record.restarts[-1].failure_phase == "health_check"
+        action = record.operational_actions[-1]
+        assert action.detail["released"] == sorted(
+            [member_a.component_id, member_b.component_id]
+        )
+        assert action.detail["references_held"] == []
+
+        # no later operation is performed through a released handle: a stop and
+        # a retry both refuse, and nothing reaches the runtime again
+        before = list(platform.runtime.calls)
+        with refusal(DeploymentStateError, r"holds no runtime element"):
+            platform.deployment.stop()
+        with refusal(DeploymentInputRejected, r"holds no runtime elements"):
+            platform.restart()
+        assert platform.runtime.calls == before, "nothing reached the runtime again"
+
+    def test_a_state_write_that_failed_does_not_resurrect_a_reference(
+        self,
+        tmp_path: Path,
+        instance: Any,
+        manifest: Mapping[str, Any],
+        verification: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A release that answered is never undone by a write that did not.
+
+        The attempt keeps acting on the last state it durably wrote, so the state
+        file is left exactly as it was — and the write that fails is the failure
+        the operation reports. What the seam *did* release before that failure is
+        not an active reference any more all the same: the released member is
+        dropped, the member that was not reached stays, and no later operation
+        can reach a released member through a stale handle (§18, §20).
+        """
+        platform, member_b = synthetic_platform_with_member(
+            tmp_path, instance, manifest, verification
+        )
+        member_a = platform.deployment._handles[0]
+        before = platform.persisted()
+
+        def unavailable(store: Any, record: Any, *, secrets: Any = ()) -> None:
+            raise DeploymentStateError("the state file cannot be written")
+
+        # The store is a frozen value object, so the seam is patched on the type:
+        # every write of this attempt fails, and nothing is durably recorded.
+        monkeypatch.setattr(DeploymentStateStore, "write", unavailable)
+
+        with pytest.raises(DeploymentStateError, match="cannot be written"):
+            platform.restart()
+
+        # the attempt detaches in the order it holds the references, and the
+        # write that failed is the first one it makes: member_b was released,
+        # member_a was not reached
+        assert platform.runtime.stops == [member_b.component_id]
+        assert platform.deployment._handles == (member_a,), (
+            "the released reference is gone; the one that was not released "
+            "stays, whatever the state file says"
+        )
+        assert platform.runtime.live == {member_a.component_id: member_a}
+        assert platform.persisted() == before, "the last durably written state stands"
+        assert platform.deployment.record == before
+
+
+# ---------------------------------------------------------------------------
 # AC 11 / AC 14 — ordered, correlated, honest and secret-free observability
 # ---------------------------------------------------------------------------
 
@@ -2231,7 +2689,6 @@ class TestObservability:
         events = platform.events()
         assert [event["detail"]["phase"] for event in events] == [
             "requested",
-            "stop",
             "stop",
             "execution_verification",
             "start",
@@ -2278,12 +2735,15 @@ class TestObservability:
         assert started[0]["component"]["artifact_type"] == "none"
         assert started[0]["component"]["artifact_digest"] is None
         assert started[0]["detail"]["restart"] is True
-        stopped = [
-            event for event in events if event["event"] == EVENT_PLATFORM_STOPPED
+        assert EVENT_PLATFORM_STOPPED not in [
+            event["event"] for event in events
+        ], "the stop phase detaches; it publishes no platform-stopped signal"
+        detached = [
+            event for event in events if event["event"] == EVENT_RESTART_STOPPED
         ]
-        assert len(stopped) == 1
-        assert stopped[0]["detail"]["restart"] is True
-        assert stopped[0]["detail"]["stopped"] == [COMPONENT_ID]
+        assert len(detached) == 1
+        assert detached[0]["detail"]["detached"] == [COMPONENT_ID]
+        assert detached[0]["detail"]["physical_stop_established"] is False
 
     def test_the_phases_of_the_attempt_are_recorded_in_order(
         self, platform: SyntheticPlatform
@@ -2388,9 +2848,12 @@ class TestObservability:
         at_start, at_probe = seen
         names = platform.event_names()
         assert (at_start.running, at_start.ready) == (
+            True,
             False,
-            False,
-        ), "the stop was written before the platform was started again"
+        ), (
+            "the detached record was written before the platform was started "
+            "again: the running claim stands and readiness is withdrawn"
+        )
         assert at_start.restarts == ()
         assert names.index(EVENT_RESTART_STOPPED) < names.index(EVENT_RESTART_STARTED)
         assert (at_probe.running, at_probe.ready) == (
@@ -2430,7 +2893,7 @@ class TestObservability:
         assert secret not in state_text
         assert secret not in journal_text
         record = platform.persisted()
-        assert (record.running, record.ready, record.deployed) == (False, False, False)
+        assert (record.running, record.ready, record.deployed) == (True, False, False)
         assert record.restarts[-1].outcome == RESTART_FAILED
         assert record.restarts[-1].failure_phase == "health_check"
         assert platform.runtime.live == {}, "nothing was left running"
@@ -2996,9 +3459,12 @@ class TestRestartAgainstARealDeployment:
             names = [event.event for event in deployment.events()][published:]
             assert names == list(CYCLE_EVENTS)
             assert [action.name for action in record.operational_actions] == [
-                "platform_stopped",
+                "readiness_withdrawn",
                 "platform_restarted",
-            ]
+            ], (
+                "the stop phase detached this operation's references; the "
+                "record withdraws readiness and never claims a stopped platform"
+            )
             assert DeploymentStateStore(deployment.state_path).read() == record
         finally:
             deployment.stop()
@@ -3027,11 +3493,11 @@ class TestRestartAgainstARealDeployment:
                 True,
             )
             assert deployment._handles[0].process.poll() is None
-            assert result.attempt.phase("stop").detail["already_stopped"] is True
+            stop_phase = result.attempt.phase("stop")
+            assert stop_phase.detail["claimed_running"] is False
+            assert stop_phase.detail["detached"] == [COMPONENT_ID]
             names = [event.event for event in deployment.events()][published:]
-            assert names == [
-                name for name in CYCLE_EVENTS if name != EVENT_PLATFORM_STOPPED
-            ]
+            assert names == list(CYCLE_EVENTS)
             assert [action.name for action in record.operational_actions] == [
                 "platform_stopped",
                 "platform_restarted",
@@ -3097,7 +3563,7 @@ class TestRestartAgainstARealDeployment:
             assert caught.value.phase == "health_check"
             record = deployment.record
             assert (record.running, record.ready, record.deployed) == (
-                False,
+                True,
                 False,
                 False,
             )
@@ -3112,14 +3578,18 @@ class TestRestartAgainstARealDeployment:
                 "health_check",
             )
             assert handle.process.poll() is not None, "the pre-restart process is gone"
-            assert all(
-                element.process.poll() is not None for element in deployment._handles
-            ), "the attempt left no uncontrolled runtime element behind"
+            assert deployment._handles == (), (
+                "the stop phase released the reference it held, and the cleanup "
+                "released the element the attempt started; the operation keeps "
+                "no handle, so it can never stop through a released one"
+            )
+            with refusal(DeploymentStateError, r"holds no runtime element"):
+                deployment.stop()
             assert (
                 _digests(source) == bound
             ), "the attempt re-executed the bound content and changed none"
         finally:
-            deployment.stop()
+            _leave_nothing_running(deployment)
 
     def test_content_substituted_immediately_before_execution_is_refused(
         self, tmp_path: Path, instance: Any, manifest: Mapping[str, Any]
@@ -3154,15 +3624,22 @@ class TestRestartAgainstARealDeployment:
             ), "the digest divergence itself is part of the diagnosis"
             record = deployment.record
             assert (record.running, record.ready, record.deployed) == (
+                True,
                 False,
                 False,
-                False,
+            ), (
+                "the record never claims the platform stopped: the stop phase "
+                "detached this operation's references, and whether the member "
+                "terminated is its owner's policy"
             )
             assert record.restarts[-1].failure_phase == "start"
-            assert handle.process.poll() is not None
-            assert all(
-                element.process.poll() is not None for element in deployment._handles
+            assert handle.process.poll() is not None, "the pre-restart process is gone"
+            assert deployment._handles == (), (
+                "the released reference is not an active reference any more; no "
+                "process was started from the substituted content"
             )
+            with refusal(DeploymentStateError, r"holds no runtime element"):
+                deployment.stop()
             assert not (
                 workspace / SUBSTITUTION_MARKER
             ).exists(), (
@@ -3171,7 +3648,7 @@ class TestRestartAgainstARealDeployment:
             assert ("before-start", COMPONENT_ID) in runtime.calls
             assert _digests(source) != pinned, "the test really did substitute content"
         finally:
-            deployment.stop()
+            _leave_nothing_running(deployment)
 
     def test_content_changed_between_the_run_and_the_restart_is_refused(
         self, tmp_path: Path, instance: Any, manifest: Mapping[str, Any]

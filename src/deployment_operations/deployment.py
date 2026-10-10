@@ -104,6 +104,7 @@ from deployment_operations.runtime import (
     RuntimeProcessError,
     bind_execution,
     build_elements,
+    execution_binding_from_document,
     verify_bound_content,
 )
 from deployment_operations.state import (
@@ -437,6 +438,114 @@ class Deployment:
                 self._event(EVENT_PLATFORM_STOPPED, at=at, stage="ready"),
                 secrets=self._secrets,
             )
+        return record
+
+    def release(self, *, origin: str) -> DeploymentRecord:
+        """Release this operation's references to the platform — a detach (§18).
+
+        ``RuntimeAdapter.stop`` is the runtime contract's **detach**: it releases
+        this operation's reference to a runtime element and leaves that element's
+        fate to its owner (S4 runbook §7; ADR-0016 §18). This is the hand-over an
+        orchestration performs before it records that a platform was superseded
+        or rolled back — an upgrade or a rollback releases *its own* references;
+        it does not stop the platform, and it never becomes the authority on
+        whether the platform is down.
+
+        It is therefore deliberately not :meth:`stop`: a released reference is
+        not evidence of a stopped platform, so nothing here claims one. What is
+        recorded is exactly what this operation established — the verified
+        operational condition is withdrawn (it can no longer be checked, §33) and
+        the release itself is recorded as an operational action carrying the
+        ``origin`` that asked for it. ``running`` keeps the value it had: the
+        conservative statement that a Running Platform may still exist — and
+        that claim is what keeps the record an honest subject for the
+        observational :mod:`deployment_operations.reconciliation`, which
+        refuses a record that claims no Running Platform (§9, §10). A verified
+        condition is not claimed: ``attach`` requires one, so a released
+        operation is re-verified by a following explicit restart, never
+        silently re-adopted.
+
+        **A hand-over over several references can be partial**, and this module
+        never rounds that outcome to either extreme (§20). Every reference is
+        attempted, and the three outcomes are distinguishable from what is
+        recorded: no reference released leaves the record exactly as it was and
+        raises; a partial release withdraws the condition that can no longer
+        hold, records ``platform_released`` with the references that were
+        released, the ones that refused and ``complete: False``, persists that
+        record, and then raises; a complete release records the same action with
+        every reference released and ``complete: True`` and returns. In both
+        failing outcomes the runtime's own exception stays the causal failure —
+        it is re-raised, annotated with what was and was not released.
+
+        Of the references, only what the seam did not release stays this
+        operation's: every released handle is dropped from the operation's
+        active references, so a repeated cleanup never detaches a released
+        element again and a later operation is never performed through a stale
+        handle. A complete release therefore leaves the operation holding no
+        runtime reference at all, and a release that released nothing leaves the
+        references exactly as they were.
+
+        Fail-closed about what it cannot do: an operation that claims a running
+        platform but holds no runtime element reaches no runtime, so it releases
+        nothing and refuses rather than recording a release that never happened
+        (the posture of :meth:`stop`).
+        """
+        at = self._clock()
+        if self.record.running and not self._handles:
+            raise DeploymentStateError(
+                f"{self.record.deployment_id}: this deployment operation holds "
+                "no runtime element, so it is bound to no Running Platform whose "
+                "references it could release; nothing is recorded and no state "
+                "is moved by an operation that reaches no runtime (ADR-0016 §9, "
+                "§18, §20). Re-bind the operation with "
+                "deployment_operations.attach first."
+            )
+        released, failures, remaining = _detach_handles(self._runtime, self._handles)
+        if released:
+            # A released reference is not an active reference any more: the
+            # operation keeps only what it could not release, so a repeated
+            # cleanup never detaches a released element again and no later
+            # operation is performed through a stale handle.
+            self._handles = remaining
+        if failures and not released:
+            # Nothing was handed over: the record keeps its claim as it was, and
+            # the runtime's own exception is the causal failure.
+            _note_release_failure(
+                failures,
+                released,
+                note=(
+                    "no reference was released: none of "
+                    f"[{', '.join(sorted(label for label, _ in failures))}] "
+                    "answered this operation's detach, so the record was left "
+                    "unchanged"
+                ),
+            )
+            raise failures[0][1]
+        record = self.record.withdraw_ready(
+            at=at, reason=_release_reason(origin, failures)
+        )
+        record = record.with_operational_action(
+            "platform_released",
+            at=at,
+            detail=_release_detail(origin, released, failures),
+        )
+        self.record = record
+        if self._store is not None:
+            self._store.write(record, secrets=self._secrets)
+        if failures:
+            # The hand-over is partial: the record above persists exactly which
+            # references were released and which refused, and the runtime's own
+            # exception stays the causal failure.
+            _note_release_failure(
+                failures,
+                released,
+                note=(
+                    "the hand-over is partial: deployment state records it as "
+                    "``platform_released`` with complete=False, so it cannot be "
+                    "mistaken for an untouched operation"
+                ),
+            )
+            raise failures[0][1]
         return record
 
     def _event(
@@ -1005,15 +1114,34 @@ def deploy(
 
         # -- realized / deployed -------------------------------------------
         recorder.realized()
-    except DeploymentOperationsError:
-        # Fail-closed: nothing half-verified keeps running. The record keeps the
-        # history (the stages that completed, the verification that failed) and
-        # stops claiming a platform that is no longer running (§20).
-        for handle in handles.values():
-            adapter.stop(handle)
-        if recorder.record.running:
-            recorder.update(recorder.record.mark_stopped(at=recorder.clock()))
+    except DeploymentOperationsError as error:
+        # Fail-closed: nothing half-verified stays claimed. The record keeps the
+        # history (the stages that completed, the verification that failed),
+        # releases this operation's references to what it started — a detach,
+        # which the record never turns into a claim that the platform stopped —
+        # and withdraws the verified condition it can no longer stand behind
+        # (§18, §20). The cleanup itself is total, so what it could not release
+        # is reported with the failure that called for it instead of replacing
+        # it.
+        error.errors.extend(_release_handles(recorder, adapter, handles))
         raise
+    except Exception as error:  # noqa: BLE001 - the owner's seam is external code
+        # An owner-supplied runtime seam is external code: the RuntimeAdapter
+        # contract says which operations exist, not which exceptions an
+        # implementation raises (ADR-0016 §18). Whatever it raises, the failure
+        # is normalized into this capability's vocabulary at the stage the
+        # operation had reached, every element this operation started is
+        # released (detach-only: the runtime's lifecycle belongs to its owner),
+        # and the original exception stays as diagnostic context — never an
+        # uncontrolled traceback that leaves started elements unaccounted for.
+        failure = _unexpected_failure(recorder.record, error)
+        failure.errors.extend(_release_handles(recorder, adapter, handles))
+        recorder.fail(
+            failure.stage or "deploying",
+            "the deployment operation stopped unexpectedly",
+            failure.errors,
+            failure,
+        )
 
     return Deployment(
         record=recorder.record,
@@ -1026,6 +1154,272 @@ def deploy(
         _store=store,
         _secrets=tuple(environment.secrets.values()),
         _clock=now,
+    )
+
+
+def _handle_label(handle: Any) -> str:
+    """A stable name for one runtime element in recorded evidence."""
+    component_id = getattr(handle, "component_id", None)
+    if isinstance(component_id, str) and component_id.strip():
+        return component_id
+    return str(handle)
+
+
+def _detach_handles(
+    runtime: Any, handles: Sequence[Any]
+) -> tuple[list[str], list[tuple[str, BaseException]], tuple[Any, ...]]:
+    """Release every reference this operation holds, total over the seam (§18).
+
+    One element that refuses its release must not keep the others from being
+    released: a partial hand-over is a real outcome and has to be reportable
+    (:meth:`Deployment.release`, :func:`release_references`). Returns what was
+    released, for everything that was not the label and the exception the
+    contract's own seam raised, and — third — the handles that remain this
+    operation's references. A released reference is not an active reference: the
+    caller keeps only the third element, so a repeated cleanup never detaches it
+    again and no later operation is performed through a stale handle.
+
+    A handle this operation has no seam for is given up without a runtime call —
+    the local/synthetic composition has no seam to detach through, and the
+    recorded evidence names only what the seam answered for.
+    """
+    released: list[str] = []
+    failures: list[tuple[str, BaseException]] = []
+    remaining: list[Any] = []
+    for handle in handles:
+        label = _handle_label(handle)
+        if runtime is None:
+            released.append(label)
+            continue
+        try:
+            runtime.stop(handle)
+        except Exception as error:  # noqa: BLE001 - the owner's seam
+            failures.append((label, error))
+            remaining.append(handle)
+        else:
+            released.append(label)
+    return released, failures, tuple(remaining)
+
+
+def _release_reason(origin: str, failures: Sequence[tuple[str, BaseException]]) -> str:
+    """The withdrawal reason of a release — complete or partial (§13, §33)."""
+    if failures:
+        return (
+            f"{origin}: this deployment operation released some of its "
+            "references to the Running Platform and others refused; a detach is "
+            "the runtime contract's reference release and is not evidence that "
+            "the platform stopped"
+        )
+    return (
+        f"{origin}: this deployment operation released its references to "
+        "the Running Platform; a detach is the runtime contract's "
+        "reference release and is not evidence that the platform stopped"
+    )
+
+
+def _release_detail(
+    origin: str,
+    released: Sequence[str],
+    failures: Sequence[tuple[str, BaseException]],
+) -> dict[str, Any]:
+    """What one release actually established, so partial is never ambiguous.
+
+    ``complete`` is true only when every reference this operation held was
+    released; ``unreleased`` names the references that refused theirs. The three
+    outcomes — nothing released, partial, complete — are therefore
+    distinguishable from deployment state alone.
+    """
+    return {
+        "origin": origin,
+        "complete": not failures,
+        "released": sorted(released),
+        "unreleased": sorted(label for label, _ in failures),
+    }
+
+
+def _note_release_failure(
+    failures: Sequence[tuple[str, BaseException]],
+    released: Sequence[str],
+    *,
+    note: str,
+) -> None:
+    """Annotate the causal exception with what the release established.
+
+    The runtime's own exception stays the failure a caller sees (§20): the note
+    adds the recorded evidence — what was released, what refused — without
+    replacing the causal error, and every further failure is noted too.
+    """
+    failures[0][1].add_note(
+        f"{note} (released: {sorted(released) or 'none'}; "
+        f"unreleased: {[label for label, _ in failures]})"
+    )
+    for label, error in failures[1:]:
+        failures[0][1].add_note(f"{label}: {error.__class__.__name__}: {error}")
+
+
+def _release_handles(
+    recorder: _Recorder,
+    adapter: RuntimeAdapter,
+    handles: Mapping[str, RuntimeHandle],
+) -> list[str]:
+    """Release this operation's reference to the elements it started (§18).
+
+    Detach-only by contract: :class:`RuntimeAdapter.stop` releases this
+    operation's reference and never retires what the owner supervises — the
+    lifecycle of the Running Platform belongs to its owner (ADR-0016 §18;
+    S4 runbook §7). A release that succeeded is therefore **not** evidence that
+    the platform stopped: the record withdraws the verified operational
+    condition it can no longer stand behind and keeps its ``running`` claim,
+    which is what leaves the state honest and the platform reachable through
+    :func:`attach` (§9, §10, §20). Only after *every* handle was released is
+    the condition withdrawn: a release that failed leaves the previous claim
+    standing rather than asserting a state that was not established.
+
+    Total by construction: the seam is external code, so every handle is
+    attempted and everything that could not be released is **returned** as a
+    recorded reason. Cleanup runs while a failure is already being reported,
+    and a cleanup that threw its own exception would replace that failure —
+    the one thing the record must never lose (§20).
+    """
+    problems: list[str] = []
+    for component_id in sorted(handles):
+        try:
+            adapter.stop(handles[component_id])
+        except Exception as error:  # noqa: BLE001 - the owner's seam
+            problems.append(
+                f"{component_id}: the runtime element could not be released "
+                f"({error.__class__.__name__}: {error})"
+            )
+    if not problems:
+        try:
+            recorder.update(
+                recorder.record.withdraw_ready(
+                    at=recorder.clock(),
+                    reason=(
+                        "a fail-closed deployment released this operation's "
+                        "references to the Running Platform; a detach is the "
+                        "runtime contract's reference release and is not "
+                        "evidence that the platform stopped"
+                    ),
+                )
+            )
+        except Exception as error:  # noqa: BLE001 - reported, never raised
+            problems.append(
+                "the withdrawn readiness of the platform could not be recorded "
+                f"({error.__class__.__name__}: {error})"
+            )
+    return problems
+
+
+def release_references(
+    deployment: Any,
+    *,
+    origin: str,
+) -> DeploymentRecord:
+    """Release one deployment operation's references to the platform (§18).
+
+    The hand-over an orchestration performs before it records that a platform
+    was superseded or rolled back: ``origin`` names the orchestration asking
+    for it. A :class:`Deployment` performs it through :meth:`Deployment.release`
+    — release every element over the runtime seam, then record the honest
+    ``running + readiness withdrawn`` state — and nothing about it claims a
+    stopped platform.
+
+    A handle that exposes only the seam and the record (a synthetic or
+    owner-side object) gets the same treatment without a persistence round
+    trip: every element it holds is released and its record is moved to that
+    same honest state — with the same three distinguishable outcomes as
+    :meth:`Deployment.release` (nothing released and the record untouched;
+    partial with ``complete: False``; complete) and the same causal exception —
+    or left exactly as it was if no release happened at all (ADR-0016 §18, §20).
+    As there, only the references the seam did **not** release stay active:
+    released handles are dropped from the object's ``_handles``. Persisting the
+    moved record stays with the caller, which is the object that owns the state
+    target.
+    """
+    release = getattr(deployment, "release", None)
+    if callable(release):
+        return release(origin=origin)
+    released, failures, remaining = _detach_handles(
+        getattr(deployment, "_runtime", None),
+        tuple(getattr(deployment, "_handles", ()) or ()),
+    )
+    if released:
+        # Released references stop being this object's active references, exactly
+        # as in :meth:`Deployment.release`.
+        deployment._handles = remaining
+    if failures and not released:
+        # Nothing was handed over: the record keeps its claim as it was, and the
+        # runtime's own exception is the causal failure.
+        _note_release_failure(
+            failures,
+            released,
+            note=(
+                "no reference was released, so the record was left unchanged; "
+                "persistence stays with the caller of this helper"
+            ),
+        )
+        raise failures[0][1]
+    at = utc_now()
+    record = deployment.record.withdraw_ready(
+        at=at, reason=_release_reason(origin, failures)
+    )
+    record = record.with_operational_action(
+        "platform_released",
+        at=at,
+        detail=_release_detail(origin, released, failures),
+    )
+    deployment.record = record
+    if failures:
+        _note_release_failure(
+            failures,
+            released,
+            note=(
+                "the hand-over is partial and this object's record states it "
+                "with complete=False; persistence stays with the caller of this "
+                "helper"
+            ),
+        )
+        raise failures[0][1]
+    return record
+
+
+def _reached_stage(record: DeploymentRecord) -> str:
+    """The stage of the initial path this operation had reached (§36)."""
+    for entry in record.stages:
+        if entry.status == STAGE_IN_PROGRESS:
+            return entry.name
+    completed = [
+        entry.name for entry in record.stages if entry.status == STAGE_COMPLETED
+    ]
+    return completed[-1] if completed else "deploying"
+
+
+def _unexpected_failure(
+    record: DeploymentRecord, error: Exception
+) -> DeploymentOperationsError:
+    """The recorded failure an unexpected exception becomes (§20).
+
+    The exception type is the implementation's vocabulary, not this
+    capability's: it is carried as the first recorded reason, while the failure
+    itself is the fail-closed failure of the stage the operation had reached.
+    """
+    stage = _reached_stage(record)
+    detail = f"{error.__class__.__name__}: {error}"
+    if stage == "starting":
+        return StartupFailed([detail])
+    if stage == "health_check":
+        return HealthCheckFailed([detail])
+    if stage == "deploying":
+        return DeploymentExecutionFailed([detail])
+    return DeploymentOperationsError(
+        (
+            f"the deployment operation stopped unexpectedly at the {stage!r} "
+            "stage; the failure is recorded and nothing half-realized keeps "
+            "running"
+        ),
+        errors=[detail],
+        stage=stage,
     )
 
 
@@ -1418,6 +1812,45 @@ def _record_observations(
     recorder.components(changes)
 
 
+def _attach_executions(
+    record: DeploymentRecord,
+    elements: Mapping[str, RuntimeElement],
+) -> dict[str, RuntimeElement]:
+    """The elements ``attach`` hands the adapter, bound to the recorded content.
+
+    ``attach`` starts nothing, but the reference it restores is the reference a
+    restart re-executes from: the elements it hands the owner are bound to the
+    execution content the deployment record already pins — the boundary
+    established before anything was launched — and that boundary is re-verified
+    against the bytes on disk here, so content replaced since the deployment is
+    refused rather than handed out for execution (ADR-0016 §9, §10).
+    """
+    bound: dict[str, RuntimeElement] = {}
+    errors: list[str] = []
+    for component_id, element in elements.items():
+        entry = record.component(component_id)
+        persisted = entry.execution if entry is not None else None
+        if not isinstance(persisted, Mapping):
+            errors.append(
+                f"{component_id}: the record holds no execution binding; there "
+                "is no verified content for this operation's runtime element"
+            )
+            continue
+        execution = execution_binding_from_document(persisted)
+        if execution.component_id != component_id:
+            errors.append(
+                f"{component_id}: the record's execution binding names "
+                f"{execution.component_id!r}; a binding belongs to exactly the "
+                "component it was established for"
+            )
+            continue
+        errors.extend(verify_bound_content(execution))
+        bound[component_id] = replace(element, execution=execution)
+    if errors:
+        raise IdentityVerificationFailed(errors)
+    return bound
+
+
 def _attach_subject_errors(
     record: DeploymentRecord,
     verification: InstanceVerification,
@@ -1557,7 +1990,10 @@ def attach(
     an honest realized, running, identity-verified platform for exactly this
     instance. It then asks the injected :class:`RuntimeAdapter` to bind the
     runtime elements its environment already supervises, and re-verifies the
-    actual platform identity through the same S4 seam ``deploy`` uses.
+    actual platform identity through the same S4 seam ``deploy`` uses. The
+    elements it hands the adapter are bound to the execution content the record
+    pins — re-verified against the bytes on disk — because what ``attach``
+    restores is the reference a restart re-executes from, in a fresh process.
 
     What ``attach`` never does (ADR-0016 §7, §9, §10, §18, §20):
 
@@ -1657,12 +2093,29 @@ def attach(
         )
     provisioned = provision(environment, verification, deployment_id)
     paths = tuple(source_paths) if source_paths is not None else default_source_paths()
-    elements = build_elements(
-        environment, provisioned, verification, source_paths=paths
+    elements = _attach_executions(
+        record,
+        build_elements(environment, provisioned, verification, source_paths=paths),
     )
     handles: dict[str, RuntimeHandle] = {}
     for component_id in sorted(elements):
-        handle = runtime.attach(elements[component_id])
+        try:
+            handle = runtime.attach(elements[component_id])
+        except RuntimeProcessError:
+            raise
+        except Exception as error:
+            # An owner-supplied runtime seam is external code: whatever it
+            # raises while binding, the binding failed closed. Nothing was
+            # created, started, stopped or migrated, no state was written, and
+            # the original exception stays as diagnostic context (§18, §20).
+            raise RuntimeProcessError(
+                (
+                    f"{deployment_id}: the runtime adapter could not bind the "
+                    "standing platform; this operation was not re-bound and no "
+                    "runtime element was touched"
+                ),
+                errors=[f"{error.__class__.__name__}: {error}"],
+            ) from error
         if handle.component_id != component_id:
             raise InvalidDeploymentStateTransition(
                 f"{deployment_id}: the runtime adapter bound "

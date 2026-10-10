@@ -26,9 +26,12 @@ Two consequences of that path are deliberate and easy to get wrong:
   before the platform is started: ``deploying`` never starts a runtime element,
   ``starting`` does (§36–§37);
 * ``deployed`` is a claim about an **actual, observable Running Platform**
-  (§10), so stopping the platform withdraws it — the record keeps what the
-  operation did and the verification it performed, and stops claiming a
-  platform that is no longer running.
+  (§10), so a stop withdraws it — the record keeps what the operation did and
+  the verification it performed, and claims no operational condition it can no
+  longer stand behind. The runtime contract's ``stop`` is a **detach** (§18):
+  it releases the caller's reference, and a released reference is not evidence
+  that the platform stopped — whether the runtime itself ends is its owner's
+  policy.
 
 Upgrade and rollback are separate explicit orchestration slices; reconciliation
 of actual state against the exact desired state is a separate observational one;

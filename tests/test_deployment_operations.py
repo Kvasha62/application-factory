@@ -52,6 +52,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
@@ -109,6 +110,7 @@ from deployment_operations import (
     verify_input_unchanged,
     verify_instance,
 )
+from deployment_operations.deployment import release_references
 from deployment_operations.platform_identity import (
     ActualComponentIdentity,
     EvidenceCorrelation,
@@ -681,9 +683,12 @@ class TestIdentityAcceptanceGate:
         assert record.failure.stage == "ready"
         assert record.identity_verified is False
         assert record.ready is False
-        assert record.running is False
+        assert (
+            record.running is True
+        ), "the fail-closed release is a detach; the record claims no stopped platform"
         assert record.deployed is False
         assert [event["event"] for event in events][-1] == "deployment_failed"
+        assert not any(event["event"] == "platform_stopped" for event in events)
         assert not any(event["event"] == "deployment_realized" for event in events)
 
     def test_provider_exception_fails_closed_after_ready(
@@ -701,7 +706,10 @@ class TestIdentityAcceptanceGate:
         assert record.failure is not None
         assert record.failure.stage == "ready"
         assert record.identity_verified is False
-        assert record.running is False
+        assert record.ready is False
+        assert (
+            record.running is True
+        ), "the fail-closed release is a detach; the record claims no stopped platform"
         assert record.deployed is False
 
     def test_identity_verified_precedes_realized_at_acceptance_seam(
@@ -929,12 +937,15 @@ class TestHonestDeployedClaim:
         assert ready_stage.detail["ready"] is True
         events = read_events(environment, instance)
         assert any(entry["event"] == "ready_reached" for entry in events)
-        # …and still no deployed claim stands: identity verification failed and
-        # the platform was stopped rather than left running half-verified.
+        # …and still no deployed claim stands: identity verification failed, so
+        # this operation released its references instead of leaving a
+        # half-verified platform claimed as ready.
         assert record.identity_verified is False
         assert record.lifecycle == LIFECYCLE_FAILED
-        assert record.ready is False, "nothing is running, so no ready condition holds"
-        assert record.running is False
+        assert record.ready is False, "no verified condition stands, so none is claimed"
+        assert (
+            record.running is True
+        ), "the release is a detach: it is not evidence that the platform stopped"
         assert record.deployed is False
         assert record.failure is not None
         assert record.failure.stage == "ready"
@@ -956,7 +967,9 @@ class TestHonestDeployedClaim:
         assert record.identity_verified is False
         assert record.stage("ready").status == "completed"
         assert record.ready is False
-        assert record.running is False
+        assert (
+            record.running is True
+        ), "the fail-closed release is a detach; the record claims no stopped platform"
 
 
 # ---------------------------------------------------------------------------
@@ -2189,6 +2202,259 @@ class TestRuntimeOperation:
         assert load_record(deployment.state_path).deployed is False
 
 
+class PartialDetachRuntime:
+    """A detach-only runtime seam whose members do not all answer (§18).
+
+    It releases the handles it is given through the local composition's own
+    runtime — the detach of an element this composition started — and refuses
+    the members named in ``refuse`` by raising, exactly as an owner-side seam
+    may. It records what it was asked, so a test can prove that one refusing
+    member never keeps the others from being released.
+    """
+
+    def __init__(
+        self, *, refuse: frozenset[str] = frozenset(), delegate: bool = True
+    ) -> None:
+        self.inner = LocalProcessRuntime()
+        self.delegate = delegate
+        self.refuse = refuse
+        self.attempted: list[str] = []
+        self.detached: list[str] = []
+
+    def stop(self, handle):
+        label = getattr(handle, "component_id", None) or str(handle)
+        self.attempted.append(label)
+        if label in self.refuse:
+            raise RuntimeError(f"{label}: the member refused to be released")
+        answer = (
+            self.inner.stop(handle)
+            if self.delegate
+            else {"status": "detached", "was_running": True}
+        )
+        self.detached.append(label)
+        return answer
+
+
+class TestReferenceRelease:
+    """Releasing references is a hand-over: never a stop, never an extreme.
+
+    ``Deployment.release`` detaches this operation's references (ADR-0016 §18;
+    S4 runbook §7). The three outcomes a hand-over can have — nothing released,
+    a partial release, a complete release — are distinguishable from what is
+    recorded, and only the complete one lets an orchestration record that a
+    platform was handed over.
+    """
+
+    def test_a_complete_release_records_every_reference(
+        self, tmp_path, instance, manifest
+    ):
+        deployment = deploy_canonical(tmp_path, instance, manifest)
+        handle = deployment._handles[0]
+        runtime = PartialDetachRuntime()
+        deployment._runtime = runtime
+        journal_before = [event.event for event in deployment.events()]
+
+        record = deployment.release(origin="test-release")
+
+        assert runtime.attempted == [handle.component_id]
+        assert runtime.detached == [handle.component_id]
+        assert record.running is True, "the platform may still be up"
+        assert record.ready is False
+        assert record.deployed is False
+        assert record.identity_verified is True, "what was verified is not unlearned"
+        released = [
+            action
+            for action in record.operational_actions
+            if action.name == "platform_released"
+        ]
+        assert len(released) == 1
+        assert released[0].detail == {
+            "origin": "test-release",
+            "complete": True,
+            "released": [handle.component_id],
+            "unreleased": [],
+        }
+        assert [action.name for action in record.operational_actions] == [
+            "readiness_withdrawn",
+            "platform_released",
+        ], "a detach withdraws the condition and records the release, never a stop"
+        assert deployment._handles == (), (
+            "a released reference is not an active reference any more: a "
+            "complete release leaves this operation holding none, so nothing "
+            "can ever be detached through a stale handle"
+        )
+        assert [
+            event.event for event in deployment.events()
+        ] == journal_before, (
+            "the release publishes no signal of its own and no platform-stopped one"
+        )
+        assert "platform_stopped" not in journal_before
+        persisted = load_record(deployment.state_path)
+        assert persisted == record
+
+    def test_a_partial_release_is_recorded_and_never_claimed_as_a_stop(
+        self, tmp_path, instance, manifest
+    ):
+        deployment = deploy_canonical(tmp_path, instance, manifest)
+        handle = deployment._handles[0]
+        runtime = PartialDetachRuntime(refuse=frozenset({"member-b"}))
+        deployment._runtime = runtime
+        deployment._handles = (handle, "member-b")
+
+        with pytest.raises(
+            RuntimeError, match="member-b: the member refused"
+        ) as caught:
+            deployment.release(origin="test-partial")
+
+        # every reference was attempted: one refusal does not abandon the rest
+        assert runtime.attempted == [handle.component_id, "member-b"]
+        assert runtime.detached == [handle.component_id]
+        # the causal failure is preserved and says what happened
+        notes = getattr(caught.value, "__notes__", ())
+        assert any("partial" in note for note in notes), notes
+        assert any("member-b" in note for note in notes), notes
+
+        record = deployment.record
+        assert (record.running, record.ready, record.deployed) == (True, False, False)
+        released = [
+            action
+            for action in record.operational_actions
+            if action.name == "platform_released"
+        ]
+        assert len(released) == 1
+        assert released[0].detail == {
+            "origin": "test-partial",
+            "complete": False,
+            "released": [handle.component_id],
+            "unreleased": ["member-b"],
+        }
+        assert "platform_stopped" not in [
+            action.name for action in record.operational_actions
+        ]
+        persisted = load_record(deployment.state_path)
+        assert persisted == record, (
+            "the partial hand-over is what is durably recorded, so a later "
+            "operation cannot read it as untouched"
+        )
+        state_text = deployment.state_path.read_text(encoding="utf-8")
+        assert "platform_stopped" not in state_text
+        assert deployment._handles == ("member-b",), (
+            "the operation keeps exactly the references that were not released; "
+            "the released one is not an active reference any more"
+        )
+
+    def test_a_repeated_cleanup_never_detaches_a_released_reference_again(
+        self, tmp_path, instance, manifest
+    ):
+        """A released reference is never handed to the seam a second time (§18)."""
+        deployment = deploy_canonical(tmp_path, instance, manifest)
+        handle = deployment._handles[0]
+        runtime = PartialDetachRuntime(refuse=frozenset({"member-b"}))
+        deployment._runtime = runtime
+        deployment._handles = (handle, "member-b")
+        with pytest.raises(RuntimeError, match="member-b: the member refused"):
+            deployment.release(origin="first-cleanup")
+        assert deployment._handles == ("member-b",)
+        state_after_first = deployment.state_path.read_bytes()
+
+        # the same cleanup again: only the reference whose release refused is
+        # attempted, and a release that released nothing writes nothing
+        with pytest.raises(RuntimeError, match="member-b: the member refused"):
+            deployment.release(origin="second-cleanup")
+
+        assert runtime.attempted == [
+            handle.component_id,
+            "member-b",
+            "member-b",
+        ], "the released reference was never detached again"
+        assert deployment._handles == ("member-b",)
+        assert deployment.state_path.read_bytes() == state_after_first
+        assert deployment.record.ready is False
+        assert deployment.record.running is True
+
+    def test_a_release_that_released_nothing_leaves_the_record_untouched(
+        self, tmp_path, instance, manifest
+    ):
+        deployment = deploy_canonical(tmp_path, instance, manifest)
+        handle = deployment._handles[0]
+        runtime = PartialDetachRuntime(refuse=frozenset({handle.component_id}))
+        deployment._runtime = runtime
+        before = deployment.record
+        before_bytes = deployment.state_path.read_bytes()
+
+        with pytest.raises(RuntimeError, match="refused to be released") as caught:
+            deployment.release(origin="test-none")
+
+        assert runtime.attempted == [handle.component_id]
+        assert runtime.detached == []
+        assert deployment.record is before
+        assert deployment.record.deployed is True
+        assert deployment.record.ready is True
+        assert (
+            deployment.state_path.read_bytes() == before_bytes
+        ), "nothing was handed over, so nothing is recorded"
+        assert any(
+            "no reference was released" in note for note in caught.value.__notes__
+        )
+        assert deployment._handles == (handle,), (
+            "a release that released nothing leaves the references exactly as "
+            "they were"
+        )
+
+    def test_release_refuses_a_running_operation_without_a_reference(
+        self, tmp_path, instance, manifest
+    ):
+        deployment = deploy_canonical(tmp_path, instance, manifest)
+        deployment._handles = ()
+
+        with pytest.raises(DeploymentStateError, match="holds no runtime element"):
+            deployment.release(origin="test-cold")
+
+        assert deployment.record.deployed is True
+
+    def test_the_tolerant_helper_releases_every_reference_of_a_duck_typed_handle(
+        self, tmp_path, instance, manifest
+    ):
+        """A handle that is not a ``Deployment`` gets the same three outcomes."""
+        deployment = deploy_canonical(tmp_path, instance, manifest)
+        record = deployment.record
+        runtime = PartialDetachRuntime(refuse=frozenset({"member-b"}), delegate=False)
+        handle = SimpleNamespace(
+            record=record, _runtime=runtime, _handles=("member-a", "member-b")
+        )
+
+        with pytest.raises(
+            RuntimeError, match="member-b: the member refused"
+        ) as caught:
+            release_references(handle, origin="test-fallback")
+
+        assert runtime.attempted == ["member-a", "member-b"]
+        assert runtime.detached == [
+            "member-a"
+        ], "one refusing reference does not keep the others bound"
+        assert handle.record.ready is False
+        assert handle.record.running is True
+        action = handle.record.operational_actions[-1]
+        assert action.name == "platform_released"
+        assert action.detail == {
+            "origin": "test-fallback",
+            "complete": False,
+            "released": ["member-a"],
+            "unreleased": ["member-b"],
+        }
+        assert any("partial" in note for note in caught.value.__notes__)
+        assert handle._handles == (
+            "member-b",
+        ), "the released reference is dropped from the object's active references"
+        assert not any(
+            action.name == "platform_stopped"
+            for action in handle.record.operational_actions
+        )
+        # the caller owns persistence: the operation's own state file is where
+        # the *deployment's* record lives, and this helper moved the given one only
+        assert load_record(deployment.state_path) == record
+
+
 # ---------------------------------------------------------------------------
 # The five states the slice must keep apart — read back from persisted state
 # ---------------------------------------------------------------------------
@@ -2263,8 +2529,11 @@ class TestDeploymentStateScenarios:
             deploy(request_for(instance, manifest, environment), runtime=spy)
         record = self.persisted(environment, instance)
         assert record.lifecycle == LIFECYCLE_FAILED
+        # The released references do not become a stopped-platform claim: the
+        # runtime contract's ``stop`` is the detach of §18, so only the
+        # unverifiable operational condition is withdrawn.
         assert (record.running, record.ready, record.identity_verified) == (
-            False,
+            True,
             False,
             False,
         )

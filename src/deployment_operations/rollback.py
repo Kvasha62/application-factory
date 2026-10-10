@@ -3,6 +3,15 @@
 Rollback re-realizes a previously verified exact Platform Instance through the
 normal deployment path. That path keeps component migrations forward-only; this
 module has no schema downgrade or tenant-data mutation operation.
+
+The current platform is handed over, not stopped: once the target is realized
+and verified, the rollback releases *its own* references to the current
+platform — the runtime contract's **detach** (``RuntimeAdapter.stop``,
+ADR-0016 §18; S4 runbook §7) — and only then commits the rolled-back state. A
+released reference is not evidence that the platform stopped, so no state or
+signal of this module claims one: the record keeps its ``running`` claim and
+withdraws the operational condition it can no longer verify. Whether the
+released runtime element continues is its owner's decision.
 """
 
 from __future__ import annotations
@@ -10,7 +19,12 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
-from deployment_operations.deployment import Deployment, DeploymentRequest, deploy
+from deployment_operations.deployment import (
+    Deployment,
+    DeploymentRequest,
+    deploy,
+    release_references,
+)
 from deployment_operations.errors import (
     DeploymentInputRejected,
     InvalidDeploymentStateTransition,
@@ -259,7 +273,7 @@ def rollback(
     operation = "target_verification"
     candidate: Deployment | None = None
     original_current_record = current.record
-    stopped_record: DeploymentRecord | None = None
+    released_record: DeploymentRecord | None = None
     candidate_precompletion_record: DeploymentRecord | None = None
     candidate_completion_attempted = False
     state_committed = False
@@ -350,11 +364,13 @@ def rollback(
             detail={"previous_deployment_id": current.record.deployment_id},
         )
 
-        # Keep the old deployment's lifecycle and deployed claim authoritative
-        # until all of its runtime elements have stopped successfully.
-        operation = "current_runtime_stop"
-        current.stop()
-        stopped_record = current.record
+        # Keep the current deployment's lifecycle and deployed claim authoritative
+        # until the target is realized and verified; only then release this
+        # operation's references to the current platform. The release is the
+        # contract's detach, so the record keeps its ``running`` claim and
+        # withdraws the condition it can no longer verify (ADR-0016 §18).
+        operation = "current_runtime_release"
+        released_record = release_references(current, origin="rollback_current")
 
         operation = "final_state_persistence"
         rolled_back = current.record.mark_rolled_back(
@@ -427,21 +443,21 @@ def rollback(
             # deployed candidate and successful state, and surface the journal
             # error without emitting a contradictory rollback_failed signal.
             raise
-        # Before stop succeeds, restore the original record. After a
-        # successful stop, retain its honest stopped conditions rather than
-        # resurrecting a stale deployed claim.
+        # Before the release succeeds, restore the original record. After a
+        # successful release, retain its honest conditions — running stands, the
+        # verified readiness is withdrawn — rather than resurrecting a stale
+        # deployed claim or claiming a stop that nobody established.
         observed_record = current.record
-        stop_was_recorded = any(
-            action.name == "platform_stopped"
+        release_recorded = any(
+            action.name == "platform_released"
             for action in observed_record.operational_actions
         )
-        if stopped_record is not None:
-            recovery_record = stopped_record
-        elif (
-            stop_was_recorded
-            and not observed_record.running
-            and not observed_record.ready
-        ):
+        if released_record is not None:
+            # The references were released and the record says exactly that: the
+            # platform may still be up, and the honest state keeps it reachable
+            # instead of claiming a stop nobody established.
+            recovery_record = released_record
+        elif release_recorded and not observed_record.ready:
             recovery_record = observed_record
         else:
             recovery_record = original_current_record
@@ -473,7 +489,7 @@ def rollback(
                 pass
         if candidate is not None and candidate.deployed:
             try:
-                candidate.stop()
+                release_references(candidate, origin="rollback_failed_candidate")
             except Exception:  # noqa: BLE001, S110 - preserve the causal rollback error
                 pass
         # A failed rollback is recorded without asserting that its target was
