@@ -115,6 +115,16 @@ def test_owner_state_sources_receive_only_the_opaque_binding() -> None:
     assert reader.value.platform_id == "example-platform"
 
 
+def test_owner_state_source_rejects_unverified_attested_provenance() -> None:
+    source = OwnerStateSource(Reader(state(provenance=EvidenceProvenance.ATTESTED)))
+
+    with pytest.raises(
+        ActualIdentityUnavailable,
+        match="ATTESTED provenance has no verified attestation mechanism",
+    ):
+        source.observe_membership(BINDING)
+
+
 def test_snapshot_source_composes_the_existing_snapshot_contract() -> None:
     snapshot = OwnerStateSnapshotSource(Reader(state())).observe(BINDING)
 
@@ -318,6 +328,21 @@ def test_file_reader_rejects_a_correlation_that_contradicts_the_surface(
     path.write_text(json.dumps(document), encoding="utf-8")
 
     with pytest.raises(ActualIdentityUnavailable, match="contradicts its platform"):
+        FileRunningPlatformOwnerStateReader(path).read(BINDING)
+
+
+def test_file_reader_rejects_attested_without_verified_attestation(
+    tmp_path,
+) -> None:
+    document = _surface_document()
+    document["provenance"] = "ATTESTED"
+    path = tmp_path / "running_platform_identity.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(
+        ActualIdentityUnavailable,
+        match="ATTESTED provenance has no verified attestation mechanism",
+    ):
         FileRunningPlatformOwnerStateReader(path).read(BINDING)
 
 
