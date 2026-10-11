@@ -75,6 +75,25 @@ class FileRunningPlatformOwnerStateReader:
         return read_owner_state_surface(text, binding)
 
 
+def _require_supported_provenance(value: object) -> str:
+    """Refuse provenance labels that this consumer cannot substantiate.
+
+    The repository has no trusted attestation verifier or attestation payload
+    contract. Accepting ATTESTED as a bare string would turn an assertion into
+    proof, contrary to ADR-0020 §17. Until verification is implemented, that
+    provenance class must fail closed.
+    """
+    if value == EvidenceProvenance.ATTESTED:
+        raise ActualIdentityUnavailable(
+            "ATTESTED provenance has no verified attestation mechanism"
+        )
+    if value not in (EvidenceProvenance.MEASURED, EvidenceProvenance.TRANSITIVE):
+        raise ActualIdentityUnavailable(
+            "running platform identity surface has invalid provenance"
+        )
+    return str(value)
+
+
 def read_owner_state_surface(
     text: str,
     binding: PlatformIdentityBinding,
@@ -121,15 +140,7 @@ def read_owner_state_surface(
     correlation = _read_correlation(document, binding)
     if document.get("freshness_current") is not True:
         raise ActualIdentityUnavailable("running platform identity surface is stale")
-    provenance = document.get("provenance")
-    if provenance not in (
-        EvidenceProvenance.MEASURED,
-        EvidenceProvenance.TRANSITIVE,
-        EvidenceProvenance.ATTESTED,
-    ):
-        raise ActualIdentityUnavailable(
-            "running platform identity surface has invalid provenance"
-        )
+    provenance = _require_supported_provenance(document.get("provenance"))
 
     def field(name: str) -> IdentityField:
         value = document.get(name)
@@ -266,6 +277,7 @@ class OwnerStateSource:
             raise ActualIdentityUnavailable(
                 "owner state reader returned invalid actual state"
             )
+        _require_supported_provenance(state.provenance)
         return state
 
     @staticmethod
