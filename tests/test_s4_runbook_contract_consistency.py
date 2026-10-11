@@ -72,7 +72,7 @@ def test_runbook_contamination_anchor_matches_the_code() -> None:
     """The refusal claim cites where the refusal actually lives."""
 
     text = _runbook()
-    assert "owner_state.py:117-120" in text
+    assert "owner_state.py:136-139" in text
     assert "owner_state.py:72" not in text
     assert all(
         phrase in text
@@ -84,7 +84,7 @@ def test_runbook_contamination_anchor_matches_the_code() -> None:
     )
     assert "refuse to accept, any document containing" not in text
 
-    line = _source_line(owner_state_module, 117)
+    line = _source_line(owner_state_module, 136)
     assert '"instance_digest" in document' in line
     assert '"expected_instance" in document' in line
 
