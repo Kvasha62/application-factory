@@ -57,6 +57,8 @@ DEFAULT_SUGGESTED_CLASS = "deployable-configuration"
 
 _SKIP_DIRS = {".git", "__pycache__", "state", "evidence"}
 _SKIP_SUFFIXES = {".pyc", ".log"}
+# Owner decision Q3: execution_binder.py is outside Layer R export scope.
+_EXCLUDED_BASENAMES = {"execution_binder.py"}
 EXPORT_MANIFEST_NAME = "export-manifest.json"
 
 
@@ -106,6 +108,8 @@ def collect(cell_root: Path, includes: tuple[str, ...]) -> tuple[list[str], list
             relative = entry.relative_to(cell_root).as_posix()
             if entry.is_symlink() or not entry.is_file():
                 unsafe.append(relative)
+                continue
+            if name in _EXCLUDED_BASENAMES:
                 continue
             if symlinked_components(entry, cell_root):
                 unsafe.append(relative)

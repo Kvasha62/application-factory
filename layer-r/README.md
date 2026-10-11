@@ -86,6 +86,15 @@ secret-looking at all.
   *tracked roots* (`layer-r/source`, `layer-r/config`) are refused the same
   way.
 
+## Export scope
+
+`execution_binder.py` is explicitly outside the intended Layer R export scope
+(owner decision Q3). The host exporter must omit that basename from the
+exported bundle. The M1 review must not manually add it to `layer-r/source`
+or `layer-r/config`. This exclusion does not authorize exporting any other
+host file automatically; every imported file still requires review,
+classification, a manifest entry and CI verification.
+
 ## Ownership rules (must hold for every future commit here)
 
 1. **Layer R stays owner-side.** Nothing in `src/deployment_operations` or

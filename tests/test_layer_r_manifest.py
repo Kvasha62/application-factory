@@ -733,6 +733,19 @@ class TestExportBundle:
         assert bundle["files"][0]["path"] == "producer.py"
         assert not out.exists()
 
+    def test_execution_binder_is_excluded_from_export(self, tmp_path: Path) -> None:
+        cell = tmp_path / "cell"
+        cell.mkdir()
+        (cell / "producer.py").write_text(CLEAN, encoding="utf-8")
+        binder = cell / "execution_binder.py"
+        binder.write_text("owner-only binder\n", encoding="utf-8")
+
+        bundle = export(cell, tmp_path / "bundle", dry_run=True)
+
+        assert [entry["path"] for entry in bundle["files"]] == ["producer.py"]
+        assert binder.read_text(encoding="utf-8") == "owner-only binder\n"
+        assert not (tmp_path / "bundle").exists()
+
     def test_generated_and_state_files_are_skipped(self, tmp_path: Path) -> None:
         cell = tmp_path / "cell"
         (cell / "state").mkdir(parents=True)
